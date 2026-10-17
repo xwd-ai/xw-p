@@ -1,0 +1,31 @@
+spring:
+  application:
+    name: xw-notify-engine
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/xwnotify}
+    username: ${DB_USER:xwnotify}
+    password: ${DB_PASSWORD:xwnotify}
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+
+  flyway:
+    enabled: true
+
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USER:xwnotify}
+    password: ${RABBITMQ_PASSWORD:xwnotify}
+
+server:
+  port: ${ENGINE_PORT:8081}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics

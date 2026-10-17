@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Java / Maven / Gradle
+target/
+build/
+*.class
+.mvn/
+*.jar
+*.war
+
+# IDE
+.idea/
+.vscode/
+*.iml
+.DS_Store
+
+# 运行时数据
+data/
+*.log
+
+# 环境变量 / 密钥
+.env
+.env.*
+*.pem
+*.key
+
+# 操作系统
+Thumbs.db
+ROADMAP.md
+README.md
+README.md
+README.md
+README.md
