@@ -2,24 +2,13 @@ spring:
   application:
     name: xw-notify-engine
 
-  datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/xwnotify}
-    username: ${DB_USER:xwnotify}
-    password: ${DB_PASSWORD:xwnotify}
-
-  jpa:
-    hibernate:
-      ddl-auto: validate
-    open-in-view: false
-
-  flyway:
-    enabled: true
-
-  rabbitmq:
-    host: ${RABBITMQ_HOST:localhost}
-    port: ${RABBITMQ_PORT:5672}
-    username: ${RABBITMQ_USER:xwnotify}
-    password: ${RABBITMQ_PASSWORD:xwnotify}
+  # Redis：消费 Python API 侧入队的消息（与 api/app/config.py 的队列键保持一致）
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      # 默认无密码；生产环境通过环境变量注入
+      password: ${REDIS_PASSWORD:}
 
 server:
   port: ${ENGINE_PORT:8081}
@@ -29,3 +18,9 @@ management:
     web:
       exposure:
         include: health,info,metrics
+
+# xw-notify 引擎自定义配置
+xw:
+  queue-key: ${XW_REDIS_QUEUE_KEY:xw:queue:events}
+  # 消费轮询阻塞秒数（Redis BRPOP 阻塞超时）
+  poll-timeout: ${XW_POLL_TIMEOUT:2}

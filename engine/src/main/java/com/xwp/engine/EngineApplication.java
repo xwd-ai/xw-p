@@ -7,7 +7,8 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * xw-notify 执行引擎入口。
  *
  * <p>负责消费消息队列、执行工作流求值、digest 聚合与 provider 分发。
- * 当前为骨架：仅启动 Web 与 Actuator，消费者在后续阶段接入。</p>
+ * Phase 0 阶段：启动 Web 与 Actuator，并由 {@code NotificationWorker} 从 Redis
+ * 队列消费消息（mock 发送）。</p>
  */
 @SpringBootApplication
 public class EngineApplication {
