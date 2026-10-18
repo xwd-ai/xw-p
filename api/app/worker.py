@@ -1,22 +1,20 @@
-"""后台 worker：消费队列，mock 发送并落库为 JSONL。
+"""后台 worker：消费队列，mock 发送并落库。
 
 后续（Phase 2 起）会由 Java engine 接管真正的工作流求值与 provider 分发，
 此处的 Python worker 仅作为 demo 阶段的端到端打通。
+
+落库后端由 ``XW_STORAGE`` 决定（jsonl / postgres），见 ``storage.py``。
 """
 from __future__ import annotations
 
-import json
 import logging
 import threading
-from pathlib import Path
 
 from .bus import get_bus
 from .schemas import QueuedMessage
+from .storage import get_storage
 
 logger = logging.getLogger("xw.worker")
-
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-OUT_FILE = DATA_DIR / "messages.jsonl"
 
 
 class Worker:
@@ -42,7 +40,6 @@ class Worker:
 
     def _run(self) -> None:
         bus = get_bus()
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
         while not self._stop.is_set():
             msg: QueuedMessage | None = bus.consume(timeout=1.0)
             if msg is None:
@@ -50,7 +47,7 @@ class Worker:
             self._process(msg)
 
     def _process(self, msg: QueuedMessage) -> None:
-        # mock 发送：demo 阶段仅记录到文件并打印
+        # mock 发送：demo 阶段仅记录到持久化后端并打印
         record = {
             "trigger_id": msg.trigger_id,
             "transaction_id": msg.transaction_id,
@@ -60,6 +57,5 @@ class Worker:
             "payload": msg.payload,
             "status": "sent",
         }
-        with OUT_FILE.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+        get_storage().save(record)
         logger.info("已发送: %s -> %s (%s)", msg.name, msg.subscriber_id, record["channels"])

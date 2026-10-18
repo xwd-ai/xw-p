@@ -56,6 +56,23 @@ curl -X POST http://127.0.0.1:8000/v1/events/trigger \
   -d '{"name":"welcome","to":{"subscriberId":"user_1","email":"hi@example.com"},"payload":{"user":"Alice"}}'
 ```
 
+### 后端切换（环境变量）
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `XW_BUS` | `memory` | 消息队列后端：`memory` / `redis` |
+| `XW_REDIS_URL` | `redis://localhost:6379/0` | Redis 连接串（`XW_BUS=redis` 时生效） |
+| `XW_STORAGE` | `jsonl` | 持久化后端：`jsonl` / `postgres` |
+| `XW_DATABASE_URL` | `postgresql+psycopg://xwnotify:xwnotify@localhost:5432/xwnotify` | Postgres 连接串（`XW_STORAGE=postgres` 时生效） |
+
+启用外部后端示例：
+
+```bash
+XW_BUS=redis XW_STORAGE=postgres .venv/bin/uvicorn app.main:app --reload
+# 首次启用 Postgres 需先建表：
+psql "$XW_DATABASE_URL" -f scripts/migrations/001_messages.sql
+```
+
 ## 开发计划
 
 见 [ROADMAP.md](ROADMAP.md)。项目按 40 天逐步开发：先端到端 demo，再逐块扩展领域模型、工作流引擎、渠道层、订阅者/偏好、管理端与 SDK。

@@ -1,24 +1,26 @@
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: xwnotify
-      POSTGRES_PASSWORD: xwnotify
-      POSTGRES_DB: xwnotify
+      POSTGRES_USER: ${POSTGRES_USER:-xwnotify}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-xwnotify}
+      POSTGRES_DB: ${POSTGRES_DB:-xwnotify}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U xwnotify"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-xwnotify}"]
       interval: 5s
       timeout: 3s
       retries: 10
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -29,12 +31,13 @@ services:
 
   rabbitmq:
     image: rabbitmq:3.13-management-alpine
+    restart: unless-stopped
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_MGMT_PORT:-15672}:15672"
     environment:
-      RABBITMQ_DEFAULT_USER: xwnotify
-      RABBITMQ_DEFAULT_PASS: xwnotify
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-xwnotify}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-xwnotify}
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
