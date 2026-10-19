@@ -18,6 +18,7 @@ from .idempotency import get_idempotency_store
 from .schemas import TriggerEvent, TriggerResponse, new_queued_message
 from .worker import Worker
 from .workflow import get_registry
+from .workflow_routes import router as workflow_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
@@ -39,6 +40,8 @@ app = FastAPI(
     description="统一通知触发 API",
     lifespan=lifespan,
 )
+
+app.include_router(workflow_router)
 
 
 @app.get("/health", tags=["system"])
