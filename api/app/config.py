@@ -27,3 +27,9 @@ DATABASE_URL = _env(
     "XW_DATABASE_URL",
     "postgresql+psycopg://xwnotify:xwnotify@localhost:5432/xwnotify",
 )
+
+# 幂等后端：memory（默认）| redis
+IDEMPOTENCY_BACKEND = _env("XW_IDEMPOTENCY", "memory")
+
+# 幂等键缓存 TTL（秒）：超过该时长后同键请求视为新请求
+IDEMPOTENCY_TTL = int(_env("XW_IDEMPOTENCY_TTL", "86400"))

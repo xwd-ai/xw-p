@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 class SubscriberTarget(BaseModel):
     """触发目标订阅者。"""
-    subscriber_id: str = Field(alias="subscriberId")
+    subscriber_id: str = Field(alias="subscriberId", min_length=1, description="订阅者唯一标识")
     email: Optional[str] = None
     phone: Optional[str] = None
     channels: Optional[list[str]] = None
@@ -17,10 +17,10 @@ class SubscriberTarget(BaseModel):
 
 class TriggerEvent(BaseModel):
     """触发请求体。"""
-    name: str = Field(description="工作流/模板标识，例如 welcome")
+    name: str = Field(min_length=1, max_length=255, description="工作流/模板标识，例如 welcome")
     to: SubscriberTarget
-    payload: dict[str, Any] = Field(default_factory=dict)
-    overrides: dict[str, Any] = Field(default_factory=dict)
+    payload: dict[str, Any] = Field(default_factory=dict, description="渲染变量（键值对）")
+    overrides: dict[str, Any] = Field(default_factory=dict, description="覆盖模板默认配置")
 
 
 class TriggerResponse(BaseModel):
@@ -28,6 +28,7 @@ class TriggerResponse(BaseModel):
     acknowledged: bool = True
     trigger_id: str = Field(alias="triggerId")
     transaction_id: str = Field(alias="transactionId")
+    acknowledgment_id: str = Field(alias="acknowledgmentId")
 
     model_config = {"populate_by_name": True}
 
