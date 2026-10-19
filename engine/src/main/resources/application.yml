@@ -24,3 +24,18 @@ xw:
   queue-key: ${XW_REDIS_QUEUE_KEY:xw:queue:events}
   # 消费轮询阻塞秒数（Redis BRPOP 阻塞超时）
   poll-timeout: ${XW_POLL_TIMEOUT:2}
+
+  # RabbitMQ 消费框架（Phase 1）
+  # 默认关闭：避免在未部署 RabbitMQ 的环境启动报错；真实接入时通过环境变量开启。
+  rabbitmq:
+    enabled: ${XW_RABBITMQ_ENABLED:false}
+    retry-ttl: ${XW_RABBITMQ_RETRY_TTL:5000}
+    max-retries: ${XW_RABBITMQ_MAX_RETRIES:3}
+
+  # 持久化（JPA + Flyway，Phase 1）
+  # 默认关闭：引擎仅部署 Redis 时即可启动；落库时开启并注入 Postgres 连接。
+  datasource:
+    enabled: ${XW_DATASOURCE_ENABLED:false}
+    url: ${XW_DATASOURCE_URL:jdbc:postgresql://localhost:5432/xwnotify}
+    username: ${XW_DATASOURCE_USERNAME:postgres}
+    password: ${XW_DATASOURCE_PASSWORD:}
