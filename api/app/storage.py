@@ -27,6 +27,8 @@ class Storage(Protocol):
 
     def save(self, record: dict[str, Any]) -> None: ...
 
+    def read_all(self) -> list[dict[str, Any]]: ...
+
 
 class JSONLStorage:
     """追加写入 JSONL 文件（一行一条消息）。"""
@@ -40,6 +42,23 @@ class JSONLStorage:
         with self._lock:
             with self._path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    def read_all(self) -> list[dict[str, Any]]:
+        """读取全部已落库记录（统计/活动流用）。文件不存在返回空列表。"""
+        with self._lock:
+            if not self._path.exists():
+                return []
+            records: list[dict[str, Any]] = []
+            with self._path.open("r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        records.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        logger.warning("跳过损坏的 JSONL 行：%s", line[:80])
+            return records
 
 
 class PostgresStorage:
@@ -82,6 +101,38 @@ class PostgresStorage:
                     "status": record.get("status", "sent"),
                 },
             )
+
+    def read_all(self) -> list[dict[str, Any]]:
+        """读取全部消息记录（统计/活动流用）。"""
+        from sqlalchemy import text
+
+        engine = self._get_engine()
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT trigger_id, transaction_id, workflow, subscriber_id, "
+                    "channels, payload, status, created_at FROM messages "
+                    "ORDER BY created_at"
+                )
+            ).mappings().all()
+        records: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            channels = d.get("channels")
+            payload = d.get("payload")
+            records.append(
+                {
+                    "trigger_id": d["trigger_id"],
+                    "transaction_id": d["transaction_id"],
+                    "workflow": d["workflow"],
+                    "subscriber_id": d["subscriber_id"],
+                    "channels": json.loads(channels) if isinstance(channels, str) else (channels or []),
+                    "payload": json.loads(payload) if isinstance(payload, str) else (payload or {}),
+                    "status": d.get("status", "sent"),
+                    "created_at": d.get("created_at"),
+                }
+            )
+        return records
 
 
 def create_storage() -> Storage:

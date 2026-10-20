@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from datetime import datetime, timezone
 
 from .bus import get_bus
 from .schemas import QueuedMessage
@@ -56,6 +57,7 @@ class Worker:
             "channels": msg.channels or ["in_app"],
             "payload": msg.payload,
             "status": "sent",
+            "created_at": datetime.now(timezone.utc).isoformat(),
         }
         get_storage().save(record)
         logger.info("已发送: %s -> %s (%s)", msg.name, msg.subscriber_id, record["channels"])

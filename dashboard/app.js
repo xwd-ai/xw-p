@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const { CH, seed, subs } = window.xwData;
+  const { CH, seed, subs, API_BASE, api } = window.xwData;
 
   /* ============ 视图切换 ============ */
   const views = { dashboard: '仪表盘', workflows: '工作流编排', activity: '活动流', subscribers: '订阅者', settings: '设置' };
@@ -39,21 +39,56 @@
   }
 
   /* ============ 发送趋势图 ============ */
-  function renderChart() {
-    const bars = [42, 55, 49, 68, 61, 78, 90];
+  // bars 为数值数组（最多 7 项），标签为星期缩写
+  function renderChart(bars) {
+    bars = bars || [42, 55, 49, 68, 61, 78, 90];
     const svg = document.getElementById('chart');
-    const W = 560, H = 220, pad = 30, max = 100;
+    const W = 560, H = 220, pad = 30;
+    const max = Math.max.apply(null, bars.concat([1]));
     const bw = (W - pad * 2) / bars.length;
+    const labels = ['一', '二', '三', '四', '五', '六', '日'];
     let body = '';
     bars.forEach((v, i) => {
       const h = (v / max) * (H - pad * 2 - 20);
       const x = pad + i * bw + bw * 0.18, y = H - pad - h;
       body += `<rect x="${x}" y="${y}" width="${bw*0.64}" height="${h}" rx="5" fill="url(#g)"></rect>`;
-      body += `<text x="${x + bw*0.32}" y="${H - 12}" font-size="10" fill="#8a8fa3" text-anchor="middle">${['一','二','三','四','五','六','日'][i]}</text>`;
-      body += `<text x="${x + bw*0.32}" y="${y - 6}" font-size="10" fill="#8a8fa3" text-anchor="middle">${v}万</text>`;
+      body += `<text x="${x + bw*0.32}" y="${H - 12}" font-size="10" fill="#8a8fa3" text-anchor="middle">${labels[i % 7]}</text>`;
+      body += `<text x="${x + bw*0.32}" y="${y - 6}" font-size="10" fill="#8a8fa3" text-anchor="middle">${v}</text>`;
     });
     svg.innerHTML = `<defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0%" stop-color="#8b5cf6"/><stop offset="100%" stop-color="#6366f1"/></linearGradient></defs>` + body;
+  }
+
+  /* ============ 仪表盘统计（真实 API） ============ */
+  // 渠道分布 -> 展示名
+  function channelLabel(ch) { return (CH[ch] && CH[ch].label) || ch; }
+
+  function renderStats(stats) {
+    // 总发送量
+    const totalEl = document.getElementById('stat-total');
+    if (totalEl) totalEl.textContent = (stats.total || 0).toLocaleString();
+    // 投递成功率
+    const rateEl = document.getElementById('stat-rate');
+    if (rateEl) rateEl.textContent = (stats.success_rate != null ? stats.success_rate : 100) + '%';
+    // 渠道分布：更新「接入渠道」卡片的 delta 文案
+    const distEl = document.getElementById('stat-channels');
+    if (distEl) {
+      const entries = Object.entries(stats.channel_distribution || {});
+      const text = entries.length
+        ? entries.map(([ch, n]) => `${channelLabel(ch)} · ${n}`).join(' · ')
+        : '暂无投递记录';
+      distEl.textContent = text;
+    }
+    // 趋势图：后端返回 [{date, count}]，取 count 序列
+    if (Array.isArray(stats.trend) && stats.trend.length) {
+      renderChart(stats.trend.map(d => d.count));
+    }
+  }
+
+  function loadDashboardStats() {
+    api('/v1/dashboard/stats')
+      .then(renderStats)
+      .catch(() => { /* 后端未就绪：保留种子兜底展示，不打断页面 */ });
   }
 
   /* ============ 触发演示 ============ */
@@ -79,5 +114,6 @@
   renderSeed();
   renderSubs();
   renderChart();
+  loadDashboardStats();
   window.xwEditor.render();
 })();

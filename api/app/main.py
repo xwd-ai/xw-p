@@ -14,6 +14,7 @@ from fastapi import FastAPI, Header, HTTPException, status
 
 from . import config
 from .bus import get_bus
+from .dashboard_routes import router as dashboard_router
 from .idempotency import get_idempotency_store
 from .schemas import TriggerEvent, TriggerResponse, new_queued_message
 from .worker import Worker
@@ -42,6 +43,7 @@ app = FastAPI(
 )
 
 app.include_router(workflow_router)
+app.include_router(dashboard_router)
 
 
 @app.get("/health", tags=["system"])

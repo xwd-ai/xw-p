@@ -29,5 +29,15 @@
     { n: '赵灵', id: 'user_0004', ch: ['email'] },
   ];
 
-  window.xwData = { CH, seed, subs };
+  // API 基地址：默认同源（dashboard 由 FastAPI 静态托管或反向代理时可用）
+  const API_BASE = window.XW_API_BASE || '';
+
+  // 轻量 fetch 封装：失败时 reject，由调用方决定兜底策略
+  async function api(path) {
+    const resp = await fetch(API_BASE + path, { headers: { 'Accept': 'application/json' } });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    return resp.json();
+  }
+
+  window.xwData = { CH, seed, subs, API_BASE, api };
 })();
