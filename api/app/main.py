@@ -13,6 +13,7 @@ from typing import Optional
 from fastapi import FastAPI, Header, HTTPException, status
 
 from . import config
+from .activity_routes import router as activity_router
 from .bus import get_bus
 from .dashboard_routes import router as dashboard_router
 from .idempotency import get_idempotency_store
@@ -44,6 +45,7 @@ app = FastAPI(
 
 app.include_router(workflow_router)
 app.include_router(dashboard_router)
+app.include_router(activity_router)
 
 
 @app.get("/health", tags=["system"])

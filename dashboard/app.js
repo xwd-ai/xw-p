@@ -28,6 +28,45 @@
     document.getElementById('activity-list').innerHTML = seed.map(activityRow).join('');
   }
 
+  // 把后端活动条目映射为前端展示行（真实数据）
+  function backendRow(item) {
+    const ch = (item.channels && item.channels[0]) || 'inapp';
+    const c = CH[ch] || CH.inapp;
+    const detail = item.subscriber_id
+      ? '订阅者 ' + item.subscriber_id + ' · ' + (CH[ch] ? CH[ch].label : ch)
+      : (CH[ch] ? CH[ch].label : ch);
+    return activityRow({ ch, t: item.title, d: detail, ts: fmtTs(item.created_at) });
+  }
+
+  // 把 ISO 时间戳格式化为「x 秒/分钟/小时前」
+  function fmtTs(iso) {
+    if (!iso) return '';
+    const dt = new Date(iso);
+    if (isNaN(dt.getTime())) return '';
+    const diff = Math.max(0, Date.now() - dt.getTime());
+    const s = Math.floor(diff / 1000);
+    if (s < 60) return '刚刚';
+    const m = Math.floor(s / 60);
+    if (m < 60) return m + ' 分钟前';
+    const h = Math.floor(m / 60);
+    if (h < 24) return h + ' 小时前';
+    const d = Math.floor(h / 24);
+    return d + ' 天前';
+  }
+
+  function renderActivity(items) {
+    if (!items || !items.length) return; // 无记录：保留种子兜底
+    const html = items.map(backendRow).join('');
+    document.getElementById('dash-activity').innerHTML = html;
+    document.getElementById('activity-list').innerHTML = html;
+  }
+
+  function loadActivity() {
+    api('/v1/activity')
+      .then(res => renderActivity(res.items))
+      .catch(() => { /* 后端未就绪：保留种子活动流，不打断页面 */ });
+  }
+
   /* ============ 订阅者列表 ============ */
   function renderSubs() {
     document.getElementById('sub-list').innerHTML = subs.map(s => `
@@ -115,5 +154,6 @@
   renderSubs();
   renderChart();
   loadDashboardStats();
+  loadActivity();
   window.xwEditor.render();
 })();
