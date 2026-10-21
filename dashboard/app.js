@@ -28,9 +28,14 @@
     document.getElementById('activity-list').innerHTML = seed.map(activityRow).join('');
   }
 
+  // 归一化后端渠道名（如 in_app -> inapp），与前端 CH 键对齐
+  function normCh(ch) {
+    return (ch && ch.replace('_', '')) || 'inapp';
+  }
+
   // 把后端活动条目映射为前端展示行（真实数据）
   function backendRow(item) {
-    const ch = (item.channels && item.channels[0]) || 'inapp';
+    const ch = normCh((item.channels && item.channels[0]) || 'inapp');
     const c = CH[ch] || CH.inapp;
     const detail = item.subscriber_id
       ? '订阅者 ' + item.subscriber_id + ' · ' + (CH[ch] ? CH[ch].label : ch)
@@ -99,8 +104,8 @@
   }
 
   /* ============ 仪表盘统计（真实 API） ============ */
-  // 渠道分布 -> 展示名
-  function channelLabel(ch) { return (CH[ch] && CH[ch].label) || ch; }
+  // 渠道分布 -> 展示名（先归一化后端渠道命名）
+  function channelLabel(ch) { return (CH[normCh(ch)] && CH[normCh(ch)].label) || ch; }
 
   function renderStats(stats) {
     // 总发送量
@@ -130,24 +135,71 @@
       .catch(() => { /* 后端未就绪：保留种子兜底展示，不打断页面 */ });
   }
 
-  /* ============ 触发演示 ============ */
-  let total = 1284530;
-  function addActivity(ch, title, ts) {
-    const row = activityRow({ ch, t: title, d: '由「触发演示」产生', ts });
-    document.getElementById('dash-activity').insertAdjacentHTML('afterbegin', row);
-    document.getElementById('activity-list').insertAdjacentHTML('afterbegin', row);
-    total += 1;
-    document.getElementById('stat-total').textContent = total.toLocaleString();
+  /* ============ 触发演示（真实触发 API） ============ */
+  // 触发一条真实事件：POST /v1/events/trigger，成功后刷新活动流与统计
+  let busy = false;
+  function triggerEvent(name, to, payload) {
+    return api('/v1/events/trigger', { method: 'POST', body: { name, to, payload } });
   }
+
+  function setTriggerState(label, disabled) {
+    const btn = document.getElementById('trigger-btn');
+    btn.textContent = label;
+    btn.disabled = disabled;
+  }
+
+  // 按钮点击：模拟「新用户注册」场景，向欢迎工作流派发一条真实触发
   document.getElementById('trigger-btn').addEventListener('click', () => {
-    const flow = ['email', 'sms', 'push', 'inapp'];
-    flow.forEach((ch, i) => setTimeout(() => addActivity(ch, '「新用户注册」分发至 ' + CH[ch].label, '刚刚'), i * 320));
+    if (busy) return;
+    busy = true;
+    const orig = document.getElementById('trigger-btn').textContent;
+    setTriggerState('⏳ 触发中…', true);
+    triggerEvent('welcome', { subscriberId: 'user_demo' }, { user: '演示用户', title: '新用户注册 · 欢迎通知' })
+      .then(() => {
+        // 触发成功：重新拉取活动流与统计，展示真实落库结果
+        return Promise.all([loadActivity(), loadDashboardStats()]);
+      })
+      .catch(err => {
+        console.warn('触发失败（后端未就绪？）', err);
+        showToast('触发失败：请确认后端服务已启动');
+      })
+      .finally(() => {
+        busy = false;
+        setTriggerState(orig, false);
+      });
   });
 
-  /* ============ 工作流「运行」触发 ============ */
+  /* ============ 工作流「运行」触发（真实触发 API） ============ */
   document.getElementById('run-btn').addEventListener('click', () => {
-    window.xwEditor.run(() => addActivity('inapp', '工作流「欢迎新用户」已触发', '刚刚'));
+    window.xwEditor.run(() => {
+      // 按当前画布步骤生成一条真实触发（演示场景）
+      triggerEvent('welcome', { subscriberId: 'user_demo' }, { user: '演示用户', title: '工作流「欢迎新用户」测试触发' })
+        .then(() => Promise.all([loadActivity(), loadDashboardStats()]))
+        .catch(err => {
+          console.warn('工作流运行触发失败（后端未就绪？）', err);
+          showToast('触发失败：请确认后端服务已启动');
+        });
+    });
   });
+
+  /* ============ 轻量提示（触发反馈） ============ */
+  let toastTimer = null;
+  function showToast(msg) {
+    let el = document.getElementById('xw-toast');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'xw-toast';
+      el.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);'
+        + 'background:#1a1d2e;color:#fff;padding:10px 18px;border-radius:8px;'
+        + 'font-size:13px;box-shadow:0 8px 24px rgba(0,0,0,.18);z-index:999;'
+        + 'opacity:0;transition:opacity .25s ease;';
+      document.body.appendChild(el);
+    }
+    el.textContent = msg;
+    el.style.opacity = '1';
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { el.style.opacity = '0'; }, 2400);
+  }
 
   /* ============ 初始化 ============ */
   renderSeed();

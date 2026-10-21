@@ -33,10 +33,17 @@
   const API_BASE = window.XW_API_BASE || '';
 
   // 轻量 fetch 封装：失败时 reject，由调用方决定兜底策略
-  async function api(path) {
-    const resp = await fetch(API_BASE + path, { headers: { 'Accept': 'application/json' } });
+  // options 透传 fetch 参数（如 method/headers/body），支持 POST 触发等写操作
+  async function api(path, options) {
+    const opts = Object.assign({ headers: { 'Accept': 'application/json' } }, options || {});
+    if (opts.body && typeof opts.body !== 'string') {
+      opts.body = JSON.stringify(opts.body);
+      opts.headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers);
+    }
+    const resp = await fetch(API_BASE + path, opts);
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    return resp.json();
+    const text = await resp.text();
+    return text ? JSON.parse(text) : null;
   }
 
   window.xwData = { CH, seed, subs, API_BASE, api };
