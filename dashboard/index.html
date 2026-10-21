@@ -56,19 +56,30 @@
     <!-- ===== Workflows ===== -->
     <section class="view" id="view-workflows">
       <h1>工作流编排</h1>
-      <p class="sub">拖拽节点自由调整布局，连接代表消息流转方向</p>
+      <p class="sub">左侧选择工作流，拖拽节点调整布局，新增/删除步骤并保存写回后端</p>
       <div class="wf-wrap">
-        <div class="wf-toolbar">
-          <span style="font-size:12px;color:var(--muted);margin-right:4px;">添加步骤：</span>
-          <button class="chip" data-add="email"><span class="dot" style="background:#6366f1"></span>邮件 Email</button>
-          <button class="chip" data-add="sms"><span class="dot" style="background:#0ea5e9"></span>短信 SMS</button>
-          <button class="chip" data-add="push"><span class="dot" style="background:#f59e0b"></span>推送 Push</button>
-          <button class="chip" data-add="inapp"><span class="dot" style="background:#10b981"></span>站内 In-App</button>
-          <button class="chip" data-add="digest"><span class="dot" style="background:#8b5cf6"></span>摘要 Digest</button>
-          <span style="flex:1"></span>
-          <button class="btn btn-ghost" id="run-btn">▶ 运行工作流</button>
+        <aside class="wf-list-panel">
+          <div class="wf-list-head">
+            <span>工作流列表</span>
+            <button class="btn btn-ghost" id="wf-new-btn" style="padding:5px 10px;font-size:12px">＋ 新建</button>
+          </div>
+          <div id="wf-list"></div>
+        </aside>
+        <div class="wf-main">
+          <div class="wf-toolbar">
+            <span style="font-size:12px;color:var(--muted);margin-right:4px;">添加步骤：</span>
+            <button class="chip" data-add="email"><span class="dot" style="background:#6366f1"></span>邮件 Email</button>
+            <button class="chip" data-add="sms"><span class="dot" style="background:#0ea5e9"></span>短信 SMS</button>
+            <button class="chip" data-add="push"><span class="dot" style="background:#f59e0b"></span>推送 Push</button>
+            <button class="chip" data-add="inapp"><span class="dot" style="background:#10b981"></span>站内 In-App</button>
+            <button class="chip" data-add="digest"><span class="dot" style="background:#8b5cf6"></span>摘要 Digest</button>
+            <button class="chip chip-danger" id="wf-del-btn" style="margin-left:8px">✕ 删除步骤</button>
+            <span style="flex:1"></span>
+            <button class="btn btn-ghost" id="run-btn">▶ 运行工作流</button>
+            <button class="btn btn-primary" id="wf-save-btn" style="margin-left:8px">💾 保存</button>
+          </div>
+          <div class="canvas"><svg id="wf-svg" viewBox="0 0 920 480"></svg></div>
         </div>
-        <div class="canvas"><svg id="wf-svg" viewBox="0 0 920 480"></svg></div>
       </div>
     </section>
 

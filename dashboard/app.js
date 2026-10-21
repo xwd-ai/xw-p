@@ -182,6 +182,103 @@
     });
   });
 
+  /* ============ 工作流 CRUD 联动 ============ */
+  // 列表 + 选中 + 加载画布 + 保存（新增/删除步骤写回后端）
+  let wfList = [];
+  let wfCurrentId = null;
+
+  function renderWfList() {
+    const box = document.getElementById('wf-list');
+    if (!wfList.length) {
+      box.innerHTML = '<div class="wf-list-empty">暂无工作流，点击「新建」创建</div>';
+      return;
+    }
+    box.innerHTML = wfList.map(w => `
+      <div class="wf-item${w.id === wfCurrentId ? ' active' : ''}" data-id="${w.id}">
+        <span class="wf-name">${w.name}</span>
+        <span class="wf-ver">v${w.version}</span>
+      </div>`).join('');
+    box.querySelectorAll('.wf-item').forEach(el => {
+      el.addEventListener('click', () => selectWorkflow(el.dataset.id));
+    });
+  }
+
+  function selectWorkflow(id) {
+    wfCurrentId = id;
+    const wf = wfList.find(w => w.id === id);
+    if (wf) {
+      window.xwEditor.loadWorkflow(wf);
+    }
+    renderWfList();
+  }
+
+  function loadWorkflows() {
+    api('/v1/workflows')
+      .then(list => {
+        wfList = list || [];
+        // 默认选中第一个
+        if (!wfCurrentId && wfList.length) wfCurrentId = wfList[0].id;
+        renderWfList();
+        if (wfCurrentId) {
+          const wf = wfList.find(w => w.id === wfCurrentId);
+          if (wf) window.xwEditor.loadWorkflow(wf);
+        }
+      })
+      .catch(() => {
+        // 后端未就绪：显示空态提示
+        const box = document.getElementById('wf-list');
+        if (box) box.innerHTML = '<div class="wf-list-empty">后端未就绪，无法加载工作流</div>';
+      });
+  }
+
+  // 保存：当前画布步骤写回后端（新增/删除步骤）
+  function saveWorkflow() {
+    const meta = window.xwEditor.currentMeta();
+    if (!meta) {
+      showToast('请先选择或新建一个工作流');
+      return;
+    }
+    const steps = window.xwEditor.serializeSteps();
+    api('/v1/workflows/' + meta.id, { method: 'PUT', body: { steps } })
+      .then(updated => {
+        // 更新本地缓存并刷新列表
+        const idx = wfList.findIndex(w => w.id === updated.id);
+        if (idx >= 0) wfList[idx] = updated;
+        window.xwEditor.loadWorkflow(updated);
+        renderWfList();
+        showToast('已保存：' + updated.name + ' · v' + updated.version);
+      })
+      .catch(err => {
+        console.warn('保存工作流失败', err);
+        showToast('保存失败：请确认后端服务已启动');
+      });
+  }
+
+  // 新建工作流
+  function newWorkflow() {
+    const name = prompt('请输入新工作流名称（触发标识，如 welcome）：');
+    if (!name) return;
+    api('/v1/workflows', { method: 'POST', body: { name, description: '从画布创建', steps: [] } })
+      .then(created => {
+        wfList.push(created);
+        wfCurrentId = created.id;
+        renderWfList();
+        window.xwEditor.loadWorkflow(created);
+        showToast('已创建：' + created.name);
+      })
+      .catch(err => {
+        console.warn('创建工作流失败', err);
+        showToast('创建失败：' + (err.message || '请确认后端已启动'));
+      });
+  }
+
+  document.getElementById('wf-save-btn').addEventListener('click', saveWorkflow);
+  document.getElementById('wf-new-btn').addEventListener('click', newWorkflow);
+  document.getElementById('wf-del-btn').addEventListener('click', () => {
+    const ok = window.xwEditor.deleteSelected();
+    if (!ok) showToast('请先在画布中点击选中一个步骤');
+  });
+
   /* ============ 轻量提示（触发反馈） ============ */
   let toastTimer = null;
   function showToast(msg) {
@@ -207,5 +304,5 @@
   renderChart();
   loadDashboardStats();
   loadActivity();
-  window.xwEditor.render();
+  loadWorkflows();
 })();

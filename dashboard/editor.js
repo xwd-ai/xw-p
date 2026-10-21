@@ -1,4 +1,4 @@
-/* xw-notify 工作流可视化编辑器 —— 原生 SVG 手写，拖拽节点 / 增删步骤 */
+/* xw-notify 工作流可视化编辑器 —— 原生 SVG 手写，拖拽节点 / 增删步骤 / 工作流数据加载与序列化 */
 (function () {
   'use strict';
 
@@ -8,15 +8,17 @@
   const COLORS = { trigger: '#6366f1', email: '#6366f1', sms: '#0ea5e9', push: '#f59e0b', inapp: '#10b981', digest: '#8b5cf6' };
   const ICONS = { trigger: '⚡', email: '✉', sms: '✆', push: '⚡', inapp: '▣', digest: '≡' };
 
-  let nodes = [
-    { id: 'n1', type: 'trigger', x: 70,  y: 230 },
-    { id: 'n2', type: 'email',   x: 330, y: 110 },
-    { id: 'n3', type: 'sms',     x: 330, y: 230 },
-    { id: 'n4', type: 'push',    x: 330, y: 350 },
-    { id: 'n5', type: 'inapp',   x: 590, y: 230 },
-  ];
-  let edges = [ ['n1','n2'], ['n1','n3'], ['n1','n4'], ['n2','n5'], ['n3','n5'], ['n4','n5'] ];
-  let seq = 6;
+  // 当前工作流（用于序列化时携带 id / name）
+  let workflowMeta = null;
+
+  // 画布节点：{ id, type, name, x, y }
+  let nodes = [];
+  // 连线：[[sourceId, targetId], ...]
+  let edges = [];
+  let seq = 1;
+
+  // 后端步骤类型 -> 前端画布类型归一化（in_app -> inapp）
+  function normType(t) { return (t && String(t).replace('_', '')) || 'email'; }
 
   function byId(id) { return nodes.find(n => n.id === id); }
 
@@ -26,13 +28,14 @@
     g.setAttribute('class', 'node');
     g.setAttribute('transform', `translate(${x},${y})`);
     g.setAttribute('data-id', n.id);
+    if (n._sel) g.setAttribute('data-sel', '1');
     g.innerHTML = `
       <rect width="${nodeW}" height="${nodeH}" rx="12" fill="#fff" stroke="${c}" stroke-width="2"/>
       <rect width="${nodeW}" height="${nodeH}" rx="12" fill="${c}" opacity="0.06"/>
       <circle cx="20" cy="${nodeH/2}" r="14" fill="${c}" opacity="0.14"/>
       <text x="20" y="${nodeH/2 + 5}" font-size="14" text-anchor="middle">${ICONS[n.type]}</text>
-      <text x="44" y="${nodeH/2 - 2}" font-size="13" font-weight="700" fill="#1a1d2e">${n.type.toUpperCase()}</text>
-      <text x="44" y="${nodeH/2 + 16}" font-size="10.5" fill="#8a8fa3">${n.id} · 已启用</text>`;
+      <text x="44" y="${nodeH/2 - 2}" font-size="13" font-weight="700" fill="#1a1d2e">${(n.type).toUpperCase()}</text>
+      <text x="44" y="${nodeH/2 + 16}" font-size="10.5" fill="#8a8fa3">${n.name || n.id} · 已启用</text>`;
     return g;
   }
 
@@ -56,7 +59,51 @@
     nodes.forEach(n => WS.appendChild(nodeG(n)));
   }
 
-  // 拖拽移动节点
+  /* ============ 工作流数据加载 / 序列化 ============ */
+
+  // 从工作流对象（含 steps）重建画布：按步骤顺序横向排布
+  function loadWorkflow(workflow) {
+    workflowMeta = { id: workflow.id, name: workflow.name };
+    const steps = workflow.steps || [];
+    nodes = steps.map((s, i) => ({
+      id: s.id,
+      type: normType(s.type),
+      name: s.name || '',
+      x: 150 + i * 220,
+      y: 240,
+    }));
+    // 简单连线：顺序串联（trigger 作为第一个时跳过自连）
+    edges = [];
+    for (let i = 1; i < nodes.length; i++) edges.push([nodes[i - 1].id, nodes[i].id]);
+    seq = nodes.length + 1;
+    render();
+  }
+
+  // 把画布序列化为后端 CRUD 需要的步骤数组（type 归一化回后端 in_app）
+  function serializeSteps() {
+    const seen = new Set();
+    return nodes.map(n => {
+      // 保证步骤 id 唯一（画布内可能重复）
+      let id = n.id;
+      while (seen.has(id)) id = id + '_' + (seq++);
+      seen.add(id);
+      const type = n.type === 'inapp' ? 'in_app' : n.type;
+      return { id, type, name: n.name || n.type, config: {} };
+    });
+  }
+
+  function currentMeta() { return workflowMeta; }
+
+  // 空画布（新建工作流时）
+  function newCanvas() {
+    workflowMeta = null;
+    nodes = [];
+    edges = [];
+    seq = 1;
+    render();
+  }
+
+  /* ============ 拖拽移动节点 ============ */
   let drag = null;
   WS.addEventListener('mousedown', e => {
     const g = e.target.closest('.node'); if (!g) return;
@@ -73,17 +120,39 @@
   });
   window.addEventListener('mouseup', () => { drag = null; });
 
-  // 工具栏新增步骤
+  /* ============ 工具栏新增 / 删除步骤 ============ */
   document.querySelectorAll('[data-add]').forEach(btn => {
     btn.addEventListener('click', () => {
       const type = btn.dataset.add;
-      const id = 'n' + (seq++);
-      nodes.push({ id, type, x: 640 + Math.random() * 80, y: 100 + Math.random() * 260 });
+      const id = 'step_' + (seq++);
+      nodes.push({ id, type, name: type, x: 640 + Math.random() * 80, y: 100 + Math.random() * 260 });
       const last = nodes[nodes.length - 2];
       if (last) edges.push([last.id, id]);
       render();
     });
   });
+
+  // 删除步骤：点击节点选中，再次点击工具栏「删除步骤」移除
+  let selected = null;
+  WS.addEventListener('click', e => {
+    const g = e.target.closest('.node');
+    nodes.forEach(n => { if (n._sel) delete n._sel; });
+    if (g) {
+      selected = byId(g.dataset.id);
+      selected._sel = true;
+    } else {
+      selected = null;
+    }
+    render();
+  });
+  function deleteSelected() {
+    if (!selected) { return false; }
+    nodes = nodes.filter(n => n.id !== selected.id);
+    edges = edges.filter(([s, t]) => s !== selected.id && t !== selected.id);
+    selected = null;
+    render();
+    return true;
+  }
 
   // 运行工作流：连线动画 + 触发一条测试事件（回调由 app.js 注入）
   function run(onTriggered) {
@@ -93,5 +162,5 @@
     if (typeof onTriggered === 'function') onTriggered();
   }
 
-  window.xwEditor = { render, run };
+  window.xwEditor = { render, run, loadWorkflow, serializeSteps, currentMeta, newCanvas, deleteSelected };
 })();
