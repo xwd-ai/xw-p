@@ -4,6 +4,13 @@
 
   const { CH, seed, subs, API_BASE, api } = window.xwData;
 
+  /* ============ 移动端侧边栏 ============ */
+  const navToggle = document.getElementById('nav-toggle');
+  const sidebar = document.querySelector('aside');
+  navToggle.addEventListener('click', () => sidebar.classList.toggle('open'));
+  // 点击导航项后收起移动端侧边栏
+  document.querySelectorAll('.nav li').forEach(li => li.addEventListener('click', () => sidebar.classList.remove('open')));
+
   /* ============ 视图切换 ============ */
   const views = { dashboard: '仪表盘', workflows: '工作流编排', activity: '活动流', inbox: '收件箱', subscribers: '买家', settings: '设置' };
   document.querySelectorAll('.nav li').forEach(li => {
@@ -15,6 +22,63 @@
       document.getElementById('crumb-name').textContent = views[li.dataset.view];
     });
   });
+
+  /* ============ 错误横幅（后端连接状态） ============ */
+  const banner = document.getElementById('xw-banner');
+  const bannerText = document.getElementById('xw-banner-text');
+  let apiOk = true;
+
+  function setBanner(ok, msg) {
+    if (ok === apiOk) { if (ok) return; /* 仍失败则更新文案 */ }
+    apiOk = ok;
+    if (ok) { banner.classList.remove('show'); }
+    else {
+      bannerText.textContent = msg || '后端服务未连接，展示缓存数据';
+      banner.classList.add('show');
+    }
+  }
+
+  // 包装 api：失败时弹出横幅，成功时隐藏
+  function apiTrack(path, options) {
+    return api(path, options)
+      .then(res => { setBanner(true); return res; })
+      .catch(err => { setBanner(false); throw err; });
+  }
+
+  document.getElementById('xw-retry').addEventListener('click', () => {
+    setBanner(false, '正在重新连接后端…');
+    loadDashboardStats();
+    loadActivity();
+    loadWorkflows();
+    loadInbox();
+  });
+  document.getElementById('xw-banner-close').addEventListener('click', () => banner.classList.remove('show'));
+
+  /* ============ 加载态骨架 ============ */
+  function skelRows(n) {
+    let html = '';
+    for (let i = 0; i < n; i++) {
+      const short = (i % 2 === 1) ? ' short' : '';
+      html += `<div class="skel-row"><div class="skel skel-avatar"></div><div class="skel skel-line${short}"></div><div class="skel skel-line short" style="max-width:24%"></div></div>`;
+    }
+    return html;
+  }
+  function showActivitySkeleton() {
+    const html = skelRows(5);
+    document.getElementById('dash-activity').innerHTML = html;
+    document.getElementById('activity-list').innerHTML = html;
+  }
+  function showWfSkeleton() {
+    document.getElementById('wf-list').innerHTML = skelRows(3);
+  }
+  function showInboxSkeleton() {
+    document.getElementById('inbox-list').innerHTML = skelRows(4);
+  }
+
+  /* ============ 空态 ============ */
+  function emptyState(icon, title, desc) {
+    return `<div class="empty-state"><div class="ic">${icon}</div><div class="t">${title}</div><div class="d">${desc}</div></div>`;
+  }
 
   /* ============ 活动流渲染 ============ */
   function activityRow(a) {
@@ -60,14 +124,21 @@
   }
 
   function renderActivity(items) {
-    if (!items || !items.length) return; // 无记录：保留种子兜底
+    if (!items || !items.length) {
+      // 空态：后端返回空数组时，展示明确空态而非保留种子
+      const html = emptyState('≣', '暂无活动记录', '触发一条订单事件后，分发轨迹会显示在这里');
+      document.getElementById('dash-activity').innerHTML = html;
+      document.getElementById('activity-list').innerHTML = html;
+      return;
+    }
     const html = items.map(backendRow).join('');
     document.getElementById('dash-activity').innerHTML = html;
     document.getElementById('activity-list').innerHTML = html;
   }
 
   function loadActivity() {
-    api('/v1/activity')
+    showActivitySkeleton();
+    apiTrack('/v1/activity')
       .then(res => renderActivity(res.items))
       .catch(() => { /* 后端未就绪：保留种子活动流，不打断页面 */ });
   }
@@ -96,9 +167,9 @@
     if (!box) return;
     const list = inboxFilter === 'unread' ? inboxItems.filter(i => !i.read) : inboxItems;
     if (!list.length) {
-      box.innerHTML = '<div class="inbox-empty">' +
-        (inboxItems.length ? '没有未读消息' : '暂无站内通知 · 点击右上角「⚡ 触发演示」生成一条') +
-        '</div>';
+      box.innerHTML = emptyState('✉',
+        inboxItems.length ? '没有未读消息' : '暂无站内通知',
+        inboxItems.length ? '所有消息均已读' : '触发一条订单事件后，站内通知会出现在这里');
       return;
     }
     box.innerHTML = list.map(i => `
@@ -120,7 +191,7 @@
   function markInboxRead(triggerId) {
     const item = inboxItems.find(i => i.trigger_id === triggerId);
     if (!item || item.read) return;
-    api('/v1/inbox/read', { method: 'POST', body: { subscriberId: INBOX_SUBSCRIBER, triggerIds: [triggerId] } })
+    apiTrack('/v1/inbox/read', { method: 'POST', body: { subscriberId: INBOX_SUBSCRIBER, triggerIds: [triggerId] } })
       .then(res => {
         item.read = true;
         if (typeof res.unread === 'number') updateInboxBadge(res.unread);
@@ -131,7 +202,8 @@
 
   // 加载收件箱
   function loadInbox() {
-    api('/v1/inbox?subscriberId=' + encodeURIComponent(INBOX_SUBSCRIBER))
+    showInboxSkeleton();
+    apiTrack('/v1/inbox?subscriberId=' + encodeURIComponent(INBOX_SUBSCRIBER))
       .then(res => {
         inboxItems = res.items || [];
         updateInboxBadge(res.unread || 0);
@@ -147,7 +219,7 @@
 
   // 收件箱「全部已读」
   document.getElementById('inbox-mark-all').addEventListener('click', () => {
-    api('/v1/inbox/read', { method: 'POST', body: { subscriberId: INBOX_SUBSCRIBER } })
+    apiTrack('/v1/inbox/read', { method: 'POST', body: { subscriberId: INBOX_SUBSCRIBER } })
       .then(res => {
         inboxItems.forEach(i => { i.read = true; });
         updateInboxBadge(res.unread || 0);
@@ -224,7 +296,7 @@
   }
 
   function loadDashboardStats() {
-    api('/v1/dashboard/stats')
+    apiTrack('/v1/dashboard/stats')
       .then(renderStats)
       .catch(() => { /* 后端未就绪：保留种子兜底展示，不打断页面 */ });
   }
@@ -233,7 +305,7 @@
   // 触发一条真实事件：POST /v1/events/trigger，成功后刷新活动流与统计
   let busy = false;
   function triggerEvent(name, to, payload) {
-    return api('/v1/events/trigger', { method: 'POST', body: { name, to, payload } });
+    return apiTrack('/v1/events/trigger', { method: 'POST', body: { name, to, payload } });
   }
 
   function setTriggerState(label, disabled) {
@@ -289,7 +361,7 @@
   function renderWfList() {
     const box = document.getElementById('wf-list');
     if (!wfList.length) {
-      box.innerHTML = '<div class="wf-list-empty">暂无工作流，点击「新建」创建</div>';
+      box.innerHTML = emptyState('⇄', '暂无工作流', '点击「新建」创建一条订单触达工作流');
       return;
     }
     box.innerHTML = wfList.map(w => `
@@ -312,7 +384,8 @@
   }
 
   function loadWorkflows() {
-    api('/v1/workflows')
+    showWfSkeleton();
+    apiTrack('/v1/workflows')
       .then(list => {
         wfList = list || [];
         // 默认选中第一个
@@ -326,7 +399,7 @@
       .catch(() => {
         // 后端未就绪：显示空态提示
         const box = document.getElementById('wf-list');
-        if (box) box.innerHTML = '<div class="wf-list-empty">后端未就绪，无法加载工作流</div>';
+        if (box) box.innerHTML = emptyState('⇄', '无法加载工作流', '后端服务未连接，点击右上角「重试连接」');
       });
   }
 
@@ -338,7 +411,7 @@
       return;
     }
     const steps = window.xwEditor.serializeSteps();
-    api('/v1/workflows/' + meta.id, { method: 'PUT', body: { steps } })
+    apiTrack('/v1/workflows/' + meta.id, { method: 'PUT', body: { steps } })
       .then(updated => {
         // 更新本地缓存并刷新列表
         const idx = wfList.findIndex(w => w.id === updated.id);
@@ -355,9 +428,9 @@
 
   // 新建工作流
   function newWorkflow() {
-    const name = prompt('请输入新工作流名称（触发标识，如 welcome）：');
+    const name = prompt('请输入新工作流名称（触发标识，如 order_confirmed）：');
     if (!name) return;
-    api('/v1/workflows', { method: 'POST', body: { name, description: '从画布创建', steps: [] } })
+    apiTrack('/v1/workflows', { method: 'POST', body: { name, description: '从画布创建', steps: [] } })
       .then(created => {
         wfList.push(created);
         wfCurrentId = created.id;

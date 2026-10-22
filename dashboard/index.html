@@ -25,12 +25,15 @@
 
   <main>
     <header class="top">
+      <button id="nav-toggle" aria-label="菜单">☰</button>
       <div class="crumb">工作台 / <b id="crumb-name">仪表盘</b></div>
       <div class="top-actions">
         <span class="env-badge">● Development 环境</span>
         <button class="btn btn-primary" id="trigger-btn">🛒 下单触发</button>
       </div>
     </header>
+
+    <div id="xw-banner" role="alert"><span>⚠️</span><span id="xw-banner-text">后端服务未连接，展示缓存数据</span><button class="retry" id="xw-retry">重试连接</button><span class="close-banner" id="xw-banner-close">✕</span></div>
 
     <!-- ===== Dashboard ===== -->
     <section class="view active" id="view-dashboard">
