@@ -5,7 +5,7 @@
   const { CH, seed, subs, API_BASE, api } = window.xwData;
 
   /* ============ 视图切换 ============ */
-  const views = { dashboard: '仪表盘', workflows: '工作流编排', activity: '活动流', subscribers: '订阅者', settings: '设置' };
+  const views = { dashboard: '仪表盘', workflows: '工作流编排', activity: '活动流', inbox: '收件箱', subscribers: '订阅者', settings: '设置' };
   document.querySelectorAll('.nav li').forEach(li => {
     li.addEventListener('click', () => {
       document.querySelectorAll('.nav li').forEach(x => x.classList.remove('active'));
@@ -71,6 +71,100 @@
       .then(res => renderActivity(res.items))
       .catch(() => { /* 后端未就绪：保留种子活动流，不打断页面 */ });
   }
+
+  /* ============ 收件箱（In-app 通知中心） ============ */
+  // 默认订阅者（demo 触发使用 user_demo，收件箱默认读同一订阅者）
+  const INBOX_SUBSCRIBER = 'user_demo';
+  let inboxItems = [];
+  let inboxFilter = 'all';
+
+  // 更新侧边栏未读角标
+  function updateInboxBadge(unread) {
+    const badge = document.getElementById('inbox-badge');
+    if (!badge) return;
+    if (unread > 0) {
+      badge.textContent = unread > 99 ? '99+' : String(unread);
+      badge.hidden = false;
+    } else {
+      badge.hidden = true;
+    }
+  }
+
+  // 渲染收件箱列表（按当前 filter）
+  function renderInbox() {
+    const box = document.getElementById('inbox-list');
+    if (!box) return;
+    const list = inboxFilter === 'unread' ? inboxItems.filter(i => !i.read) : inboxItems;
+    if (!list.length) {
+      box.innerHTML = '<div class="inbox-empty">' +
+        (inboxItems.length ? '没有未读消息' : '暂无站内通知 · 点击右上角「⚡ 触发演示」生成一条') +
+        '</div>';
+      return;
+    }
+    box.innerHTML = list.map(i => `
+      <div class="inbox-item${i.read ? '' : ' unread'}" data-id="${i.trigger_id}">
+        <div class="inbox-dot"></div>
+        <div class="inbox-body">
+          <div class="inbox-title">${i.title || '通知'}</div>
+          ${i.body ? `<div class="inbox-text">${i.body}</div>` : ''}
+        </div>
+        <div class="inbox-ts">${fmtTs(i.created_at)}</div>
+      </div>`).join('');
+
+    box.querySelectorAll('.inbox-item').forEach(el => {
+      el.addEventListener('click', () => markInboxRead(el.dataset.id));
+    });
+  }
+
+  // 标记单条已读
+  function markInboxRead(triggerId) {
+    const item = inboxItems.find(i => i.trigger_id === triggerId);
+    if (!item || item.read) return;
+    api('/v1/inbox/read', { method: 'POST', body: { subscriberId: INBOX_SUBSCRIBER, triggerIds: [triggerId] } })
+      .then(res => {
+        item.read = true;
+        if (typeof res.unread === 'number') updateInboxBadge(res.unread);
+        renderInbox();
+      })
+      .catch(() => { /* 后端未就绪：忽略，保留本地状态 */ });
+  }
+
+  // 加载收件箱
+  function loadInbox() {
+    api('/v1/inbox?subscriberId=' + encodeURIComponent(INBOX_SUBSCRIBER))
+      .then(res => {
+        inboxItems = res.items || [];
+        updateInboxBadge(res.unread || 0);
+        renderInbox();
+      })
+      .catch(() => {
+        // 后端未就绪：保留空态兜底
+        inboxItems = [];
+        updateInboxBadge(0);
+        renderInbox();
+      });
+  }
+
+  // 收件箱「全部已读」
+  document.getElementById('inbox-mark-all').addEventListener('click', () => {
+    api('/v1/inbox/read', { method: 'POST', body: { subscriberId: INBOX_SUBSCRIBER } })
+      .then(res => {
+        inboxItems.forEach(i => { i.read = true; });
+        updateInboxBadge(res.unread || 0);
+        renderInbox();
+      })
+      .catch(() => showToast('操作失败：请确认后端服务已启动'));
+  });
+
+  // 收件箱 tab 切换（全部 / 未读）
+  document.querySelectorAll('.inbox-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.inbox-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      inboxFilter = tab.dataset.filter;
+      renderInbox();
+    });
+  });
 
   /* ============ 订阅者列表 ============ */
   function renderSubs() {
@@ -157,7 +251,7 @@
     triggerEvent('welcome', { subscriberId: 'user_demo' }, { user: '演示用户', title: '新用户注册 · 欢迎通知' })
       .then(() => {
         // 触发成功：重新拉取活动流与统计，展示真实落库结果
-        return Promise.all([loadActivity(), loadDashboardStats()]);
+        return Promise.all([loadActivity(), loadDashboardStats(), loadInbox()]);
       })
       .catch(err => {
         console.warn('触发失败（后端未就绪？）', err);
@@ -179,7 +273,7 @@
     }
     window.xwEditor.run(() => {
       triggerEvent(wf.name, { subscriberId: 'user_demo' }, { user: '演示用户', title: '工作流「' + wf.name + '」测试触发' })
-        .then(() => Promise.all([loadActivity(), loadDashboardStats()]))
+        .then(() => Promise.all([loadActivity(), loadDashboardStats(), loadInbox()]))
         .catch(err => {
           console.warn('工作流运行触发失败（后端未就绪？）', err);
           showToast('触发失败：请确认后端服务已启动');
@@ -310,4 +404,5 @@
   loadDashboardStats();
   loadActivity();
   loadWorkflows();
+  loadInbox();
 })();

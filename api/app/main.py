@@ -17,6 +17,7 @@ from .activity_routes import router as activity_router
 from .bus import get_bus
 from .dashboard_routes import router as dashboard_router
 from .idempotency import get_idempotency_store
+from .inbox import router as inbox_router
 from .schemas import TriggerEvent, TriggerResponse, new_queued_message
 from .worker import Worker
 from .workflow import get_registry
@@ -47,6 +48,7 @@ app = FastAPI(
 app.include_router(workflow_router)
 app.include_router(dashboard_router)
 app.include_router(activity_router)
+app.include_router(inbox_router)
 
 
 @app.get("/health", tags=["system"])

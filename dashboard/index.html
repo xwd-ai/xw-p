@@ -16,6 +16,7 @@
       <li data-view="dashboard" class="active"><span class="ic">◧</span>仪表盘</li>
       <li data-view="workflows"><span class="ic">⇄</span>工作流编排<span class="badge">3</span></li>
       <li data-view="activity"><span class="ic">≣</span>活动流</li>
+      <li data-view="inbox"><span class="ic">✉</span>收件箱<span class="badge badge-count" id="inbox-badge" hidden>0</span></li>
       <li data-view="subscribers"><span class="ic">◉</span>订阅者<span class="badge">12.4k</span></li>
       <li data-view="settings"><span class="ic">⚙</span>设置</li>
     </ul>
@@ -88,6 +89,22 @@
       <h1>活动流</h1>
       <p class="sub">每一条触发事件的实时分发轨迹</p>
       <div class="card"><div id="activity-list"></div></div>
+    </section>
+
+    <!-- ===== Inbox ===== -->
+    <section class="view" id="view-inbox">
+      <h1>收件箱</h1>
+      <p class="sub">站内通知中心 · 未读消息与已读标记</p>
+      <div class="inbox-head">
+        <div class="inbox-tabs">
+          <button class="inbox-tab active" data-filter="all">全部</button>
+          <button class="inbox-tab" data-filter="unread">未读</button>
+        </div>
+        <div class="inbox-actions">
+          <button class="btn btn-ghost" id="inbox-mark-all" style="padding:7px 14px;font-size:12.5px">✓ 全部已读</button>
+        </div>
+      </div>
+      <div class="card"><div id="inbox-list"></div></div>
     </section>
 
     <!-- ===== Subscribers ===== -->
