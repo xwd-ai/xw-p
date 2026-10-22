@@ -263,9 +263,9 @@ def create_workflow_store(backend: str, database_url: str) -> WorkflowStore:
 
 def _seed_workflows() -> list[Workflow]:
     """内存后端预置示例工作流，与触发注册表保持一致（demo 开箱即用）。"""
-    from .workflow import _welcome_workflow
+    from .workflow import seed_workflows
 
-    return [_welcome_workflow()]
+    return seed_workflows()
 
 
 _store: Optional[WorkflowStore] = None

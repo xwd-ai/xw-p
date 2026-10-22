@@ -41,7 +41,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="xw-notify API",
     version="0.1.0",
-    description="统一通知触发 API",
+    description="电商交易触达触发 API",
     lifespan=lifespan,
 )
 
@@ -69,7 +69,7 @@ def trigger_event(
     不会重复入队；未携带则该键的请求每次都会生成新回执。
     """
     # 1. 模板查找：触发标识必须对应一个已启用的工作流。
-    #    优先查内存注册表（预置 welcome），未命中回退到工作流存储，
+    #    优先查内存注册表（预置电商订单工作流），未命中回退到工作流存储，
     #    使经 CRUD 新建的工作流也能被触发。
     workflow = get_registry().get(event.name)
     if workflow is None:

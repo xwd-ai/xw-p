@@ -25,7 +25,7 @@ def client(monkeypatch):
     return TestClient(app)
 
 
-def _trigger_body(name="welcome", subscriber="user_1", **extra):
+def _trigger_body(name="order_confirmed", subscriber="user_1", **extra):
     body = {"name": name, "to": {"subscriberId": subscriber}, "payload": {"user": "Alice"}}
     body.update(extra)
     return body

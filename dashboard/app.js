@@ -5,7 +5,7 @@
   const { CH, seed, subs, API_BASE, api } = window.xwData;
 
   /* ============ 视图切换 ============ */
-  const views = { dashboard: '仪表盘', workflows: '工作流编排', activity: '活动流', inbox: '收件箱', subscribers: '订阅者', settings: '设置' };
+  const views = { dashboard: '仪表盘', workflows: '工作流编排', activity: '活动流', inbox: '收件箱', subscribers: '买家', settings: '设置' };
   document.querySelectorAll('.nav li').forEach(li => {
     li.addEventListener('click', () => {
       document.querySelectorAll('.nav li').forEach(x => x.classList.remove('active'));
@@ -242,13 +242,13 @@
     btn.disabled = disabled;
   }
 
-  // 按钮点击：模拟「新用户注册」场景，向欢迎工作流派发一条真实触发
+  // 按钮点击：模拟「订单支付成功」场景，向订单确认工作流派发一条真实触发
   document.getElementById('trigger-btn').addEventListener('click', () => {
     if (busy) return;
     busy = true;
     const orig = document.getElementById('trigger-btn').textContent;
     setTriggerState('⏳ 触发中…', true);
-    triggerEvent('welcome', { subscriberId: 'user_demo' }, { user: '演示用户', title: '新用户注册 · 欢迎通知' })
+    triggerEvent('order_confirmed', { subscriberId: 'user_demo' }, { customer: '演示买家', order_id: 'A10293', amount: '199.00', title: '订单支付成功 · 多渠道触达' })
       .then(() => {
         // 触发成功：重新拉取活动流与统计，展示真实落库结果
         return Promise.all([loadActivity(), loadDashboardStats(), loadInbox()]);
@@ -272,7 +272,7 @@
       return;
     }
     window.xwEditor.run(() => {
-      triggerEvent(wf.name, { subscriberId: 'user_demo' }, { user: '演示用户', title: '工作流「' + wf.name + '」测试触发' })
+      triggerEvent(wf.name, { subscriberId: 'user_demo' }, { customer: '演示买家', order_id: 'A10293', amount: '199.00', title: '工作流「' + wf.name + '」测试触发' })
         .then(() => Promise.all([loadActivity(), loadDashboardStats(), loadInbox()]))
         .catch(err => {
           console.warn('工作流运行触发失败（后端未就绪？）', err);

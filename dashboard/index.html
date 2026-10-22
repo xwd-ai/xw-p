@@ -3,21 +3,21 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>xw-notify · 统一通知基础设施</title>
+<title>xw-notify · 电商交易触达</title>
 <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <aside>
     <div class="brand">
       <div class="logo">✦</div>
-      <div><b>xw-notify</b><span>Notification Infrastructure</span></div>
+      <div><b>xw-notify</b><span>E-commerce Notifications</span></div>
     </div>
     <ul class="nav">
       <li data-view="dashboard" class="active"><span class="ic">◧</span>仪表盘</li>
       <li data-view="workflows"><span class="ic">⇄</span>工作流编排<span class="badge">3</span></li>
       <li data-view="activity"><span class="ic">≣</span>活动流</li>
       <li data-view="inbox"><span class="ic">✉</span>收件箱<span class="badge badge-count" id="inbox-badge" hidden>0</span></li>
-      <li data-view="subscribers"><span class="ic">◉</span>订阅者<span class="badge">12.4k</span></li>
+      <li data-view="subscribers"><span class="ic">◉</span>买家<span class="badge">12.4k</span></li>
       <li data-view="settings"><span class="ic">⚙</span>设置</li>
     </ul>
     <div class="sidebar-foot">xw-notify v0.1 · 自主实现<br/>Python · Java · 无 TS</div>
@@ -28,18 +28,18 @@
       <div class="crumb">工作台 / <b id="crumb-name">仪表盘</b></div>
       <div class="top-actions">
         <span class="env-badge">● Development 环境</span>
-        <button class="btn btn-primary" id="trigger-btn">⚡ 触发演示</button>
+        <button class="btn btn-primary" id="trigger-btn">🛒 下单触发</button>
       </div>
     </header>
 
     <!-- ===== Dashboard ===== -->
     <section class="view active" id="view-dashboard">
       <h1>仪表盘</h1>
-      <p class="sub">过去 7 天通知发送概览</p>
+      <p class="sub">过去 7 天订单通知发送概览</p>
       <div class="grid">
         <div class="stat"><div class="label">总发送量</div><div class="value" id="stat-total">1,284,530</div><div class="delta up">▲ 12.4% 较上周</div></div>
         <div class="stat"><div class="label">投递成功率</div><div class="value" id="stat-rate">99.2%</div><div class="delta up">▲ 0.3%</div></div>
-        <div class="stat"><div class="label">活跃订阅者</div><div class="value">12,482</div><div class="delta up">▲ 3.1%</div></div>
+        <div class="stat"><div class="label">活跃买家</div><div class="value">12,482</div><div class="delta up">▲ 3.1%</div></div>
         <div class="stat"><div class="label">接入渠道</div><div class="value">5</div><div class="delta" id="stat-channels" style="color:var(--muted)">Email · SMS · Push · In-App · Chat</div></div>
       </div>
       <div class="cards">
@@ -87,7 +87,7 @@
     <!-- ===== Activity ===== -->
     <section class="view" id="view-activity">
       <h1>活动流</h1>
-      <p class="sub">每一条触发事件的实时分发轨迹</p>
+      <p class="sub">每一条订单事件触发的实时分发轨迹</p>
       <div class="card"><div id="activity-list"></div></div>
     </section>
 
@@ -109,8 +109,8 @@
 
     <!-- ===== Subscribers ===== -->
     <section class="view" id="view-subscribers">
-      <h1>订阅者</h1>
-      <p class="sub">用户档案与渠道偏好（全局 / 工作流 / 渠道 三级）</p>
+      <h1>买家</h1>
+      <p class="sub">买家档案与渠道偏好（全局 / 工作流 / 渠道 三级）</p>
       <div class="card"><div id="sub-list"></div></div>
     </section>
 

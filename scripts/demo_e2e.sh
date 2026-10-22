@@ -65,11 +65,11 @@ log "编译 Java engine（mvn package，跳过测试打包）..."
 ENGINE_JAR="$(ls "$ROOT"/engine/target/xw-notify-engine-*.jar | head -1)"
 log "engine 打包完成：$ENGINE_JAR"
 
-# 4. 触发一条通知（写入 Redis 队列）
-log "触发通知（welcome -> user_1）..."
+# 4. 触发一条订单通知（写入 Redis 队列）
+log "触发订单通知（order_confirmed -> user_1）..."
 TRIGGER_RESP="$(curl -s -X POST "http://127.0.0.1:${API_PORT}/v1/events/trigger" \
   -H 'Content-Type: application/json' \
-  -d '{"name":"welcome","to":{"subscriberId":"user_1","email":"hi@example.com","channels":["in_app","email"]},"payload":{"user":"Alice"}}')"
+  -d '{"name":"order_confirmed","to":{"subscriberId":"user_1","email":"hi@example.com","channels":["in_app","email"]},"payload":{"customer":"Alice","order_id":"A10293","amount":"199.00"}}')"
 log "触发回执：$TRIGGER_RESP"
 
 # 5. 启动 Java engine 消费队列（打印 mock 发送日志后 5 秒退出）
