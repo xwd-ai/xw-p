@@ -65,9 +65,9 @@ def test_filter_limit_applied():
 
 @pytest.fixture
 def client(monkeypatch):
-    import app.storage as storage_mod
+    import app.activity_log as activity_log_mod
 
-    class _FakeStorage:
+    class _FakeActivityStore:
         def __init__(self):
             self.records = [
                 _record(trigger_id="a", workflow="welcome", subscriber="u1",
@@ -78,13 +78,13 @@ def client(monkeypatch):
                         channels=["push"], days_ago=2),
             ]
 
-        def save(self, record):
+        def append(self, record):
             self.records.append(record)
 
         def read_all(self):
             return list(self.records)
 
-    monkeypatch.setattr(storage_mod, "_storage", _FakeStorage())
+    monkeypatch.setattr(activity_log_mod, "_activity_store", _FakeActivityStore())
     return TestClient(app)
 
 

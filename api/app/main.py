@@ -13,6 +13,7 @@ from typing import Optional
 from fastapi import FastAPI, Header, HTTPException, status
 
 from . import config
+from .activity_log import record_activity
 from .activity_routes import router as activity_router
 from .bus import get_bus
 from .dashboard_routes import router as dashboard_router
@@ -106,6 +107,16 @@ def trigger_event(
             cached = store.get(idempotency_key)
             if cached is not None:
                 return TriggerResponse(**cached)
+
+    # 5. 写入活动日志（活动流即时可见「已触发」，随后 worker 投递更新状态）
+    record_activity(
+        trigger_id=message.trigger_id,
+        workflow=event.name,
+        subscriber_id=message.subscriber_id,
+        channels=message.channels,
+        status="triggered",
+        payload=event.payload,
+    )
 
     get_bus().publish(message)
     logger.info("已触发：%s -> %s（ack=%s）", event.name, message.subscriber_id, message.trigger_id)

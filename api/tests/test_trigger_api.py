@@ -12,14 +12,26 @@ from app.main import app
 
 @pytest.fixture
 def client(monkeypatch):
-    """隔离测试环境：内存总线 + 内存幂等，避免污染全局单例。"""
+    """隔离测试环境：内存总线 + 内存幂等 + 内存活动日志，避免污染全局单例。"""
+    import app.activity_log as al_mod
     import app.bus as bus_mod
     import app.idempotency as idem_mod
+
+    class _FakeActivityStore:
+        def __init__(self):
+            self.records = []
+
+        def append(self, record):
+            self.records.append(record)
+
+        def read_all(self):
+            return list(self.records)
 
     bus = MemoryMessageBus()
     idem = MemoryIdempotencyStore()
     monkeypatch.setattr(bus_mod, "_bus", bus)
     monkeypatch.setattr(idem_mod, "_store", idem)
+    monkeypatch.setattr(al_mod, "_activity_store", _FakeActivityStore())
     monkeypatch.setattr(config, "IDEMPOTENCY_BACKEND", "memory")
     monkeypatch.setattr(config, "IDEMPOTENCY_TTL", 86400)
     return TestClient(app)

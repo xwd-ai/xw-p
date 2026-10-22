@@ -1,15 +1,17 @@
 """活动流查询 API（ROADMAP Phase S）。
 
-提供 ``GET /v1/activity``，从消息存储读取最近的触发事件，返回按时间倒序的
-活动列表，支持按订阅者 / 工作流 / 时间范围过滤，供前端「活动流」与收件箱
-消费。
+提供 ``GET /v1/activity``，从活动日志存储（``activity_log``）读取触发事件，
+返回按时间倒序的活动列表，支持按订阅者 / 工作流过滤，供前端「活动流」消费。
+
+数据来源为独立的活动日志（见 ``activity_log.py``），在触发 API 返回回执前
+同步写入，因此活动流能即时反映「已触发」状态。
 
 字段约定（每项）：
 - ``trigger_id``：触发唯一标识。
 - ``workflow``：工作流/模板名。
 - ``subscriber_id``：订阅者标识。
-- ``channels``：实际分发的渠道列表。
-- ``status``：投递状态（``sent`` / ``failed``）。
+- ``channels``：目标渠道列表。
+- ``status``：活动状态（``triggered`` / ``sent`` / ``failed``）。
 - ``created_at``：ISO 8601 时间戳。
 - ``title``：面向展示的摘要（默认取工作流名，可在 payload 覆盖）。
 """
@@ -20,7 +22,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Query
 
-from .storage import get_storage
+from .activity_log import get_activity_store
 
 router = APIRouter(prefix="/v1", tags=["activity"])
 
@@ -106,7 +108,7 @@ def list_activity(
     limit: int = Query(default=_DEFAULT_LIMIT, ge=1, le=_MAX_LIMIT, description="返回条数上限"),
 ) -> dict:
     """返回最近的活动（触发事件），最新在前。"""
-    records = get_storage().read_all()
+    records = get_activity_store().read_all()
     items = _filter_and_sort(records, subscriber_id, workflow, limit)
     return {"items": items, "total": len(items)}
 
