@@ -21,6 +21,7 @@ from .schemas import TriggerEvent, TriggerResponse, new_queued_message
 from .worker import Worker
 from .workflow import get_registry
 from .workflow_routes import router as workflow_router
+from .workflow_store import get_workflow_store
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
@@ -65,9 +66,13 @@ def trigger_event(
     幂等语义：携带 ``Idempotency-Key`` 的请求若此前已成功处理，直接返回缓存回执，
     不会重复入队；未携带则该键的请求每次都会生成新回执。
     """
-    # 1. 模板查找：触发标识必须对应一个已启用的工作流
+    # 1. 模板查找：触发标识必须对应一个已启用的工作流。
+    #    优先查内存注册表（预置 welcome），未命中回退到工作流存储，
+    #    使经 CRUD 新建的工作流也能被触发。
     workflow = get_registry().get(event.name)
     if workflow is None:
+        workflow = get_workflow_store().get_by_name(event.name)
+    if workflow is None or not workflow.active:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"工作流模板不存在或未启用：{event.name}",

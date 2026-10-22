@@ -50,6 +50,35 @@ def test_trigger_unknown_workflow_returns_404(client):
     assert "no_such_template" in resp.json()["detail"]
 
 
+def test_trigger_workflow_from_store_fallback(client, monkeypatch):
+    """CRUD 新建（仅存在于 store、不在 registry）的工作流也能被触发。"""
+    import app.workflow_store as ws
+    from app.models.entities import Step, Workflow
+
+    store = ws.MemoryWorkflowStore(seed=[
+        Workflow(name="onboarding", steps=[Step(id="s1", type="in_app", name="欢迎", config={})], version=1)
+    ])
+    monkeypatch.setattr(ws, "_store", store)
+
+    resp = client.post("/v1/events/trigger", json=_trigger_body(name="onboarding"))
+    assert resp.status_code == 200
+    assert resp.json()["acknowledged"] is True
+
+
+def test_trigger_inactive_store_workflow_returns_404(client, monkeypatch):
+    """store 中未启用的工作流不可被触发（active=False）。"""
+    import app.workflow_store as ws
+    from app.models.entities import Step, Workflow
+
+    store = ws.MemoryWorkflowStore(seed=[
+        Workflow(name="off", steps=[Step(id="s1", type="in_app", name="x", config={})], version=1, active=False)
+    ])
+    monkeypatch.setattr(ws, "_store", store)
+
+    resp = client.post("/v1/events/trigger", json=_trigger_body(name="off"))
+    assert resp.status_code == 404
+
+
 def test_trigger_missing_subscriber_returns_422(client):
     resp = client.post("/v1/events/trigger", json={"name": "welcome", "to": {}})
     assert resp.status_code == 422

@@ -171,9 +171,14 @@
 
   /* ============ 工作流「运行」触发（真实触发 API） ============ */
   document.getElementById('run-btn').addEventListener('click', () => {
+    // 按当前选中工作流的名称触发一条真实测试事件（而非硬编码 welcome）
+    const wf = wfList.find(w => w.id === wfCurrentId);
+    if (!wf) {
+      showToast('请先在左侧选择一个工作流');
+      return;
+    }
     window.xwEditor.run(() => {
-      // 按当前画布步骤生成一条真实触发（演示场景）
-      triggerEvent('welcome', { subscriberId: 'user_demo' }, { user: '演示用户', title: '工作流「欢迎新用户」测试触发' })
+      triggerEvent(wf.name, { subscriberId: 'user_demo' }, { user: '演示用户', title: '工作流「' + wf.name + '」测试触发' })
         .then(() => Promise.all([loadActivity(), loadDashboardStats()]))
         .catch(err => {
           console.warn('工作流运行触发失败（后端未就绪？）', err);
