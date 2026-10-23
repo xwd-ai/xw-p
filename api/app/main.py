@@ -44,7 +44,10 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="xw-notify API",
     version="0.1.0",
-    description="电商交易触达触发 API",
+    description=(
+        "电商交易触达触发 API：订单/支付/发货/物流等交易事件，触发后分发到买家"
+        "所在的多个渠道（站内信 / 邮件 / 短信 / 推送）。"
+    ),
     lifespan=lifespan,
 )
 
@@ -66,17 +69,41 @@ def _env_mismatch(workflow_env, request_env: str) -> bool:
     return wf_env != request_env
 
 
-@app.get("/health", tags=["system"])
+@app.get("/health", tags=["system"], summary="健康检查")
 def health() -> dict:
     return {"status": "ok", "queued": get_bus().size()}
 
 
-@app.post("/v1/events/trigger", response_model=TriggerResponse, tags=["trigger"])
+@app.post(
+    "/v1/events/trigger",
+    response_model=TriggerResponse,
+    tags=["trigger"],
+    status_code=status.HTTP_200_OK,
+    summary="触发一条交易事件通知",
+    description=(
+        "触发一条电商交易事件（订单/支付/发货/物流），按 ``name`` 匹配工作流模板，"
+        "将通知分发到订阅者所在的多个渠道（站内信 / 邮件 / 短信 / 推送）。\n\n"
+        "处理链路：鉴权（环境 + API Key）→ 模板查找 → 幂等去重 → 入队 → 返回回执。\n\n"
+        "**环境隔离**：通过 ``X-Environment`` 指定隔离环境（默认 ``development``），"
+        "模板查找与活动日志均打上该环境标记；配置了 API Key 的环境需携带 ``X-Api-Key`` 头。\n\n"
+        "**幂等语义**：携带 ``Idempotency-Key`` 的请求若此前已成功处理，直接返回缓存回执，"
+        "不会重复入队；未携带则每次请求都会生成新回执。"
+    ),
+    responses={
+        status.HTTP_200_OK: {"description": "触发成功，返回回执（acknowledged=true）"},
+        status.HTTP_400_BAD_REQUEST: {"description": "入参校验失败或未知环境"},
+        status.HTTP_401_UNAUTHORIZED: {"description": "API Key 缺失或不匹配"},
+        status.HTTP_404_NOT_FOUND: {"description": "工作流模板不存在或未启用"},
+    },
+)
 def trigger_event(
     event: TriggerEvent,
     env: EnvContext = Depends(require_env),
     idempotency_key: Optional[str] = Header(
-        default=None, alias="Idempotency-Key", description="幂等键：相同键重复请求返回首次回执"
+        default=None,
+        alias="Idempotency-Key",
+        description="幂等键：相同键重复请求返回首次回执",
+        examples=["order-confirmed-ORDER-2026-1001"],
     ),
 ) -> TriggerResponse:
     """触发一条通知：鉴权（环境 + API Key）→ 模板查找 → 幂等去重 → 入队 → 返回回执。
