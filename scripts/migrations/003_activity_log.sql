@@ -11,9 +11,11 @@ CREATE TABLE IF NOT EXISTS activity_log (
     channels      JSONB       NOT NULL DEFAULT '[]'::jsonb,
     status        TEXT        NOT NULL DEFAULT 'triggered',
     title         TEXT,
+    environment   TEXT        NOT NULL DEFAULT 'development',
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_activity_log_subscriber ON activity_log (subscriber_id);
 CREATE INDEX IF NOT EXISTS idx_activity_log_workflow   ON activity_log (workflow);
 CREATE INDEX IF NOT EXISTS idx_activity_log_created_at ON activity_log (created_at);
+CREATE INDEX IF NOT EXISTS idx_activity_log_environment ON activity_log (environment);

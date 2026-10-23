@@ -10,10 +10,11 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, status
 
 from . import config
 from .activity_log import record_activity
+from .auth import EnvContext, require_env
 from .activity_routes import router as activity_router
 from .bus import get_bus
 from .dashboard_routes import router as dashboard_router
@@ -54,6 +55,17 @@ app.include_router(execution_router)
 app.include_router(inbox_router)
 
 
+def _env_mismatch(workflow_env, request_env: str) -> bool:
+    """判断工作流环境与请求环境是否不匹配。
+
+    环境一致（或工作流环境未知、回退默认）视为匹配，返回 False。
+    """
+    wf_env = workflow_env.value if hasattr(workflow_env, "value") else str(workflow_env)
+    if not wf_env:
+        return False
+    return wf_env != request_env
+
+
 @app.get("/health", tags=["system"])
 def health() -> dict:
     return {"status": "ok", "queued": get_bus().size()}
@@ -62,25 +74,32 @@ def health() -> dict:
 @app.post("/v1/events/trigger", response_model=TriggerResponse, tags=["trigger"])
 def trigger_event(
     event: TriggerEvent,
+    env: EnvContext = Depends(require_env),
     idempotency_key: Optional[str] = Header(
         default=None, alias="Idempotency-Key", description="幂等键：相同键重复请求返回首次回执"
     ),
 ) -> TriggerResponse:
-    """触发一条通知：校验 → 模板查找 → 幂等去重 → 入队 → 返回回执。
+    """触发一条通知：鉴权（环境 + API Key）→ 模板查找 → 幂等去重 → 入队 → 返回回执。
+
+    环境隔离：请求通过 ``X-Environment`` 指定隔离环境（默认 development），
+    模板查找与活动日志均打上该环境标记；配置了 API Key 的环境需携带
+    ``X-Api-Key`` 头。
 
     幂等语义：携带 ``Idempotency-Key`` 的请求若此前已成功处理，直接返回缓存回执，
     不会重复入队；未携带则该键的请求每次都会生成新回执。
     """
     # 1. 模板查找：触发标识必须对应一个已启用的工作流。
     #    优先查内存注册表（预置电商订单工作流），未命中回退到工作流存储，
-    #    使经 CRUD 新建的工作流也能被触发。
+    #    使经 CRUD 新建的工作流也能被触发；并做环境匹配，实现环境间隔离。
     workflow = get_registry().get(event.name)
-    if workflow is None:
+    if workflow is None or _env_mismatch(workflow.environment, env.environment):
         workflow = get_workflow_store().get_by_name(event.name)
+        if workflow is not None and _env_mismatch(workflow.environment, env.environment):
+            workflow = None
     if workflow is None or not workflow.active:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"工作流模板不存在或未启用：{event.name}",
+            detail=f"工作流模板不存在或未启用：{event.name}（环境 {env.environment}）",
         )
 
     store = get_idempotency_store()
@@ -118,6 +137,7 @@ def trigger_event(
         channels=message.channels,
         status="triggered",
         payload=event.payload,
+        environment=env.environment,
     )
 
     get_bus().publish(message)

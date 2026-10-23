@@ -78,6 +78,7 @@ def _to_activity(record: dict) -> dict:
         "status": record.get("status", "sent"),
         "created_at": record.get("created_at"),
         "title": title,
+        "environment": record.get("environment") or "development",
     }
 
 
@@ -90,10 +91,16 @@ def _filter_and_sort(
     status: Optional[str] = None,
     since: Optional[datetime] = None,
     until: Optional[datetime] = None,
+    environment: Optional[str] = None,
 ) -> list[dict]:
     """按条件过滤并返回按时间倒序的活动列表。"""
     activities = []
     for r in records:
+        # 环境过滤（隔离环境打标，未打标的旧记录视为 development）
+        if environment:
+            rec_env = r.get("environment") or "development"
+            if rec_env != environment:
+                continue
         # 订阅者过滤
         if subscriber_id and r.get("subscriber_id") != subscriber_id:
             continue
@@ -132,6 +139,7 @@ def list_activity(
     status: Optional[str] = Query(default=None, description="按活动状态过滤（triggered/sent/failed）"),
     since: Optional[datetime] = Query(default=None, description="起始时间（ISO 8601，含）"),
     until: Optional[datetime] = Query(default=None, description="截止时间（ISO 8601，含）"),
+    environment: Optional[str] = Query(default=None, description="按隔离环境过滤（development/production）"),
     limit: int = Query(default=_DEFAULT_LIMIT, ge=1, le=_MAX_LIMIT, description="返回条数上限"),
 ) -> dict:
     """返回最近的活动（触发事件），最新在前。"""
@@ -145,6 +153,7 @@ def list_activity(
         status=status,
         since=since,
         until=until,
+        environment=environment,
     )
     return {"items": items, "total": len(items)}
 

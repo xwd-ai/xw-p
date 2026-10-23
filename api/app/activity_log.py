@@ -93,9 +93,9 @@ class PostgresActivityStore:
                 text(
                     """
                     INSERT INTO activity_log
-                        (trigger_id, workflow, subscriber_id, channels, status, title)
+                        (trigger_id, workflow, subscriber_id, channels, status, title, environment)
                     VALUES
-                        (:trigger_id, :workflow, :subscriber_id, :channels, :status, :title)
+                        (:trigger_id, :workflow, :subscriber_id, :channels, :status, :title, :environment)
                     """
                 ),
                 {
@@ -105,6 +105,7 @@ class PostgresActivityStore:
                     "channels": json.dumps(record.get("channels") or [], ensure_ascii=False),
                     "status": record.get("status", "triggered"),
                     "title": record.get("title") or record["workflow"],
+                    "environment": record.get("environment") or config.ENV,
                 },
             )
 
@@ -116,7 +117,7 @@ class PostgresActivityStore:
             rows = conn.execute(
                 text(
                     "SELECT trigger_id, workflow, subscriber_id, channels, status, "
-                    "title, created_at FROM activity_log ORDER BY created_at"
+                    "title, environment, created_at FROM activity_log ORDER BY created_at"
                 )
             ).mappings().all()
         records: list[dict[str, Any]] = []
@@ -131,6 +132,7 @@ class PostgresActivityStore:
                     "channels": json.loads(channels) if isinstance(channels, str) else (channels or []),
                     "status": d.get("status", "triggered"),
                     "title": d.get("title"),
+                    "environment": d.get("environment") or config.ENV,
                     "created_at": d.get("created_at"),
                 }
             )
@@ -166,11 +168,13 @@ def record_activity(
     status: str = "triggered",
     title: Optional[str] = None,
     payload: Optional[dict[str, Any]] = None,
+    environment: Optional[str] = None,
 ) -> dict[str, Any]:
     """写入一条活动日志并返回落库记录。
 
     供触发 API 在返回回执前调用，令活动流即时反映「已触发」状态。
     展示标题优先取 ``payload.title``，其次 ``title``，最后工作流名。
+    ``environment`` 打标隔离环境（默认 development），供活动流按环境过滤。
     """
     resolved_title = title or ((payload or {}).get("title") if payload else None) or workflow
     record = {
@@ -180,6 +184,7 @@ def record_activity(
         "channels": channels or ["in_app"],
         "status": status,
         "title": resolved_title,
+        "environment": environment or config.ENV,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     get_activity_store().append(record)
