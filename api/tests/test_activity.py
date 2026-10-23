@@ -63,6 +63,37 @@ def test_filter_limit_applied():
     assert len(_filter_and_sort(records, None, None, 3)) == 3
 
 
+def test_filter_by_trigger_id():
+    records = [
+        _record(trigger_id="t1"),
+        _record(trigger_id="t2"),
+    ]
+    items = _filter_and_sort(records, None, None, 10, trigger_id="t1")
+    assert [i["trigger_id"] for i in items] == ["t1"]
+
+
+def test_filter_by_status():
+    records = [
+        _record(trigger_id="s1", status="sent"),
+        _record(trigger_id="s2", status="failed"),
+        _record(trigger_id="s3", status="triggered"),
+    ]
+    items = _filter_and_sort(records, None, None, 10, status="failed")
+    assert [i["trigger_id"] for i in items] == ["s2"]
+
+
+def test_filter_by_time_range():
+    now = datetime.now(timezone.utc)
+    records = [
+        _record(trigger_id="old", days_ago=10),
+        _record(trigger_id="recent", days_ago=0),
+    ]
+    since = now - timedelta(days=5)
+    until = now + timedelta(days=1)
+    items = _filter_and_sort(records, None, None, 10, since=since, until=until)
+    assert [i["trigger_id"] for i in items] == ["recent"]
+
+
 @pytest.fixture
 def client(monkeypatch):
     import app.activity_log as activity_log_mod

@@ -4,6 +4,7 @@
 此处的 Python worker 仅作为 demo 阶段的端到端打通。
 
 落库后端由 ``XW_STORAGE`` 决定（jsonl / postgres），见 ``storage.py``。
+逐渠道投递时同步写入执行明细（``execution_log``），供后台排查。
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ import threading
 from datetime import datetime, timezone
 
 from .bus import get_bus
+from .execution_log import record_execution
 from .schemas import QueuedMessage
 from .storage import get_storage
 
@@ -49,15 +51,21 @@ class Worker:
 
     def _process(self, msg: QueuedMessage) -> None:
         # mock 发送：demo 阶段仅记录到持久化后端并打印
+        channels = msg.channels or ["in_app"]
         record = {
             "trigger_id": msg.trigger_id,
             "transaction_id": msg.transaction_id,
             "workflow": msg.name,
             "subscriber_id": msg.subscriber_id,
-            "channels": msg.channels or ["in_app"],
+            "channels": channels,
             "payload": msg.payload,
             "status": "sent",
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         get_storage().save(record)
-        logger.info("已发送: %s -> %s (%s)", msg.name, msg.subscriber_id, record["channels"])
+
+        # 逐渠道写入执行明细（execution details）
+        for ch in channels:
+            record_execution(trigger_id=msg.trigger_id, channel=ch, status="sent")
+
+        logger.info("已发送: %s -> %s (%s)", msg.name, msg.subscriber_id, channels)
