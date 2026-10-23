@@ -1,6 +1,6 @@
 """后台 worker：消费队列，mock 发送并落库。
 
-后续（Phase 2 起）会由 Java engine 接管真正的工作流求值与 provider 分发，
+后续（Phase 2 起）会由 Go engine 接管真正的工作流求值与 provider 分发，
 此处的 Python worker 仅作为 demo 阶段的端到端打通。
 
 落库后端由 ``XW_STORAGE`` 决定（jsonl / postgres），见 ``storage.py``。

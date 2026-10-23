@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# xw-notify 端到端 demo：Python 触发 → Redis 队列 → Java engine 消费
+# xw-notify 端到端 demo：Python 触发 → Redis 队列 → Go engine 消费
 #
 # 前置依赖：
 #   - Redis（默认 localhost:6379）
 #   - Python 3.11+（api 依赖已安装，见 api/.venv）
-#   - JDK 21 + Maven（编译并运行 engine）
+#   - Go 1.22+（编译并运行 engine）
 #
 # 用法：
 #   ./scripts/demo_e2e.sh
 #
 # 说明：脚本会依次启动 Redis（若未运行）、Python API（redis 模式）、
-#       触发一条通知，再启动 Java engine 消费队列并打印 mock 发送日志。
+#       触发一条订单通知，再启动 Go engine 消费队列并打印 mock 发送日志。
 
 set -euo pipefail
 
@@ -56,14 +56,15 @@ for _ in $(seq 1 30); do
 done
 log "Python API 就绪：http://127.0.0.1:${API_PORT}"
 
-# 3. 编译 Java engine（首次会下载依赖）
-log "编译 Java engine（mvn package，跳过测试打包）..."
+# 3. 编译 Go engine（首次会下载依赖）
+log "编译 Go engine（go build）..."
 (
   cd "$ROOT/engine"
-  mvn -q -DskipTests package
+  mkdir -p bin
+  go build -o "$ROOT/engine/bin/xw-engine" ./cmd/engine
 )
-ENGINE_JAR="$(ls "$ROOT"/engine/target/xw-notify-engine-*.jar | head -1)"
-log "engine 打包完成：$ENGINE_JAR"
+ENGINE_BIN="$ROOT/engine/bin/xw-engine"
+log "engine 编译完成：$ENGINE_BIN"
 
 # 4. 触发一条订单通知（写入 Redis 队列）
 log "触发订单通知（order_confirmed -> user_1）..."
@@ -72,11 +73,11 @@ TRIGGER_RESP="$(curl -s -X POST "http://127.0.0.1:${API_PORT}/v1/events/trigger"
   -d '{"name":"order_confirmed","to":{"subscriberId":"user_1","email":"hi@example.com","channels":["in_app","email"]},"payload":{"customer":"Alice","order_id":"A10293","amount":"199.00"}}')"
 log "触发回执：$TRIGGER_RESP"
 
-# 5. 启动 Java engine 消费队列（打印 mock 发送日志后 5 秒退出）
-log "启动 Java engine 消费队列（观察下方 mock 发送日志）..."
+# 5. 启动 Go engine 消费队列（打印 mock 发送日志后 5 秒退出）
+log "启动 Go engine 消费队列（观察下方 mock 发送日志）..."
 (
   cd "$ROOT/engine"
-  REDIS_HOST=localhost java -jar "$ENGINE_JAR" --xw.queue-key="$QUEUE_KEY" --xw.poll-timeout=1
+  REDIS_HOST=localhost XW_REDIS_QUEUE_KEY="$QUEUE_KEY" XW_POLL_TIMEOUT=1 "$ENGINE_BIN"
 ) &
 ENGINE_PID=$!
 

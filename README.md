@@ -7,7 +7,7 @@
 - **一套 API，多端触达**：电商业务侧只调用一次触发接口，剩下的渠道选择、模板渲染、去重、聚合、重试都由平台处理。
 - **工作流驱动**：通知按「工作流（Workflow）+ 步骤（Step）」编排，支持收件箱、邮件、短信、推送、聊天、延时、摘要（Digest）等步骤类型。
 - **订阅者与偏好**：每个买家一个订阅者档案，按「全局 / 工作流 / 渠道」三级控制是否接收。
-- **多语言实现**：API 与渠道集成层用 Python(FastAPI)，执行引擎与调度用 Java(Spring Boot)。
+- **多语言实现**：API 与渠道集成层用 Python(FastAPI)，执行引擎与调度用 Go。
 
 ## 典型交易场景
 
@@ -23,7 +23,7 @@
 电商订单系统 ──trigger──▶  api (Python/FastAPI)  ──入队──▶  MQ (Redis / RabbitMQ)
                                                         │
                                                         ▼
-                                            engine (Java/Spring Boot)
+                                            engine (Go)
                                               · 工作流求值
                                               · digest 聚合
                                               · provider 分发
@@ -41,7 +41,7 @@
 
 ```
 api/        Python FastAPI：触发 API、管理 API、渠道集成
-engine/     Java Spring Boot：执行引擎、队列消费、provider 分发、digest
+engine/     Go：执行引擎、队列消费、provider 分发、digest
 dashboard/  原生 HTML/CSS/JS 展示前端（仪表盘 + 可视化工作流编排器 + 实时活动流）
 infra/      docker-compose 与基础设施配置
 docs/       文档

@@ -8,11 +8,17 @@ venv/
 .mypy_cache/
 .ruff_cache/
 
-# Java / Maven / Gradle
+# Go
+engine/bin/
+*.test
+*.out
+go.work
+go.work.sum
+
+# 构建产物（通用）
 target/
 build/
 *.class
-.mvn/
 *.jar
 *.war
 
