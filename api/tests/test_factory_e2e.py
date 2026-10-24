@@ -40,10 +40,10 @@ def test_end_to_end_memory_jsonl(monkeypatch, tmp_path):
     msg = QueuedMessage(
         trigger_id="t-e2e",
         transaction_id="tx-e2e",
-        name="welcome",
-        subscriber_id="user_1",
+        name="order_confirmed",
+        subscriber_id="buyer_1001",
         channels=["in_app"],
-        payload={"user": "Alice"},
+        payload={"order_id": "ORDER-2026-1001", "customer": "Alice"},
     )
     bus.publish(msg)
 
@@ -52,5 +52,5 @@ def test_end_to_end_memory_jsonl(monkeypatch, tmp_path):
 
     lines = (tmp_path / "messages.jsonl").read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 1
-    assert '"workflow": "welcome"' in lines[0]
+    assert '"workflow": "order_confirmed"' in lines[0]
     assert '"status": "sent"' in lines[0]
