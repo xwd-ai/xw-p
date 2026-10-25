@@ -9,21 +9,24 @@ import (
 
 // renderStage 是管线第三阶段：用变量渲染步骤模板。
 //
-// 骨架实现为「{{ var }}」占位符的简单替换：从步骤 Config 中读取 "template"
-// 字符串，将其中的 {{ var }} 替换为上下文变量值。变量名与 payload 展开后的
-// 键一致（如 payload.order_id 或系统变量 $workflow）。
+// 支持两种模板表达式：
+//   - 变量替换「{{ var }}」：var 可为 payload 嵌套变量（payload.items[0].name）、
+//     系统变量（$workflow）或已展开的 payload.<key>。
+//   - 内置函数「{{ fn arg... }}」：如 {{ upper payload.customer_name }}、
+//     {{ format_amount payload.amount }}，参数本身也可为变量。
 //
-// 安全沙箱、内置函数、缺失变量报错策略在 Phase 2 的「变量替换渲染」
-// 任务中完善；当前对缺失变量原样保留占位符，便于骨架阶段先行打通链路。
+// 缺失变量原样保留占位符（错误策略见 render 实现）。
 type renderStage struct {
-	// placeholders 匹配 {{ 变量名 }}，变量名允许字母/数字/下划线/点/美元符。
-	placeholders *regexp.Regexp
+	// expr 匹配模板表达式：变量或函数调用，允许字母/数字/下划线/点/美元符/方括号。
+	expr *regexp.Regexp
+	vs   *variableSystem
 }
 
 // NewRenderStage 创建渲染阶段。
 func NewRenderStage() Stage {
 	return &renderStage{
-		placeholders: regexp.MustCompile(`\{\{\s*([A-Za-z0-9_.$]+)\s*\}\}`),
+		expr: regexp.MustCompile(`\{\{\s*([^{}]+?)\s*\}\}`),
+		vs:   newVariableSystem(),
 	}
 }
 
@@ -40,12 +43,9 @@ func (r *renderStage) Apply(ctx *Context, step domain.Step) error {
 		return nil
 	}
 
-	rendered := r.placeholders.ReplaceAllStringFunc(tmpl, func(m string) string {
-		name := r.placeholders.FindStringSubmatch(m)[1]
-		if v, ok := ctx.Get(name); ok {
-			return stringify(v)
-		}
-		return m // 缺失变量原样保留，待 任务 11 完善错误策略
+	rendered := r.expr.ReplaceAllStringFunc(tmpl, func(m string) string {
+		inner := strings.TrimSpace(r.expr.FindStringSubmatch(m)[1])
+		return r.eval(ctx, inner)
 	})
 
 	ctx.Results[step.ID] = StepResult{
@@ -57,6 +57,34 @@ func (r *renderStage) Apply(ctx *Context, step domain.Step) error {
 	return nil
 }
 
+// eval 求值一个模板表达式：若含空格则视为函数调用，否则视为变量替换。
+func (r *renderStage) eval(ctx *Context, inner string) string {
+	// 函数调用：第一个 token 为函数名，其余为参数（参数先做变量替换）。
+	if tokens := splitExpr(inner); len(tokens) > 1 {
+		name := tokens[0]
+		args := make([]string, 0, len(tokens)-1)
+		for _, arg := range tokens[1:] {
+			args = append(args, r.eval(ctx, arg))
+		}
+		if out, err := r.vs.call(name, args); err == nil {
+			return out
+		}
+		// 未知函数：原样保留。
+		return "{{ " + inner + " }}"
+	}
+
+	// 变量替换。
+	if v, ok := r.vs.resolve(ctx, inner); ok {
+		return stringify(v)
+	}
+	return "{{ " + inner + " }}" // 缺失变量原样保留
+}
+
+// splitExpr 按空白切分表达式 token（函数名与参数）。
+func splitExpr(inner string) []string {
+	return strings.Fields(inner)
+}
+
 // stringify 将变量值转成字符串用于模板替换。
 func stringify(v any) string {
 	switch t := v.(type) {
@@ -65,7 +93,6 @@ func stringify(v any) string {
 	case nil:
 		return ""
 	default:
-		// 数值/布尔等基础类型直接拼接；复杂结构用 fmt 兜底。
 		return strings.TrimSpace(anyToString(t))
 	}
 }
