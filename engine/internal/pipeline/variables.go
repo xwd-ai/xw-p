@@ -97,7 +97,8 @@ func (vs *variableSystem) resolve(ctx *Context, name string) (any, bool) {
 	}
 	if strings.HasPrefix(name, "payload.") {
 		path := strings.TrimPrefix(name, "payload.")
-		v, ok := lookupPath(ctx.Msg.Payload, path)
+		// 安全沙箱：经校验的路径取值，危险段（__ 前缀、空段）直接拒绝。
+		v, ok := safeLookupPath(ctx.Msg.Payload, path)
 		if !ok {
 			// 回退：查已展开的变量表（保持向后兼容）。
 			return ctx.Get(name)

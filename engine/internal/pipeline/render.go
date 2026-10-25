@@ -43,9 +43,20 @@ func (r *renderStage) Apply(ctx *Context, step domain.Step) error {
 		return nil
 	}
 
+	// 安全沙箱：渲染前校验模板大小，超大模板直接失败。
+	if err := validateTemplate(tmpl); err != nil {
+		ctx.Results[step.ID] = StepResult{
+			StepID:   step.ID,
+			StepType: domain.StepType(step.Type),
+			Channel:  step.Type,
+			Error:    err.Error(),
+		}
+		return err
+	}
+
 	rendered := r.expr.ReplaceAllStringFunc(tmpl, func(m string) string {
 		inner := strings.TrimSpace(r.expr.FindStringSubmatch(m)[1])
-		return r.eval(ctx, inner)
+		return r.eval(ctx, inner, 0)
 	})
 
 	ctx.Results[step.ID] = StepResult{
@@ -58,13 +69,18 @@ func (r *renderStage) Apply(ctx *Context, step domain.Step) error {
 }
 
 // eval 求值一个模板表达式：若含空格则视为函数调用，否则视为变量替换。
-func (r *renderStage) eval(ctx *Context, inner string) string {
+// depth 为递归深度，超过上限则原样保留表达式（防相互引用导致栈溢出）。
+func (r *renderStage) eval(ctx *Context, inner string, depth int) string {
+	if depth > maxRenderDepth {
+		return "{{ " + inner + " }}"
+	}
+
 	// 函数调用：第一个 token 为函数名，其余为参数（参数先做变量替换）。
 	if tokens := splitExpr(inner); len(tokens) > 1 {
 		name := tokens[0]
 		args := make([]string, 0, len(tokens)-1)
 		for _, arg := range tokens[1:] {
-			args = append(args, r.eval(ctx, arg))
+			args = append(args, r.eval(ctx, arg, depth+1))
 		}
 		if out, err := r.vs.call(name, args); err == nil {
 			return out

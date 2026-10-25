@@ -20,12 +20,12 @@ import (
 //     { "field": "payload.order_id", "operator": "eq", "value": "A1001" }
 //
 //     operator 支持：
-//       - "eq"：等于（数值做数值比较，其余转字符串比较）
-//       - "ne"：不等于
-//       - "contains"：字符串/数组包含
-//       - "regex"：正则匹配（value 为 Go 正则表达式）
-//       - "in"：字段值属于 value 列表
-//       - "exists"：字段存在且非空
+//     - "eq"：等于（数值做数值比较，其余转字符串比较）
+//     - "ne"：不等于
+//     - "contains"：字符串/数组包含
+//     - "regex"：正则匹配（value 为 Go 正则表达式）
+//     - "in"：字段值属于 value 列表
+//     - "exists"：字段存在且非空
 //
 // field 支持 payload 嵌套路径（点号与数组下标），如 "payload.customer.name"。
 // 所有条件默认按「与」逻辑串联：任一条件不满足即跳过该步骤。
