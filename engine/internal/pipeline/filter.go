@@ -51,20 +51,22 @@ func (f *filterStage) Apply(ctx *Context, step domain.Step) error {
 		if err != nil {
 			// 无法解析的过滤条件视为失败，直接跳过并记录错误原因。
 			ctx.Results[step.ID] = StepResult{
-				StepID:   step.ID,
-				StepType: domain.StepType(step.Type),
-				Channel:  step.Type,
-				Skipped:  true,
-				Error:    err.Error(),
+				StepID:    step.ID,
+				StepType:  domain.StepType(step.Type),
+				Channel:   step.Type,
+				Skipped:   true,
+				SkipReason: "filter",
+				Error:     err.Error(),
 			}
 			return errSkipStep
 		}
 		if !f.match(ctx, cond) {
 			ctx.Results[step.ID] = StepResult{
-				StepID:   step.ID,
-				StepType: domain.StepType(step.Type),
-				Channel:  step.Type,
-				Skipped:  true,
+				StepID:     step.ID,
+				StepType:   domain.StepType(step.Type),
+				Channel:    step.Type,
+				Skipped:    true,
+				SkipReason: "filter",
 			}
 			return errSkipStep
 		}
@@ -111,7 +113,8 @@ func parseCondition(raw any) (filterCondition, error) {
 // validOperator 判断运算符是否受支持。
 func validOperator(op string) bool {
 	switch op {
-	case "eq", "ne", "contains", "regex", "in", "exists":
+	case "eq", "ne", "contains", "regex", "in", "exists",
+		"gt", "gte", "lt", "lte":
 		return true
 	default:
 		return false
@@ -160,6 +163,12 @@ func (f *filterStage) match(ctx *Context, cond filterCondition) bool {
 			return false
 		}
 		return inList(actual, cond.value)
+
+	case "gt", "gte", "lt", "lte":
+		if !ok {
+			return false
+		}
+		return compareValue(actual, cond.value, cond.operator)
 
 	default:
 		return false
@@ -230,6 +239,40 @@ func inList(actual, want any) bool {
 		}
 	}
 	return false
+}
+
+// compareValue 对两侧数值做大小比较，供 gt/gte/lt/lte 运算符使用。
+// 任一侧非数值时回退为字符串比较（按字典序，保证语义一致且不 panic）。
+func compareValue(actual, want any, op string) bool {
+	var cmp int
+	switch {
+	case isNumeric(actual) && isNumeric(want):
+		a, b := toFloat(actual), toFloat(want)
+		switch {
+		case a > b:
+			cmp = 1
+		case a < b:
+			cmp = -1
+		default:
+			cmp = 0
+		}
+	default:
+		a, b := stringify(actual), stringify(want)
+		cmp = strings.Compare(a, b)
+	}
+
+	switch op {
+	case "gt":
+		return cmp > 0
+	case "gte":
+		return cmp >= 0
+	case "lt":
+		return cmp < 0
+	case "lte":
+		return cmp <= 0
+	default:
+		return false
+	}
 }
 
 // isNumeric 判断值是否为数值类型。

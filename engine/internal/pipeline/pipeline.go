@@ -7,8 +7,8 @@ import (
 	"github.com/cdgjhg/xw-p/engine/internal/domain"
 )
 
-// errSkipStep 是内部哨兵错误，表示该步骤被 filter 阶段跳过。
-var errSkipStep = errors.New("pipeline: step skipped by filter")
+// errSkipStep 是内部哨兵错误，表示该步骤被 filter 阶段或条件分支跳过。
+var errSkipStep = errors.New("pipeline: step skipped by filter or condition")
 
 // Pipeline 将 filter → transform → render → dispatch 四个阶段串成一条管线，
 // 对工作流的每个投递步骤依次执行。
@@ -25,6 +25,7 @@ func New(logger *slog.Logger) *Pipeline {
 	return &Pipeline{
 		stages: []Stage{
 			NewFilterStage(),
+			NewBranchStage(),
 			NewTransformStage(),
 			NewRenderStage(),
 			NewDispatchStage(logger),
@@ -34,19 +35,39 @@ func New(logger *slog.Logger) *Pipeline {
 
 // Run 对工作流的全部投递步骤执行管线；编排步骤（delay/digest）暂不处理。
 // 返回每个步骤的结果（含被跳过与失败），结果顺序与投递步骤顺序一致。
+//
+// 失败短路（fail-fast）：某个投递步骤在管线中真实失败（非 filter/条件分支
+// 跳过）时，后续步骤不再执行，而是标记 ShortCircuited 并记录上游失败原因。
 func (p *Pipeline) Run(ctx *Context, wf domain.Workflow) []StepResult {
 	var out []StepResult
+	var shortCircuit *StepResult // 记录首个真实失败，用于短路后续步骤
 	for _, step := range wf.DeliverySteps() {
-		if err := p.runStep(ctx, step); err != nil {
-			if !errors.Is(err, errSkipStep) {
-				ctx.Results[step.ID] = StepResult{
-					StepID:   step.ID,
-					StepType: domain.StepType(step.Type),
-					Channel:  step.Type,
-					Error:    err.Error(),
-				}
+		// 上游已失败：当前步骤直接标记短路，不再进入管线。
+		if shortCircuit != nil {
+			ctx.Results[step.ID] = StepResult{
+				StepID:         step.ID,
+				StepType:       domain.StepType(step.Type),
+				Channel:        step.Type,
+				ShortCircuited: true,
+				Error:          shortCircuit.Error,
 			}
-			// errSkipStep 时结果已由 filter 阶段写入（标记 Skipped）。
+			out = append(out, ctx.Results[step.ID])
+			continue
+		}
+
+		if err := p.runStep(ctx, step); err != nil {
+			if errors.Is(err, errSkipStep) {
+				// 被 filter/分支跳过：结果已由对应阶段写入，不触发短路。
+			} else {
+				// 真实失败：记录失败结果并作为短路源。
+				res := ctx.Results[step.ID]
+				res.StepID = step.ID
+				res.StepType = domain.StepType(step.Type)
+				res.Channel = step.Type
+				res.Error = err.Error()
+				ctx.Results[step.ID] = res
+				shortCircuit = &res
+			}
 		}
 		out = append(out, ctx.Results[step.ID])
 	}
