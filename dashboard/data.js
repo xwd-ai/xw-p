@@ -1,4 +1,4 @@
-/* xw-notify 前端数据层 —— 渠道元数据、种子活动流、买家样本 */
+/* xw-notify 前端数据层 —— 渠道元数据、种子活动流、创作者样本 */
 (function () {
   'use strict';
 
@@ -14,19 +14,19 @@
 
   // 活动流种子数据（后端接线前的静态兜底）
   const seed = [
-    { ch: 'email',  t: '订单 #A10293 已发货',        d: '运单号 SF1234567890',   ts: '刚刚' },
-    { ch: 'sms',    t: '订单 #A10292 支付成功',      d: '138****2210',           ts: '1 分钟前' },
-    { ch: 'push',   t: '订单 #A10291 已签收',        d: '1,204 台设备',          ts: '3 分钟前' },
-    { ch: 'inapp',  t: '订单 #A10290 支付成功',      d: '买家 user_7712',        ts: '8 分钟前' },
-    { ch: 'digest', t: '今日订单摘要 · 12 条聚合',   d: '每日 18:00 定时',       ts: '24 分钟前' },
+    { ch: 'digest', t: '「小林」等 128 人赞了你的帖子', d: '按帖子聚合 · 10 分钟窗口', ts: '刚刚' },
+    { ch: 'inapp',  t: '「阿澈」评论了你的帖子',        d: '《我的第一支 Vlog》',      ts: '1 分钟前' },
+    { ch: 'push',   t: '「Momo」在评论里 @ 了你',        d: 'P-2026-1001 评论区',       ts: '3 分钟前' },
+    { ch: 'email',  t: '本周创作周报已送达',            d: '7 天互动摘要 · 定时汇总',   ts: '8 分钟前' },
+    { ch: 'inapp',  t: '你有 3 位新粉丝',                d: '关注聚合 · 每日汇总',      ts: '24 分钟前' },
   ];
 
-  // 买家样本
+  // 创作者样本
   const subs = [
-    { n: '陈晓', id: 'buyer_0001', ch: ['email', 'push', 'inapp'] },
-    { n: '李昂', id: 'buyer_0002', ch: ['email', 'sms'] },
-    { n: '王梓', id: 'buyer_0003', ch: ['push', 'inapp'] },
-    { n: '赵灵', id: 'buyer_0004', ch: ['email'] },
+    { n: '陈晓', id: 'creator_0001', ch: ['email', 'push', 'inapp'] },
+    { n: '李昂', id: 'creator_0002', ch: ['email', 'sms'] },
+    { n: '王梓', id: 'creator_0003', ch: ['push', 'inapp'] },
+    { n: '赵灵', id: 'creator_0004', ch: ['email'] },
   ];
 
   // API 基地址：默认同源（dashboard 由 FastAPI 静态托管或反向代理时可用）

@@ -23,23 +23,24 @@ class SubscriberTarget(BaseModel):
 class TriggerEvent(BaseModel):
     """触发请求体。
 
-    一条交易事件触发后，按 ``name`` 匹配工作流模板，渲染 ``payload`` 中的变量，
+    一条互动事件触发后，按 ``name`` 匹配工作流模板，渲染 ``payload`` 中的变量，
     并将通知分发到 ``to`` 指定的订阅者所在的多个渠道。
 
-    示例（订单支付成功，站内信 + 邮件 + 短信多渠道触达）：::
+    示例（帖子收到评论，站内信 + 推送 + 邮件多渠道触达）：::
 
         {
-            "name": "order_confirmed",
+            "name": "post_commented",
             "to": {
-                "subscriberId": "buyer-1001",
-                "email": "buyer@example.com",
+                "subscriberId": "creator-1001",
+                "email": "creator@example.com",
                 "phone": "+8613800000000",
-                "channels": ["in_app", "email", "sms"]
+                "channels": ["in_app", "push", "email"]
             },
             "payload": {
-                "order_id": "ORDER-2026-1001",
-                "customer": "张三",
-                "amount": "199.00"
+                "post_id": "P-2026-1001",
+                "post_title": "我的第一支 Vlog",
+                "actor": "小林",
+                "comment": "拍得真好，求教程！"
             }
         }
     """
@@ -47,8 +48,8 @@ class TriggerEvent(BaseModel):
     name: str = Field(
         min_length=1,
         max_length=255,
-        description="工作流/模板标识，例如 order_confirmed / order_shipped / order_delivered",
-        examples=["order_confirmed"],
+        description="工作流/模板标识，例如 post_liked / post_commented / post_mentioned",
+        examples=["post_commented"],
     )
     to: SubscriberTarget = Field(description="触发目标订阅者及其渠道")
     payload: dict[str, Any] = Field(default_factory=dict, description="渲染变量（键值对）")
@@ -58,17 +59,18 @@ class TriggerEvent(BaseModel):
         "json_schema_extra": {
             "examples": [
                 {
-                    "name": "order_confirmed",
+                    "name": "post_commented",
                     "to": {
-                        "subscriberId": "buyer-1001",
-                        "email": "buyer@example.com",
+                        "subscriberId": "creator-1001",
+                        "email": "creator@example.com",
                         "phone": "+8613800000000",
-                        "channels": ["in_app", "email", "sms"],
+                        "channels": ["in_app", "push", "email"],
                     },
                     "payload": {
-                        "order_id": "ORDER-2026-1001",
-                        "customer": "张三",
-                        "amount": "199.00",
+                        "post_id": "P-2026-1001",
+                        "post_title": "我的第一支 Vlog",
+                        "actor": "小林",
+                        "comment": "拍得真好，求教程！",
                     },
                     "overrides": {},
                 }

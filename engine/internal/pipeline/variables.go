@@ -13,7 +13,7 @@ import (
 // 管线中的模板变量分三类：
 //
 //  1. payload 变量：来自触发消息的原始负载，以 "payload." 前缀访问，
-//     支持嵌套字段与数组下标，如 payload.order_id、payload.items[0].name。
+//     支持嵌套字段与数组下标，如 payload.post_id、payload.items[0].name。
 //  2. 系统变量：以 "$" 前缀访问，由引擎在 transform 阶段注入，如 $workflow、
 //     $subscriber_id、$trigger_id、$timestamp 等。
 //  3. 内置函数：以 "{{ fn arg... }}" 形式调用，如 {{ upper payload.customer_name }}、

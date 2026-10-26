@@ -9,38 +9,38 @@ import (
 	"github.com/cdgjhg/xw-p/engine/internal/queue"
 )
 
-// emailWorkflow 构造一个仅含 email 投递步骤的订单确认工作流。
+// emailWorkflow 构造一个仅含 email 投递步骤的评论通知工作流。
 func emailWorkflow() domain.Workflow {
 	return domain.Workflow{
 		ID:      "wf_email",
-		Name:    "order_confirmed",
+		Name:    "post_commented",
 		Version: 1,
 		Active:  true,
 		Steps: []domain.Step{
 			{
 				ID:   "s1",
 				Type: domain.ChannelEmail,
-				Name: "订单确认邮件",
+				Name: "评论通知邮件",
 				Config: map[string]any{
-					"subject":  "您的订单已确认",
-					"template": "订单 {{ payload.order_id }} 已确认，金额 ¥{{ payload.amount }}",
+					"subject":  "你的帖子有新评论",
+					"template": "帖子 {{ payload.post_id }} 收到 {{ payload.actor }} 的评论",
 				},
 			},
 		},
 	}
 }
 
-// queueMessageWithEmail 构造一条带收件邮箱的订单确认队列消息。
+// queueMessageWithEmail 构造一条带收件邮箱的评论通知队列消息。
 func queueMessageWithEmail() queue.QueuedMessage {
 	return queue.QueuedMessage{
 		TriggerID:    "t1",
-		Name:         "order_confirmed",
+		Name:         "post_commented",
 		SubscriberID: "sub_1",
-		Email:        "buyer@example.com",
+		Email:        "creator@example.com",
 		Channels:     []string{"email"},
 		Payload: map[string]any{
-			"order_id": "A1001",
-			"amount":   "199.00",
+			"post_id": "P1001",
+			"actor":   "小林",
 		},
 	}
 }
@@ -64,11 +64,11 @@ func TestConsoleEmailProviderSends(t *testing.T) {
 
 	res := p.Send(Delivery{
 		Channel:      domain.ChannelEmail,
-		To:           "buyer@example.com",
-		Subject:      "订单确认",
-		Body:         "订单 A1001 已确认，金额 ¥199.00",
+		To:           "creator@example.com",
+		Subject:      "新评论通知",
+		Body:         "帖子 P1001 收到 小林 的评论",
 		StepID:       "s1",
-		WorkflowName: "order_confirmed",
+		WorkflowName: "post_commented",
 		SubscriberID: "sub_1",
 	})
 	if !res.Sent {
@@ -84,7 +84,7 @@ func TestConsoleEmailProviderFailsWithoutRecipient(t *testing.T) {
 	res := p.Send(Delivery{
 		Channel: domain.ChannelEmail,
 		To:      "  ",
-		Subject: "订单确认",
+		Subject: "新评论通知",
 		Body:    "内容",
 	})
 	if res.Sent {
@@ -135,7 +135,7 @@ func TestDispatchEmailViaProvider(t *testing.T) {
 	if !res.Sent {
 		t.Error("email 步骤应标记为已发送")
 	}
-	want := "订单 A1001 已确认，金额 ¥199.00"
+	want := "帖子 P1001 收到 小林 的评论"
 	if res.Rendered != want {
 		t.Errorf("渲染结果 = %q, 期望 %q", res.Rendered, want)
 	}
@@ -148,10 +148,10 @@ func TestDispatchEmailFailsWithoutRecipient(t *testing.T) {
 
 	ctx := NewContext(queue.QueuedMessage{
 		TriggerID:    "t1",
-		Name:         "order_confirmed",
+		Name:         "post_commented",
 		SubscriberID: "sub_1",
 		// 未提供 email，订阅者也未绑定邮箱
-		Payload: map[string]any{"order_id": "A1001", "amount": "199.00"},
+		Payload: map[string]any{"post_id": "P1001", "actor": "小林"},
 	})
 	results := p.Run(ctx, emailWorkflow())
 

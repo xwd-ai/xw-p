@@ -14,7 +14,7 @@ func discardLogger() *slog.Logger {
 
 func TestHandleDispatchesMessage(t *testing.T) {
 	w := New(nil, time.Second, discardLogger())
-	raw := []byte(`{"trigger_id":"t-1","transaction_id":"x-1","name":"order_confirmed","subscriber_id":"user_1","channels":["in_app","email"],"payload":{"order_id":"A10293"}}`)
+	raw := []byte(`{"trigger_id":"t-1","transaction_id":"x-1","name":"post_commented","subscriber_id":"creator_1","channels":["in_app","email"],"payload":{"post_id":"P10293"}}`)
 	if err := w.Handle(raw); err != nil {
 		t.Fatalf("Handle 失败: %v", err)
 	}
@@ -44,7 +44,7 @@ func (m *memConsumer) Next(ctx context.Context, timeout time.Duration) ([]byte, 
 
 func TestRunConsumesUntilContextCancelled(t *testing.T) {
 	consumer := &memConsumer{items: [][]byte{
-		[]byte(`{"trigger_id":"t-1","name":"order_confirmed","subscriber_id":"u1"}`),
+		[]byte(`{"trigger_id":"t-1","name":"post_commented","subscriber_id":"u1"}`),
 	}}
 	w := New(consumer, time.Millisecond, discardLogger())
 

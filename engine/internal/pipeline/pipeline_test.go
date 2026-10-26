@@ -7,28 +7,28 @@ import (
 	"github.com/cdgjhg/xw-p/engine/internal/queue"
 )
 
-func orderWorkflow() domain.Workflow {
+func interactionWorkflow() domain.Workflow {
 	return domain.Workflow{
-		ID:      "wf_order",
-		Name:    "order_confirmed",
+		ID:      "wf_post_commented",
+		Name:    "post_commented",
 		Version: 1,
 		Active:  true,
 		Steps: []domain.Step{
 			{
 				ID:   "s1",
 				Type: domain.ChannelEmail,
-				Name: "订单确认邮件",
+				Name: "评论通知邮件",
 				Config: map[string]any{
-					"template": "订单 {{ payload.order_id }} 已确认，金额 ¥{{ payload.amount }}",
+					"template": "帖子 {{ payload.post_id }} 收到新评论",
 				},
 			},
 			{
 				ID:   "s2",
 				Type: domain.ChannelSMS,
-				Name: "订单确认短信",
+				Name: "评论通知短信",
 				Config: map[string]any{
-					"template": "您的订单 {{ payload.order_id }} 已确认",
-					"filters":  []any{"order_id"},
+					"template": "你的帖子 {{ payload.post_id }} 有新评论",
+					"filters":  []any{"post_id"},
 				},
 			},
 			{
@@ -44,15 +44,15 @@ func TestPipelineRendersAndDispatches(t *testing.T) {
 	p := newMockPipeline()
 	ctx := NewContext(queue.QueuedMessage{
 		TriggerID:    "t1",
-		Name:         "order_confirmed",
+		Name:         "post_commented",
 		SubscriberID: "sub_1",
 		Payload: map[string]any{
-			"order_id": "A1001",
-			"amount":   "199.00",
+			"post_id": "P1001",
+			"actor":   "小林",
 		},
 	})
 
-	results := p.Run(ctx, orderWorkflow())
+	results := p.Run(ctx, interactionWorkflow())
 
 	// 编排步骤 delay 应被跳过，仅 2 个投递步骤
 	if len(results) != 2 {
@@ -64,7 +64,7 @@ func TestPipelineRendersAndDispatches(t *testing.T) {
 	if email.Error != "" {
 		t.Errorf("email 步骤出错: %s", email.Error)
 	}
-	wantRendered := "订单 A1001 已确认，金额 ¥199.00"
+	wantRendered := "帖子 P1001 收到新评论"
 	if email.Rendered != wantRendered {
 		t.Errorf("email 渲染 = %q, 期望 %q", email.Rendered, wantRendered)
 	}
@@ -74,7 +74,7 @@ func TestPipelineRendersAndDispatches(t *testing.T) {
 	if sms.Skipped {
 		t.Errorf("sms 步骤不应被跳过")
 	}
-	if sms.Rendered != "您的订单 A1001 已确认" {
+	if sms.Rendered != "你的帖子 P1001 有新评论" {
 		t.Errorf("sms 渲染 = %q", sms.Rendered)
 	}
 }
@@ -83,18 +83,18 @@ func TestPipelineFilterSkipsWhenMissing(t *testing.T) {
 	p := newMockPipeline()
 	ctx := NewContext(queue.QueuedMessage{
 		TriggerID:    "t2",
-		Name:         "order_confirmed",
+		Name:         "post_commented",
 		SubscriberID: "sub_1",
-		Payload:      map[string]any{}, // 缺 order_id
+		Payload:      map[string]any{}, // 缺 post_id
 	})
 
-	results := p.Run(ctx, orderWorkflow())
+	results := p.Run(ctx, interactionWorkflow())
 
 	// email 步骤无 filters，仍执行
 	if results[0].Skipped {
 		t.Errorf("email 步骤不应被跳过")
 	}
-	// sms 步骤因缺少 order_id 被跳过
+	// sms 步骤因缺少 post_id 被跳过
 	if !results[1].Skipped {
 		t.Errorf("sms 步骤应被过滤跳过")
 	}
@@ -103,17 +103,17 @@ func TestPipelineFilterSkipsWhenMissing(t *testing.T) {
 func TestContextLoadPayload(t *testing.T) {
 	ctx := NewContext(queue.QueuedMessage{
 		Payload: map[string]any{
-			"order_id": "A2001",
-			"amount":   42,
+			"post_id": "P2001",
+			"count":   42,
 		},
 	})
 	ctx.LoadPayload()
 
-	if v, ok := ctx.Get("payload.order_id"); !ok || v != "A2001" {
-		t.Errorf("payload.order_id = %v, %v", v, ok)
+	if v, ok := ctx.Get("payload.post_id"); !ok || v != "P2001" {
+		t.Errorf("payload.post_id = %v, %v", v, ok)
 	}
-	if v, ok := ctx.Get("payload.amount"); !ok || v != 42 {
-		t.Errorf("payload.amount = %v, %v", v, ok)
+	if v, ok := ctx.Get("payload.count"); !ok || v != 42 {
+		t.Errorf("payload.count = %v, %v", v, ok)
 	}
 	if _, ok := ctx.Get("payload.missing"); ok {
 		t.Errorf("payload.missing 不应存在")

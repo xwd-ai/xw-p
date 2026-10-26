@@ -21,7 +21,7 @@ type Delivery struct {
 	Body string
 	// StepID 是触发该投递的步骤 ID。
 	StepID string
-	// WorkflowName 是触发工作流名（如 order_confirmed）。
+	// WorkflowName 是触发工作流名（如 post_commented）。
 	WorkflowName string
 	// SubscriberID 是订阅者 ID。
 	SubscriberID string

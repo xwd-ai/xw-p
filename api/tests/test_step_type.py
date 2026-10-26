@@ -76,4 +76,4 @@ def test_parse_known_and_unknown():
     assert StepType.parse("email") is StepType.EMAIL
     assert StepType.parse("digest") is StepType.DIGEST
     with pytest.raises(ValueError):
-        StepType.parse("welcome")  # 电商场景下不存在的通用类型
+        StepType.parse("not_a_step")  # 不在枚举内的类型

@@ -40,7 +40,7 @@ def client(monkeypatch):
     return TestClient(app)
 
 
-def _trigger_body(name="order_confirmed", subscriber="user_1", **extra):
+def _trigger_body(name="post_commented", subscriber="creator_1", **extra):
     body = {"name": name, "to": {"subscriberId": subscriber}, "payload": {"user": "Alice"}}
     body.update(extra)
     return body
@@ -130,7 +130,7 @@ def test_trigger_environment_mismatch_returns_404(client):
     """development 预置工作流在 production 环境不可触发。"""
     resp = client.post(
         "/v1/events/trigger",
-        json=_trigger_body(name="order_confirmed"),
+        json=_trigger_body(name="post_commented"),
         headers={"X-Environment": "production"},
     )
     assert resp.status_code == 404
@@ -141,20 +141,20 @@ def test_trigger_environment_matched_workflow_returns_200(client, monkeypatch):
     from app.models.entities import Environment, Step, Workflow
 
     workflow = Workflow(
-        id="wf-prod-confirmed",
-        name="order_confirmed",
-        description="production 订单确认",
+        id="wf-prod-commented",
+        name="post_commented",
+        description="production 评论通知",
         steps=[Step(id="s1", type="in_app", name="站内信", config={})],
         environment=Environment.PRODUCTION,
         active=True,
     )
     import app.workflow as wf_mod
 
-    monkeypatch.setitem(wf_mod.get_registry()._by_name, "order_confirmed", workflow)
+    monkeypatch.setitem(wf_mod.get_registry()._by_name, "post_commented", workflow)
 
     resp = client.post(
         "/v1/events/trigger",
-        json=_trigger_body(name="order_confirmed"),
+        json=_trigger_body(name="post_commented"),
         headers={"X-Environment": "production"},
     )
     assert resp.status_code == 200

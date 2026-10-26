@@ -16,7 +16,7 @@ func TestSafePathRejectsDangerousSegments(t *testing.T) {
 		"__class__",
 		"payload.__dict__",
 		"customer..name",   // 空段
-		".order_id",        // 前导点产生空段
+		".post_id",         // 前导点产生空段
 		"customer.__name",  // __ 前缀段
 		"items[0].__proto", // 数组下标后接内部字段
 	}
@@ -30,7 +30,7 @@ func TestSafePathRejectsDangerousSegments(t *testing.T) {
 
 func TestSafePathAllowsNormalSegments(t *testing.T) {
 	root := map[string]any{
-		"order_id": "A1001",
+		"post_id": "P1001",
 		"customer": map[string]any{
 			"name": "张三",
 		},
@@ -38,7 +38,7 @@ func TestSafePathAllowsNormalSegments(t *testing.T) {
 	if v, ok := safeLookupPath(root, "customer.name"); !ok || v != "张三" {
 		t.Errorf("正常嵌套路径解析失败: %v, %v", v, ok)
 	}
-	if v, ok := safeLookupPath(root, "order_id"); !ok || v != "A1001" {
+	if v, ok := safeLookupPath(root, "post_id"); !ok || v != "P1001" {
 		t.Errorf("顶层路径解析失败: %v, %v", v, ok)
 	}
 }
@@ -64,22 +64,22 @@ func TestRenderRejectsDangerousPathInTemplate(t *testing.T) {
 	p := newMockPipeline()
 	ctx := NewContext(queue.QueuedMessage{
 		TriggerID:    "t3",
-		Name:         "order_confirmed",
+		Name:         "post_commented",
 		SubscriberID: "sub_1",
 		Payload: map[string]any{
-			"order_id": "A1001",
+			"post_id": "P1001",
 		},
 	})
 
 	wf := domain.Workflow{
 		ID:   "wf",
-		Name: "order_confirmed",
+		Name: "post_commented",
 		Steps: []domain.Step{
 			{
 				ID:   "s1",
 				Type: domain.ChannelEmail,
 				Config: map[string]any{
-					"template": "订单 {{ payload.__dict__ }} 已确认",
+					"template": "帖子 {{ payload.__dict__ }} 有新评论",
 				},
 			},
 		},
@@ -111,36 +111,36 @@ func TestRenderDepthLimit(t *testing.T) {
 	}
 }
 
-func TestRenderNormalEcommerceStillWorks(t *testing.T) {
+func TestRenderNormalInteractionStillWorks(t *testing.T) {
 	p := newMockPipeline()
 	ctx := NewContext(queue.QueuedMessage{
 		TriggerID:    "t4",
-		Name:         "order_delivered",
+		Name:         "post_mentioned",
 		SubscriberID: "sub_1",
 		Payload: map[string]any{
-			"order_id":    "A2001",
-			"courier":     "顺丰",
-			"tracking_no": "SF1234567890",
+			"post_id":       "P2001",
+			"actor":         "小林",
+			"comment_count": 5,
 		},
 	})
 
 	wf := domain.Workflow{
 		ID:   "wf",
-		Name: "order_delivered",
+		Name: "post_mentioned",
 		Steps: []domain.Step{
 			{
 				ID:   "s1",
 				Type: domain.ChannelEmail,
 				Config: map[string]any{
-					"template": "您的订单 {{ payload.order_id }} 已由 {{ payload.courier }} 送达，运单号 {{ payload.tracking_no }}",
+					"template": "你的帖子 {{ payload.post_id }} 被 {{ payload.actor }} 评论了 {{ payload.comment_count }} 次",
 				},
 			},
 		},
 	}
 
 	results := p.Run(ctx, wf)
-	want := "您的订单 A2001 已由 顺丰 送达，运单号 SF1234567890"
+	want := "你的帖子 P2001 被 小林 评论了 5 次"
 	if results[0].Rendered != want {
-		t.Errorf("电商场景渲染 = %q, 期望 %q", results[0].Rendered, want)
+		t.Errorf("互动场景渲染 = %q, 期望 %q", results[0].Rendered, want)
 	}
 }

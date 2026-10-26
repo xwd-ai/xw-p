@@ -7,14 +7,14 @@ import (
 	"github.com/cdgjhg/xw-p/engine/internal/queue"
 )
 
-// branchWorkflow 构造带条件分支的电商订单工作流：
+// branchWorkflow 构造带条件分支的内容社区互动工作流：
 //   - s1 email：无条件，恒执行。
-//   - s2 sms：仅当 amount >= 100 时执行。
-//   - s3 push：仅当 order_id 存在且非空时执行。
+//   - s2 sms：仅当点赞数 likes >= 100 时执行（只有热门帖子才走短信）。
+//   - s3 push：仅当 actor 存在且非空时执行。
 func branchWorkflow() domain.Workflow {
 	return domain.Workflow{
 		ID:      "wf_branch",
-		Name:    "order_confirmed",
+		Name:    "post_liked",
 		Version: 1,
 		Active:  true,
 		Steps: []domain.Step{
@@ -22,16 +22,16 @@ func branchWorkflow() domain.Workflow {
 				ID:   "s1",
 				Type: domain.ChannelEmail,
 				Config: map[string]any{
-					"template": "订单 {{ payload.order_id }} 已确认",
+					"template": "帖子 {{ payload.post_id }} 收到新点赞",
 				},
 			},
 			{
 				ID:   "s2",
 				Type: domain.ChannelSMS,
 				Config: map[string]any{
-					"template": "高价值订单提醒",
+					"template": "热门帖子提醒",
 					"if": map[string]any{
-						"field":    "payload.amount",
+						"field":    "payload.likes",
 						"operator": "gte",
 						"value":    float64(100),
 					},
@@ -41,8 +41,8 @@ func branchWorkflow() domain.Workflow {
 				ID:   "s3",
 				Type: domain.ChannelPush,
 				Config: map[string]any{
-					"template": "物流推送",
-					"if":      []any{"payload.tracking_no"},
+					"template": "互动推送",
+					"if":      []any{"payload.actor"},
 				},
 			},
 		},
@@ -53,11 +53,11 @@ func TestConditionalBranchSkipsWhenFalse(t *testing.T) {
 	p := newMockPipeline()
 	ctx := NewContext(queue.QueuedMessage{
 		TriggerID:    "t1",
-		Name:         "order_confirmed",
+		Name:         "post_liked",
 		SubscriberID: "sub_1",
 		Payload: map[string]any{
-			"order_id": "A1001",
-			"amount":   float64(199), // 无 tracking_no，s3 应跳过
+			"post_id": "P1001",
+			"likes":   float64(199), // 无 actor，s3 应跳过
 		},
 	})
 
@@ -70,11 +70,11 @@ func TestConditionalBranchSkipsWhenFalse(t *testing.T) {
 	if results[0].Skipped {
 		t.Errorf("s1 不应被跳过")
 	}
-	// s2 amount=199 满足 gte 100，应执行
+	// s2 likes=199 满足 gte 100，应执行
 	if results[1].Skipped {
 		t.Errorf("s2 满足分支条件，不应被跳过")
 	}
-	// s3 缺 tracking_no，应被条件分支跳过
+	// s3 缺 actor，应被条件分支跳过
 	if !results[2].Skipped {
 		t.Errorf("s3 应被分支跳过")
 	}
@@ -92,8 +92,8 @@ func TestConditionalBranchArrayAllMustMatch(t *testing.T) {
 			Type: domain.ChannelEmail,
 			Config: map[string]any{
 				"if": []any{
-					map[string]any{"field": "payload.status", "operator": "eq", "value": "paid"},
-					map[string]any{"field": "payload.amount", "operator": "gte", "value": 100},
+					map[string]any{"field": "payload.status", "operator": "eq", "value": "published"},
+					map[string]any{"field": "payload.likes", "operator": "gte", "value": 100},
 				},
 			},
 		},
@@ -102,10 +102,10 @@ func TestConditionalBranchArrayAllMustMatch(t *testing.T) {
 	p := newMockPipeline()
 	// 仅满足一个条件：应跳过
 	ctx := NewContext(queue.QueuedMessage{
-		Name: "order_paid",
+		Name: "post_published",
 		Payload: map[string]any{
-			"status": "paid",
-			"amount": float64(50),
+			"status": "published",
+			"likes":  float64(50),
 		},
 	})
 	res := p.Run(ctx, wf)
@@ -115,10 +115,10 @@ func TestConditionalBranchArrayAllMustMatch(t *testing.T) {
 
 	// 两个条件均满足：应执行
 	ctx2 := NewContext(queue.QueuedMessage{
-		Name: "order_paid",
+		Name: "post_published",
 		Payload: map[string]any{
-			"status": "paid",
-			"amount": float64(150),
+			"status": "published",
+			"likes":  float64(150),
 		},
 	})
 	res2 := p.Run(ctx2, wf)
@@ -136,7 +136,7 @@ func TestFailureShortCircuitStopsSubsequentSteps(t *testing.T) {
 
 	wf := domain.Workflow{
 		ID:   "wf_short",
-		Name: "order_confirmed",
+		Name: "post_commented",
 		Steps: []domain.Step{
 			{
 				ID:     "s1",
@@ -157,7 +157,7 @@ func TestFailureShortCircuitStopsSubsequentSteps(t *testing.T) {
 	}
 
 	p := newMockPipeline()
-	ctx := NewContext(queue.QueuedMessage{Name: "order_confirmed"})
+	ctx := NewContext(queue.QueuedMessage{Name: "post_commented"})
 	results := p.Run(ctx, wf)
 
 	if len(results) != 3 {

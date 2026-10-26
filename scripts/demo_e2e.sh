@@ -10,7 +10,7 @@
 #   ./scripts/demo_e2e.sh
 #
 # 说明：脚本会依次启动 Redis（若未运行）、Python API（redis 模式）、
-#       触发一条订单通知，再启动 Go engine 消费队列并打印 mock 发送日志。
+#       触发一条互动通知，再启动 Go engine 消费队列并打印 mock 发送日志。
 
 set -euo pipefail
 
@@ -66,11 +66,11 @@ log "编译 Go engine（go build）..."
 ENGINE_BIN="$ROOT/engine/bin/xw-engine"
 log "engine 编译完成：$ENGINE_BIN"
 
-# 4. 触发一条订单通知（写入 Redis 队列）
-log "触发订单通知（order_confirmed -> user_1）..."
+# 4. 触发一条互动通知（写入 Redis 队列）
+log "触发互动通知（post_commented -> creator_1）..."
 TRIGGER_RESP="$(curl -s -X POST "http://127.0.0.1:${API_PORT}/v1/events/trigger" \
   -H 'Content-Type: application/json' \
-  -d '{"name":"order_confirmed","to":{"subscriberId":"user_1","email":"hi@example.com","channels":["in_app","email"]},"payload":{"customer":"Alice","order_id":"A10293","amount":"199.00"}}')"
+  -d '{"name":"post_commented","to":{"subscriberId":"creator_1","email":"hi@example.com","channels":["in_app","push","email"]},"payload":{"post_id":"P-2026-1001","post_title":"我的第一支 Vlog","actor":"小林","comment":"拍得真好，求教程！"}}')"
 log "触发回执：$TRIGGER_RESP"
 
 # 5. 启动 Go engine 消费队列（打印 mock 发送日志后 5 秒退出）

@@ -45,7 +45,7 @@ app = FastAPI(
     title="xw-notify API",
     version="0.1.0",
     description=(
-        "电商交易触达触发 API：订单/支付/发货/物流等交易事件，触发后分发到买家"
+        "内容社区互动触达触发 API：点赞/评论/@提及等互动事件，触发后分发到创作者"
         "所在的多个渠道（站内信 / 邮件 / 短信 / 推送）。"
     ),
     lifespan=lifespan,
@@ -79,9 +79,9 @@ def health() -> dict:
     response_model=TriggerResponse,
     tags=["trigger"],
     status_code=status.HTTP_200_OK,
-    summary="触发一条交易事件通知",
+    summary="触发一条互动事件通知",
     description=(
-        "触发一条电商交易事件（订单/支付/发货/物流），按 ``name`` 匹配工作流模板，"
+        "触发一条内容社区互动事件（点赞 / 评论 / @提及），按 ``name`` 匹配工作流模板，"
         "将通知分发到订阅者所在的多个渠道（站内信 / 邮件 / 短信 / 推送）。\n\n"
         "处理链路：鉴权（环境 + API Key）→ 模板查找 → 幂等去重 → 入队 → 返回回执。\n\n"
         "**环境隔离**：通过 ``X-Environment`` 指定隔离环境（默认 ``development``），"
@@ -103,7 +103,7 @@ def trigger_event(
         default=None,
         alias="Idempotency-Key",
         description="幂等键：相同键重复请求返回首次回执",
-        examples=["order-confirmed-ORDER-2026-1001"],
+        examples=["post-commented-P-2026-1001"],
     ),
 ) -> TriggerResponse:
     """触发一条通知：鉴权（环境 + API Key）→ 模板查找 → 幂等去重 → 入队 → 返回回执。
@@ -116,7 +116,7 @@ def trigger_event(
     不会重复入队；未携带则该键的请求每次都会生成新回执。
     """
     # 1. 模板查找：触发标识必须对应一个已启用的工作流。
-    #    优先查内存注册表（预置电商订单工作流），未命中回退到工作流存储，
+    #    优先查内存注册表（预置内容社区工作流），未命中回退到工作流存储，
     #    使经 CRUD 新建的工作流也能被触发；并做环境匹配，实现环境间隔离。
     workflow = get_registry().get(event.name)
     if workflow is None or _env_mismatch(workflow.environment, env.environment):

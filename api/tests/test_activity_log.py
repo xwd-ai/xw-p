@@ -11,11 +11,11 @@ def test_jsonl_activity_store_roundtrip(tmp_path):
     store = JSONLActivityStore(path=path)
     rec = {
         "trigger_id": "t1",
-        "workflow": "order_shipped",
+        "workflow": "post_commented",
         "subscriber_id": "u1",
         "channels": ["email", "sms"],
         "status": "triggered",
-        "title": "订单已发货",
+        "title": "收到新评论",
         "created_at": "2026-10-22T12:00:00+00:00",
     }
     store.append(rec)
@@ -24,7 +24,7 @@ def test_jsonl_activity_store_roundtrip(tmp_path):
     records = store.read_all()
     assert len(records) == 2
     assert records[0]["trigger_id"] == "t1"
-    assert records[0]["workflow"] == "order_shipped"
+    assert records[0]["workflow"] == "post_commented"
     assert records[0]["channels"] == ["email", "sms"]
 
 
@@ -49,17 +49,17 @@ def test_record_activity_writes_and_returns_record(monkeypatch, tmp_path):
 
     out = record_activity(
         trigger_id="t9",
-        workflow="order_delivered",
+        workflow="post_mentioned",
         subscriber_id="u9",
         channels=["push"],
-        payload={"title": "订单已送达", "order_id": "A-1001"},
+        payload={"title": "被 @ 提及", "post_id": "A-1001"},
     )
 
     assert out["trigger_id"] == "t9"
-    assert out["workflow"] == "order_delivered"
+    assert out["workflow"] == "post_mentioned"
     assert out["status"] == "triggered"
     # payload.title 优先作为展示标题
-    assert out["title"] == "订单已送达"
+    assert out["title"] == "被 @ 提及"
     assert out["created_at"]
     assert captured["trigger_id"] == "t9"
 
@@ -77,9 +77,9 @@ def test_record_activity_title_falls_back_to_workflow(monkeypatch):
     monkeypatch.setattr(mod, "_activity_store", _Store())
 
     out = record_activity(
-        trigger_id="t10", workflow="order_confirmed", subscriber_id="u10"
+        trigger_id="t10", workflow="post_commented", subscriber_id="u10"
     )
-    assert out["title"] == "order_confirmed"
+    assert out["title"] == "post_commented"
     # 未声明渠道时回退 in_app
     assert out["channels"] == ["in_app"]
 

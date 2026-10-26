@@ -12,12 +12,12 @@ import (
 //
 // 支持两种过滤条件写法（向后兼容）：
 //
-//  1. 字符串字段名（如 "order_id"）：等价于 exists 存在性判断——
+//  1. 字符串字段名（如 "post_id"）：等价于 exists 存在性判断——
 //     字段存在且非空则放行，否则跳过（Phase 2 的旧行为）。
 //
 //  2. 条件对象：map[string]any，形如：
 //
-//     { "field": "payload.order_id", "operator": "eq", "value": "A1001" }
+//     { "field": "payload.post_id", "operator": "eq", "value": "P1001" }
 //
 //     operator 支持：
 //     - "eq"：等于（数值做数值比较，其余转字符串比较）

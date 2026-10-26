@@ -96,7 +96,7 @@ func TestParseStepType(t *testing.T) {
 	if st, ok := ParseStepType("email"); !ok || st != StepTypeEmail {
 		t.Errorf("ParseStepType(email) = %q, %v", st, ok)
 	}
-	if _, ok := ParseStepType("welcome"); ok {
-		t.Errorf("ParseStepType(welcome) 应失败（电商场景下无此类型）")
+	if _, ok := ParseStepType("not_a_step"); ok {
+		t.Errorf("ParseStepType(not_a_step) 应失败（不在枚举内）")
 	}
 }

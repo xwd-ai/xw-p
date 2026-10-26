@@ -10,7 +10,7 @@ from app.activity_routes import _filter_and_sort, _to_activity
 from app.main import app
 
 
-def _record(workflow="welcome", subscriber="u1", channels=None, status="sent",
+def _record(workflow="post_commented", subscriber="u1", channels=None, status="sent",
             days_ago=0, payload=None, trigger_id="t"):
     dt = (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
     return {
@@ -26,15 +26,15 @@ def _record(workflow="welcome", subscriber="u1", channels=None, status="sent",
 
 
 def test_to_activity_normalizes_channels_and_title():
-    a = _to_activity(_record(channels="email", payload={"title": "订单已发货"}))
+    a = _to_activity(_record(channels="email", payload={"title": "收到新评论"}))
     assert a["channels"] == ["email"]
-    assert a["title"] == "订单已发货"
-    assert a["workflow"] == "welcome"
+    assert a["title"] == "收到新评论"
+    assert a["workflow"] == "post_commented"
 
 
 def test_to_activity_title_falls_back_to_workflow():
     a = _to_activity(_record())
-    assert a["title"] == "welcome"
+    assert a["title"] == "post_commented"
 
 
 def test_filter_and_sort_newest_first():
@@ -49,13 +49,13 @@ def test_filter_and_sort_newest_first():
 
 def test_filter_by_subscriber_and_workflow():
     records = [
-        _record(subscriber="u1", workflow="welcome"),
-        _record(subscriber="u2", workflow="welcome"),
-        _record(subscriber="u1", workflow="reset"),
+        _record(subscriber="u1", workflow="post_commented"),
+        _record(subscriber="u2", workflow="post_commented"),
+        _record(subscriber="u1", workflow="new_follower"),
     ]
     assert len(_filter_and_sort(records, "u1", None, 10)) == 2
-    assert len(_filter_and_sort(records, "u1", "reset", 10)) == 1
-    assert len(_filter_and_sort(records, None, "welcome", 10)) == 2
+    assert len(_filter_and_sort(records, "u1", "new_follower", 10)) == 1
+    assert len(_filter_and_sort(records, None, "post_commented", 10)) == 2
 
 
 def test_filter_limit_applied():
@@ -101,11 +101,11 @@ def client(monkeypatch):
     class _FakeActivityStore:
         def __init__(self):
             self.records = [
-                _record(trigger_id="a", workflow="welcome", subscriber="u1",
+                _record(trigger_id="a", workflow="post_commented", subscriber="u1",
                         channels=["email"], days_ago=0),
-                _record(trigger_id="b", workflow="reset", subscriber="u2",
+                _record(trigger_id="b", workflow="new_follower", subscriber="u2",
                         channels=["sms"], days_ago=1),
-                _record(trigger_id="c", workflow="welcome", subscriber="u1",
+                _record(trigger_id="c", workflow="post_commented", subscriber="u1",
                         channels=["push"], days_ago=2),
             ]
 
@@ -128,11 +128,11 @@ def test_activity_endpoint_default(client):
 
 
 def test_activity_endpoint_filter(client):
-    resp = client.get("/v1/activity", params={"subscriberId": "u1", "workflow": "welcome"})
+    resp = client.get("/v1/activity", params={"subscriberId": "u1", "workflow": "post_commented"})
     data = resp.json()
     assert data["total"] == 2
     assert all(i["subscriber_id"] == "u1" for i in data["items"])
-    assert all(i["workflow"] == "welcome" for i in data["items"])
+    assert all(i["workflow"] == "post_commented" for i in data["items"])
 
 
 def test_activity_endpoint_limit_bounds(client):

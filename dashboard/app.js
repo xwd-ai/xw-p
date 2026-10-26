@@ -12,7 +12,7 @@
   document.querySelectorAll('.nav li').forEach(li => li.addEventListener('click', () => sidebar.classList.remove('open')));
 
   /* ============ 视图切换 ============ */
-  const views = { dashboard: '仪表盘', workflows: '工作流编排', activity: '活动流', inbox: '收件箱', subscribers: '买家', settings: '设置' };
+  const views = { dashboard: '仪表盘', workflows: '工作流编排', activity: '活动流', inbox: '收件箱', subscribers: '创作者', settings: '设置' };
   document.querySelectorAll('.nav li').forEach(li => {
     li.addEventListener('click', () => {
       document.querySelectorAll('.nav li').forEach(x => x.classList.remove('active'));
@@ -102,7 +102,7 @@
     const ch = normCh((item.channels && item.channels[0]) || 'inapp');
     const c = CH[ch] || CH.inapp;
     const detail = item.subscriber_id
-      ? '订阅者 ' + item.subscriber_id + ' · ' + (CH[ch] ? CH[ch].label : ch)
+      ? '创作者 ' + item.subscriber_id + ' · ' + (CH[ch] ? CH[ch].label : ch)
       : (CH[ch] ? CH[ch].label : ch);
     return activityRow({ ch, t: item.title, d: detail, ts: fmtTs(item.created_at) });
   }
@@ -126,7 +126,7 @@
   function renderActivity(items) {
     if (!items || !items.length) {
       // 空态：后端返回空数组时，展示明确空态而非保留种子
-      const html = emptyState('≣', '暂无活动记录', '触发一条订单事件后，分发轨迹会显示在这里');
+      const html = emptyState('≣', '暂无活动记录', '触发一条互动事件后，分发轨迹会显示在这里');
       document.getElementById('dash-activity').innerHTML = html;
       document.getElementById('activity-list').innerHTML = html;
       return;
@@ -144,8 +144,8 @@
   }
 
   /* ============ 收件箱（In-app 通知中心） ============ */
-  // 默认订阅者（demo 触发使用 user_demo，收件箱默认读同一订阅者）
-  const INBOX_SUBSCRIBER = 'user_demo';
+  // 默认创作者（demo 触发使用 creator_demo，收件箱默认读同一订阅者）
+  const INBOX_SUBSCRIBER = 'creator_demo';
   let inboxItems = [];
   let inboxFilter = 'all';
 
@@ -169,7 +169,7 @@
     if (!list.length) {
       box.innerHTML = emptyState('✉',
         inboxItems.length ? '没有未读消息' : '暂无站内通知',
-        inboxItems.length ? '所有消息均已读' : '触发一条订单事件后，站内通知会出现在这里');
+        inboxItems.length ? '所有消息均已读' : '触发一条互动事件后，站内通知会出现在这里');
       return;
     }
     box.innerHTML = list.map(i => `
@@ -314,13 +314,13 @@
     btn.disabled = disabled;
   }
 
-  // 按钮点击：模拟「订单支付成功」场景，向订单确认工作流派发一条真实触发
+  // 按钮点击：模拟「帖子被点赞」场景，向点赞工作流派发一条真实触发
   document.getElementById('trigger-btn').addEventListener('click', () => {
     if (busy) return;
     busy = true;
     const orig = document.getElementById('trigger-btn').textContent;
     setTriggerState('⏳ 触发中…', true);
-    triggerEvent('order_confirmed', { subscriberId: 'user_demo' }, { customer: '演示买家', order_id: 'A10293', amount: '199.00', title: '订单支付成功 · 多渠道触达' })
+    triggerEvent('post_liked', { subscriberId: 'creator_demo', channels: ['in_app', 'push'] }, { actor: '小林', count: 128, post_id: 'P-2026-1001', post_title: '我的第一支 Vlog', title: '点赞聚合 · 站内信 + 推送' })
       .then(() => {
         // 触发成功：重新拉取活动流与统计，展示真实落库结果
         return Promise.all([loadActivity(), loadDashboardStats(), loadInbox()]);
@@ -344,7 +344,7 @@
       return;
     }
     window.xwEditor.run(() => {
-      triggerEvent(wf.name, { subscriberId: 'user_demo' }, { customer: '演示买家', order_id: 'A10293', amount: '199.00', title: '工作流「' + wf.name + '」测试触发' })
+      triggerEvent(wf.name, { subscriberId: 'creator_demo' }, { actor: '小林', count: 128, post_id: 'P-2026-1001', post_title: '我的第一支 Vlog', title: '工作流「' + wf.name + '」测试触发' })
         .then(() => Promise.all([loadActivity(), loadDashboardStats(), loadInbox()]))
         .catch(err => {
           console.warn('工作流运行触发失败（后端未就绪？）', err);
@@ -361,7 +361,7 @@
   function renderWfList() {
     const box = document.getElementById('wf-list');
     if (!wfList.length) {
-      box.innerHTML = emptyState('⇄', '暂无工作流', '点击「新建」创建一条订单触达工作流');
+      box.innerHTML = emptyState('⇄', '暂无工作流', '点击「新建」创建一条互动触达工作流');
       return;
     }
     box.innerHTML = wfList.map(w => `
@@ -428,7 +428,7 @@
 
   // 新建工作流
   function newWorkflow() {
-    const name = prompt('请输入新工作流名称（触发标识，如 order_confirmed）：');
+    const name = prompt('请输入新工作流名称（触发标识，如 post_commented）：');
     if (!name) return;
     apiTrack('/v1/workflows', { method: 'POST', body: { name, description: '从画布创建', steps: [] } })
       .then(created => {

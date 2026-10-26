@@ -13,7 +13,7 @@ import (
 
 func TestLookupPathNested(t *testing.T) {
 	root := map[string]any{
-		"order_id": "A1001",
+		"post_id": "P1001",
 		"customer": map[string]any{
 			"name": "张三",
 			"address": map[string]any{
@@ -31,7 +31,7 @@ func TestLookupPathNested(t *testing.T) {
 		want any
 		ok   bool
 	}{
-		{"order_id", "A1001", true},
+		{"post_id", "P1001", true},
 		{"customer.name", "张三", true},
 		{"customer.address.city", "上海", true},
 		{"items[0].name", "手机", true},
@@ -59,9 +59,9 @@ func TestSystemVariablesPopulated(t *testing.T) {
 	ctx := NewContext(queue.QueuedMessage{
 		TriggerID:     "t9",
 		TransactionID: "tx9",
-		Name:          "order_shipped",
+		Name:          "post_liked",
 		SubscriberID:  "sub_9",
-		Email:         "buyer@example.com",
+		Email:         "creator@example.com",
 		Phone:         "13800000000",
 	})
 
@@ -69,14 +69,14 @@ func TestSystemVariablesPopulated(t *testing.T) {
 	ts.Apply(ctx, domain.Step{ID: "s1", Type: domain.ChannelEmail, Name: "发货通知"})
 
 	sysChecks := map[string]string{
-		"$workflow":       "order_shipped",
+		"$workflow":       "post_liked",
 		"$subscriber_id":  "sub_9",
 		"$trigger_id":     "t9",
 		"$transaction_id": "tx9",
 		"$step_id":        "s1",
 		"$step_name":      "发货通知",
 		"$channel":        "email",
-		"$email":          "buyer@example.com",
+		"$email":          "creator@example.com",
 		"$phone":          "13800000000",
 	}
 
@@ -133,10 +133,10 @@ func TestRenderWithFunctionsAndNestedVars(t *testing.T) {
 	p := newMockPipeline()
 	ctx := NewContext(queue.QueuedMessage{
 		TriggerID:    "t1",
-		Name:         "order_confirmed",
+		Name:         "post_commented",
 		SubscriberID: "sub_1",
 		Payload: map[string]any{
-			"order_id": "A1001",
+			"post_id": "P1001",
 			"amount":   "199.00",
 			"customer": map[string]any{
 				"name": "张三",
@@ -149,16 +149,16 @@ func TestRenderWithFunctionsAndNestedVars(t *testing.T) {
 
 	wf := domain.Workflow{
 		ID:      "wf_order",
-		Name:    "order_confirmed",
+		Name:    "post_commented",
 		Version: 1,
 		Active:  true,
 		Steps: []domain.Step{
 			{
 				ID:   "s1",
 				Type: domain.ChannelEmail,
-				Name: "订单确认邮件",
+				Name: "评论通知邮件",
 				Config: map[string]any{
-					"template": "您好 {{ upper payload.customer.name }}，订单 {{ payload.order_id }} 金额 ¥{{ format_amount payload.amount }}，首件商品 {{ payload.items[0].name }}",
+					"template": "您好 {{ upper payload.customer.name }}，帖子 {{ payload.post_id }}（{{ payload.items[0].name }}）收到 ¥{{ format_amount payload.amount }} 打赏",
 				},
 			},
 		},
@@ -170,7 +170,7 @@ func TestRenderWithFunctionsAndNestedVars(t *testing.T) {
 	}
 
 	got := results[0].Rendered
-	want := "您好 张三，订单 A1001 金额 ¥199.00，首件商品 手机"
+	want := "您好 张三，帖子 P1001（手机）收到 ¥199.00 打赏"
 	if got != want {
 		t.Errorf("渲染结果 = %q, 期望 %q", got, want)
 	}
@@ -180,20 +180,20 @@ func TestRenderMissingVariablePreserved(t *testing.T) {
 	p := newMockPipeline()
 	ctx := NewContext(queue.QueuedMessage{
 		TriggerID:    "t2",
-		Name:         "order_confirmed",
+		Name:         "post_commented",
 		SubscriberID: "sub_1",
-		Payload:      map[string]any{"order_id": "A1"},
+		Payload:      map[string]any{"post_id": "P1"},
 	})
 
 	wf := domain.Workflow{
 		ID:   "wf",
-		Name: "order_confirmed",
+		Name: "post_commented",
 		Steps: []domain.Step{
 			{
 				ID:   "s1",
 				Type: domain.ChannelSMS,
 				Config: map[string]any{
-					"template": "订单 {{ payload.missing_field }} 已确认",
+					"template": "帖子 {{ payload.missing_field }} 有新评论",
 				},
 			},
 		},

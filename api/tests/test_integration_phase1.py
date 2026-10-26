@@ -1,7 +1,7 @@
 """Phase 1 集成测试：贯穿触发 → 队列 → worker → 活动流 → 执行明细 → 收件箱。
 
 通过 FastAPI TestClient 走完整 HTTP 链路，验证 Phase 1 各组件协作一致：
-1. 触发一条电商订单事件（order_confirmed），拿到回执。
+1. 触发一条社区互动事件（post_commented），拿到回执。
 2. worker 消费队列，逐渠道落库消息并写执行明细。
 3. 活动流可见「已触发」；执行明细按渠道/状态/triggerId 可查。
 4. 收件箱对 In-app 渠道可见未读，标记已读后未读归零。
@@ -106,28 +106,28 @@ def _drain_worker(bus, worker):
         worker._process(msg)
 
 
-def _trigger(client, name="order_confirmed", subscriber="buyer_1001", channels=None, **extra):
+def _trigger(client, name="post_commented", subscriber="creator_1001", channels=None, **extra):
     if channels is None:
-        channels = {"order_confirmed": ["in_app", "email", "sms"],
-                    "order_shipped": ["email", "push"],
-                    "order_delivered": ["in_app"]}[name]
+        channels = {"post_liked": ["in_app", "push"],
+                    "post_commented": ["in_app", "push", "email"],
+                    "post_mentioned": ["in_app", "push"]}[name]
     body = {
         "name": name,
         "to": {"subscriberId": subscriber, "channels": channels},
-        "payload": {"order_id": "ORDER-2026-1001", "customer": "Alice", "amount": "199.00"},
+        "payload": {"post_id": "P-2026-1001", "post_title": "我的第一支 Vlog", "actor": "小林"},
     }
     body.update(extra)
     return client.post("/v1/events/trigger", json=body)
 
 
 def test_full_pipeline_trigger_to_inbox(client):
-    """端到端：触发订单支付事件 → worker 消费 → 活动流/执行明细/收件箱全可见。"""
+    """端到端：触发评论事件 → worker 消费 → 活动流/执行明细/收件箱全可见。"""
     from app.worker import Worker
 
     c, bus = client
     worker = Worker()
 
-    # 1. 触发 order_confirmed（站内信 + 邮件 + 短信）
+    # 1. 触发 post_commented（站内信 + 推送 + 邮件）
     resp = _trigger(c)
     assert resp.status_code == 200
     receipt = resp.json()
@@ -135,24 +135,24 @@ def test_full_pipeline_trigger_to_inbox(client):
     trigger_id = receipt["triggerId"]
 
     # 2. 触发前活动流已可见「已触发」
-    r = c.get("/v1/activity", params={"workflow": "order_confirmed"})
+    r = c.get("/v1/activity", params={"workflow": "post_commented"})
     assert r.status_code == 200
     items = r.json()["items"]
     assert len(items) == 1
     assert items[0]["trigger_id"] == trigger_id
     assert items[0]["status"] == "triggered"
-    assert items[0]["subscriber_id"] == "buyer_1001"
+    assert items[0]["subscriber_id"] == "creator_1001"
 
     # 3. worker 消费队列，落库并写执行明细
     _drain_worker(bus, worker)
 
-    # 4. 执行明细：order_confirmed 三条渠道（in_app / email / sms）
+    # 4. 执行明细：post_commented 三条渠道（in_app / push / email）
     r = c.get("/v1/executions", params={"triggerId": trigger_id})
     assert r.status_code == 200
     exec_items = r.json()["items"]
     assert len(exec_items) == 3
     channels = sorted(i["channel"] for i in exec_items)
-    assert channels == ["email", "in_app", "sms"]
+    assert channels == ["email", "in_app", "push"]
     assert all(i["status"] == "sent" for i in exec_items)
 
     # 5. 执行明细按渠道过滤
@@ -162,38 +162,38 @@ def test_full_pipeline_trigger_to_inbox(client):
     assert r.json()["items"][0]["channel"] == "email"
 
     # 6. 收件箱：In-app 渠道未读 = 1
-    r = c.get("/v1/inbox", params={"subscriberId": "buyer_1001"})
+    r = c.get("/v1/inbox", params={"subscriberId": "creator_1001"})
     assert r.status_code == 200
     inbox = r.json()
     assert inbox["unread"] == 1
     assert inbox["total"] == 1
     assert inbox["items"][0]["trigger_id"] == trigger_id
-    assert inbox["items"][0]["workflow"] == "order_confirmed"
+    assert inbox["items"][0]["workflow"] == "post_commented"
 
     # 7. 标记已读后未读归零
     r = c.post(
         "/v1/inbox/read",
-        json={"subscriberId": "buyer_1001", "triggerIds": [trigger_id]},
+        json={"subscriberId": "creator_1001", "triggerIds": [trigger_id]},
     )
     assert r.status_code == 200
     assert r.json()["unread"] == 0
     assert r.json()["marked"] == 1
 
     # 8. 再次查询收件箱，该条已读
-    r = c.get("/v1/inbox", params={"subscriberId": "buyer_1001"})
+    r = c.get("/v1/inbox", params={"subscriberId": "creator_1001"})
     assert r.json()["unread"] == 0
     assert r.json()["items"][0]["read"] is True
 
 
-def test_pipeline_order_shipped_multichannel(client):
-    """order_shipped（邮件 + 推送）走完整链路，执行明细为两条渠道。"""
+def test_pipeline_post_liked_multichannel(client):
+    """post_liked（站内信 + 推送）走完整链路，执行明细为两条渠道。"""
     from app.worker import Worker
 
     c, bus = client
     worker = Worker()
 
-    resp = _trigger(c, name="order_shipped", subscriber="buyer_2002",
-                    payload={"order_id": "ORDER-2026-2002", "tracking_no": "SF123456789"})
+    resp = _trigger(c, name="post_liked", subscriber="creator_2002",
+                    payload={"post_id": "P-2026-2002", "actor": "阿澈", "count": 128})
     assert resp.status_code == 200
     trigger_id = resp.json()["triggerId"]
 
@@ -201,7 +201,7 @@ def test_pipeline_order_shipped_multichannel(client):
 
     r = c.get("/v1/executions", params={"triggerId": trigger_id})
     channels = sorted(i["channel"] for i in r.json()["items"])
-    assert channels == ["email", "push"]
+    assert channels == ["in_app", "push"]
 
 
 def test_environment_isolation(client):
@@ -210,9 +210,9 @@ def test_environment_isolation(client):
     resp = c.post(
         "/v1/events/trigger",
         json={
-            "name": "order_confirmed",
-            "to": {"subscriberId": "buyer_1"},
-            "payload": {"order_id": "X"},
+            "name": "post_commented",
+            "to": {"subscriberId": "creator_1"},
+            "payload": {"post_id": "P-1"},
         },
         headers={"X-Environment": "production"},
     )
@@ -226,15 +226,15 @@ def test_idempotency_within_pipeline(client):
 
     c, bus = client
     worker = Worker()
-    headers = {"Idempotency-Key": "order-confirmed-ORDER-2026-1001"}
+    headers = {"Idempotency-Key": "post-commented-P-2026-1001"}
 
     r1 = _trigger(c)
     r2 = c.post(
         "/v1/events/trigger",
         json={
-            "name": "order_confirmed",
-            "to": {"subscriberId": "buyer_1001", "channels": ["in_app", "email", "sms"]},
-            "payload": {"order_id": "ORDER-2026-1001"},
+            "name": "post_commented",
+            "to": {"subscriberId": "creator_1001", "channels": ["in_app", "push", "email"]},
+            "payload": {"post_id": "P-2026-1001"},
         },
         headers=headers,
     )
@@ -242,9 +242,9 @@ def test_idempotency_within_pipeline(client):
     r3 = c.post(
         "/v1/events/trigger",
         json={
-            "name": "order_confirmed",
-            "to": {"subscriberId": "buyer_1001", "channels": ["in_app", "email", "sms"]},
-            "payload": {"order_id": "ORDER-2026-1001"},
+            "name": "post_commented",
+            "to": {"subscriberId": "creator_1001", "channels": ["in_app", "push", "email"]},
+            "payload": {"post_id": "P-2026-1001"},
         },
         headers=headers,
     )

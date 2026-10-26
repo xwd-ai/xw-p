@@ -1,7 +1,7 @@
 """工作流模板注册表：触发时的模板查找。
 
 触发 API 按 ``name`` 查找启用的工作流模板。当前为进程内注册表
-（预置电商订单示例模板，方便 demo 与测试开箱即用）；
+（预置内容社区互动示例模板，方便 demo 与测试开箱即用）；
 后续 Phase 1 的模板 CRUD API 会接入 Postgres 持久化，本注册表作为
 内存实现保留，通过统一接口屏蔽差异。
 """
@@ -17,30 +17,41 @@ from .models.entities import Environment, Step, Workflow
 logger = logging.getLogger("xw.workflow")
 
 
-def _order_confirmed_workflow() -> Workflow:
-    """预置示例：订单支付成功（站内 + 邮件 + 短信多渠道触达）。"""
+def _post_liked_workflow() -> Workflow:
+    """预置示例：帖子被点赞（按帖子聚合后站内信 + 推送）。"""
     return Workflow(
-        id="wf-order-confirmed",
-        name="order_confirmed",
-        description="电商：订单支付成功，站内信 + 邮件 + 短信多渠道通知",
+        id="wf-post-liked",
+        name="post_liked",
+        description="内容社区：帖子被点赞，按帖子聚合后通知创作者",
         steps=[
             Step(
                 id="step-1",
-                type=Channel.IN_APP,
-                name="站内信",
-                config={"template": "订单 {{payload.order_id}} 支付成功，商家正在备货。"},
+                type=Channel.DIGEST,
+                name="点赞聚合",
+                config={
+                    # 聚合键：同一篇帖子的点赞合并成一条，避免刷屏
+                    "key": "payload.post_id",
+                    "window": "10m",
+                    "template": "{{payload.actor}} 等 {{payload.count}} 人赞了你的帖子",
+                },
             ),
             Step(
                 id="step-2",
-                type=Channel.EMAIL,
-                name="邮件",
-                config={"template": "您好 {{payload.customer}}，订单 {{payload.order_id}} 已支付 ¥{{payload.amount}}。"},
+                type=Channel.IN_APP,
+                name="站内信",
+                config={
+                    "depends_on": ["step-1"],
+                    "template": "{{payload.actor}} 等 {{payload.count}} 人赞了你的帖子《{{payload.post_title}}》",
+                },
             ),
             Step(
                 id="step-3",
-                type=Channel.SMS,
-                name="短信",
-                config={"template": "【订单】{{payload.order_id}} 已支付成功。"},
+                type=Channel.PUSH,
+                name="推送",
+                config={
+                    "depends_on": ["step-1"],
+                    "template": "你有 {{payload.count}} 个新点赞",
+                },
             ),
         ],
         environment=Environment.DEVELOPMENT,
@@ -48,24 +59,34 @@ def _order_confirmed_workflow() -> Workflow:
     )
 
 
-def _order_shipped_workflow() -> Workflow:
-    """预置示例：订单已发货（邮件 + 推送通知）。"""
+def _post_commented_workflow() -> Workflow:
+    """预置示例：帖子收到评论（站内信 + 推送 + 邮件）。"""
     return Workflow(
-        id="wf-order-shipped",
-        name="order_shipped",
-        description="电商：订单发货，邮件 + 推送通知物流信息",
+        id="wf-post-commented",
+        name="post_commented",
+        description="内容社区：帖子收到评论，站内信 + 推送 + 邮件通知创作者",
         steps=[
             Step(
                 id="step-1",
-                type=Channel.EMAIL,
-                name="邮件",
-                config={"template": "您的订单 {{payload.order_id}} 已发货，运单号 {{payload.tracking_no}}。"},
+                type=Channel.IN_APP,
+                name="站内信",
+                config={
+                    "template": "{{payload.actor}} 评论了你的帖子《{{payload.post_title}}》：{{payload.comment}}"
+                },
             ),
             Step(
                 id="step-2",
                 type=Channel.PUSH,
                 name="推送",
-                config={"template": "订单 {{payload.order_id}} 已发货。"},
+                config={"template": "{{payload.actor}} 评论了你的帖子"},
+            ),
+            Step(
+                id="step-3",
+                type=Channel.EMAIL,
+                name="邮件",
+                config={
+                    "template": "你的帖子《{{payload.post_title}}》收到新评论：{{payload.comment}}"
+                },
             ),
         ],
         environment=Environment.DEVELOPMENT,
@@ -73,18 +94,24 @@ def _order_shipped_workflow() -> Workflow:
     )
 
 
-def _order_delivered_workflow() -> Workflow:
-    """预置示例：订单已签收（站内信提醒）。"""
+def _post_mentioned_workflow() -> Workflow:
+    """预置示例：评论区被 @（站内信 + 推送）。"""
     return Workflow(
-        id="wf-order-delivered",
-        name="order_delivered",
-        description="电商：订单签收，站内信提醒并引导评价",
+        id="wf-post-mentioned",
+        name="post_mentioned",
+        description="内容社区：被其他用户 @ 提及，站内信 + 推送即时提醒",
         steps=[
             Step(
                 id="step-1",
                 type=Channel.IN_APP,
                 name="站内信",
-                config={"template": "订单 {{payload.order_id}} 已签收，感谢您的购买！"},
+                config={"template": "{{payload.actor}} 在《{{payload.post_title}}》的评论区提到了你"},
+            ),
+            Step(
+                id="step-2",
+                type=Channel.PUSH,
+                name="推送",
+                config={"template": "{{payload.actor}} 在评论里 @ 了你"},
             ),
         ],
         environment=Environment.DEVELOPMENT,
@@ -93,11 +120,11 @@ def _order_delivered_workflow() -> Workflow:
 
 
 def seed_workflows() -> list[Workflow]:
-    """返回预置的电商订单示例工作流（demo 开箱即用）。"""
+    """返回预置的内容社区互动示例工作流（demo 开箱即用）。"""
     return [
-        _order_confirmed_workflow(),
-        _order_shipped_workflow(),
-        _order_delivered_workflow(),
+        _post_liked_workflow(),
+        _post_commented_workflow(),
+        _post_mentioned_workflow(),
     ]
 
 
@@ -107,7 +134,7 @@ class WorkflowRegistry:
     def __init__(self) -> None:
         self._by_name: dict[str, Workflow] = {}
         self._lock = threading.Lock()
-        # 预置电商订单示例模板
+        # 预置内容社区互动示例模板
         for wf in seed_workflows():
             self._by_name[wf.name] = wf
 

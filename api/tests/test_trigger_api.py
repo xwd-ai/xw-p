@@ -37,7 +37,7 @@ def client(monkeypatch):
     return TestClient(app)
 
 
-def _trigger_body(name="order_confirmed", subscriber="user_1", **extra):
+def _trigger_body(name="post_commented", subscriber="creator_1", **extra):
     body = {"name": name, "to": {"subscriberId": subscriber}, "payload": {"user": "Alice"}}
     body.update(extra)
     return body
@@ -92,7 +92,7 @@ def test_trigger_inactive_store_workflow_returns_404(client, monkeypatch):
 
 
 def test_trigger_missing_subscriber_returns_422(client):
-    resp = client.post("/v1/events/trigger", json={"name": "welcome", "to": {}})
+    resp = client.post("/v1/events/trigger", json={"name": "post_commented", "to": {}})
     assert resp.status_code == 422
 
 
@@ -106,7 +106,7 @@ def test_trigger_empty_name_returns_422(client):
 def test_trigger_payload_not_dict_returns_422(client):
     resp = client.post(
         "/v1/events/trigger",
-        json={"name": "welcome", "to": {"subscriberId": "u1"}, "payload": "not-a-dict"},
+        json={"name": "post_commented", "to": {"subscriberId": "u1"}, "payload": "not-a-dict"},
     )
     assert resp.status_code == 422
 

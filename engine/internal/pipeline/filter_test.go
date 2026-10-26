@@ -14,10 +14,10 @@ import (
 func filterContext() *Context {
 	return NewContext(queue.QueuedMessage{
 		TriggerID:    "t1",
-		Name:         "order_confirmed",
+		Name:         "post_commented",
 		SubscriberID: "sub_1",
 		Payload: map[string]any{
-			"order_id":  "A1001",
+			"post_id":  "P1001",
 			"status":    "paid",
 			"amount":    199.00,
 			"channel":   "email",
@@ -108,11 +108,11 @@ func TestFilterContainsArray(t *testing.T) {
 func TestFilterRegex(t *testing.T) {
 	ctx := filterContext()
 	step := stepWithFilters("s1", []any{
-		map[string]any{"field": "payload.order_id", "operator": "regex", "value": "^A\\d{4}$"},
+		map[string]any{"field": "payload.post_id", "operator": "regex", "value": "^P\\d{4}$"},
 	})
 	skipped, _ := applyFilter(ctx, step)
 	if skipped {
-		t.Errorf("regex 应匹配 A1001")
+		t.Errorf("regex 应匹配 P1001")
 	}
 }
 
@@ -130,7 +130,7 @@ func TestFilterIn(t *testing.T) {
 func TestFilterExists(t *testing.T) {
 	ctx := filterContext()
 	step := stepWithFilters("s1", []any{
-		map[string]any{"field": "payload.order_id", "operator": "exists"},
+		map[string]any{"field": "payload.post_id", "operator": "exists"},
 	})
 	skipped, _ := applyFilter(ctx, step)
 	if skipped {
@@ -173,7 +173,7 @@ func TestFilterEmptyValueTreatedAsMissing(t *testing.T) {
 
 func TestFilterLegacyStringBackwardCompatible(t *testing.T) {
 	ctx := filterContext()
-	step := stepWithFilters("s1", []any{"order_id"})
+	step := stepWithFilters("s1", []any{"post_id"})
 	skipped, _ := applyFilter(ctx, step)
 	if skipped {
 		t.Errorf("旧字符串写法（存在性）应放行存在字段")

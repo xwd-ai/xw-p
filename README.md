@@ -1,40 +1,51 @@
 # xw-notify
 
-一个自主开发的电商交易触达平台（E-commerce Transaction Notifications）。用一个统一的触发 API 和一套工作流模型，把订单、支付、发货、物流等交易事件自动分发到买家所在的各个渠道：收件箱、邮件、短信、推送。
+一个自主开发的内容社区互动触达平台（Community Engagement Notifications）。用一个统一的触发 API 和一套工作流模型，把点赞、评论、@提及等互动事件自动分发到创作者所在的各个渠道：收件箱、推送、邮件、短信。
 
 ## 定位
 
-- **一套 API，多端触达**：电商业务侧只调用一次触发接口，剩下的渠道选择、模板渲染、去重、聚合、重试都由平台处理。
+- **一套 API，多端触达**：社区业务侧只调用一次触发接口，剩下的渠道选择、模板渲染、去重、聚合、重试都由平台处理。
+- **为高频互动而生**：点赞是「高频同质」事件，一条爆款帖子十分钟能产生上千次点赞。平台按聚合键把同一篇帖子的互动压成一条，数字实时累加，而不是灌爆创作者的通知中心。
 - **工作流驱动**：通知按「工作流（Workflow）+ 步骤（Step）」编排，支持收件箱、邮件、短信、推送、聊天、延时、摘要（Digest）等步骤类型。
-- **订阅者与偏好**：每个买家一个订阅者档案，按「全局 / 工作流 / 渠道」三级控制是否接收。
+- **订阅者与偏好**：每个创作者一个订阅者档案，按「全局 / 工作流 / 渠道」三级控制是否接收。
 - **多语言实现**：API 与渠道集成层用 Python(FastAPI)，执行引擎与调度用 Go。
 
-## 典型交易场景
+## 典型互动场景
 
-| 交易事件 | 触发标识 | 触达渠道 |
-| --- | --- | --- |
-| 订单支付成功 | `order_confirmed` | 站内信 + 邮件 + 短信 |
-| 订单已发货 | `order_shipped` | 邮件 + 推送 |
-| 订单已签收 | `order_delivered` | 站内信 |
+| 互动事件 | 触发标识 | 触达渠道 | 说明 |
+| --- | --- | --- | --- |
+| 帖子被点赞 | `post_liked` | 站内信 + 推送 | 按 `post_id` 聚合，10 分钟窗口合并为一条 |
+| 帖子收到评论 | `post_commented` | 站内信 + 推送 + 邮件 | 评论内容逐条送达，不聚合 |
+| 评论区被 @ | `post_mentioned` | 站内信 + 推送 | 即时提醒，延迟敏感 |
+
+## 为什么聚合是核心
+
+| 不做聚合 | 做了聚合 |
+| --- | --- |
+| 5000 次点赞 = 5000 条通知 | 5000 次点赞 = 1 条「小林等 128 人赞了你的帖子」 |
+| 收件箱被刷爆，用户关掉通知 | 创作者愿意持续打开通知中心 |
+| 数据库写入压力大 | 按聚合键 + 窗口批量写，压力可控 |
+
+聚合的难点不在「合并」，而在**并发**：同一篇帖子的点赞请求会同时到达，计数必须原子累加，卡片要原地更新而不是重复开卡。
 
 ## 架构
 
 ```
-电商订单系统 ──trigger──▶  api (Python/FastAPI)  ──入队──▶  MQ (Redis / RabbitMQ)
-                                                        │
-                                                        ▼
-                                            engine (Go)
-                                              · 工作流求值
-                                              · digest 聚合
-                                              · provider 分发
-                                                        │
-                     ┌──────────────┬──────────────┴──────────────┐
-                     ▼              ▼                             ▼
-                  Email/SMS/Push   In-App 收件箱               Chat(Slack…)
-                        │              │
-                        └──────┬───────┘
-                               ▼
-                        Postgres（消息/买家/工作流/活动日志）
+内容社区业务 ──trigger──▶  api (Python/FastAPI)  ──入队──▶  MQ (Redis / RabbitMQ)
+                                                          │
+                                                          ▼
+                                              engine (Go)
+                                                · 工作流求值
+                                                · digest 聚合
+                                                · provider 分发
+                                                          │
+                       ┌──────────────┬──────────────┴──────────────┐
+                       ▼              ▼                             ▼
+                    Email/SMS/Push   In-App 收件箱               Chat(Slack…)
+                          │              │
+                          └──────┬───────┘
+                                 ▼
+                          Postgres（消息/创作者/工作流/活动日志）
 ```
 
 ## 目录结构
@@ -59,10 +70,10 @@ cd api
 python -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/uvicorn app.main:app --reload
 
-# 3. 触发一条订单通知（demo）
+# 3. 触发一条评论通知（demo）
 curl -X POST http://127.0.0.1:8000/v1/events/trigger \
   -H "Content-Type: application/json" \
-  -d '{"name":"order_confirmed","to":{"subscriberId":"user_1","email":"hi@example.com"},"payload":{"customer":"Alice","order_id":"A10293","amount":"199.00"}}'
+  -d '{"name":"post_commented","to":{"subscriberId":"creator_1","email":"hi@example.com","channels":["in_app","push","email"]},"payload":{"post_id":"P-2026-1001","post_title":"我的第一支 Vlog","actor":"小林","comment":"拍得真好，求教程！"}}'
 ```
 
 ### 后端切换（环境变量）
