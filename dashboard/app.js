@@ -337,7 +337,7 @@
 
   /* ============ 工作流「运行」触发（真实触发 API） ============ */
   document.getElementById('run-btn').addEventListener('click', () => {
-    // 按当前选中工作流的名称触发一条真实测试事件（而非硬编码 welcome）
+    // 按当前选中工作流的名称触发一条真实测试事件（不硬编码工作流名）
     const wf = wfList.find(w => w.id === wfCurrentId);
     if (!wf) {
       showToast('请先在左侧选择一个工作流');

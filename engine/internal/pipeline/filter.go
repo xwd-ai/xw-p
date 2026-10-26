@@ -51,12 +51,12 @@ func (f *filterStage) Apply(ctx *Context, step domain.Step) error {
 		if err != nil {
 			// 无法解析的过滤条件视为失败，直接跳过并记录错误原因。
 			ctx.Results[step.ID] = StepResult{
-				StepID:    step.ID,
-				StepType:  domain.StepType(step.Type),
-				Channel:   step.Type,
-				Skipped:   true,
+				StepID:     step.ID,
+				StepType:   domain.StepType(step.Type),
+				Channel:    step.Type,
+				Skipped:    true,
 				SkipReason: "filter",
-				Error:     err.Error(),
+				Error:      err.Error(),
 			}
 			return errSkipStep
 		}

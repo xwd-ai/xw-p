@@ -13,6 +13,9 @@ class SubscriberTarget(BaseModel):
     subscriber_id: str = Field(alias="subscriberId", min_length=1, description="订阅者唯一标识")
     email: Optional[str] = Field(default=None, description="接收邮件的地址（渠道含 email 时用）")
     phone: Optional[str] = Field(default=None, description="接收短信的手机号（渠道含 sms 时用）")
+    device_token: Optional[str] = Field(
+        default=None, alias="deviceToken", description="移动推送的 device token（渠道含 push 时用）"
+    )
     channels: Optional[list[str]] = Field(
         default=None, description="分发渠道列表，如 in_app / email / sms / push"
     )
@@ -34,6 +37,7 @@ class TriggerEvent(BaseModel):
                 "subscriberId": "creator-1001",
                 "email": "creator@example.com",
                 "phone": "+8613800000000",
+                "deviceToken": "fcm-token-9f2c1d",
                 "channels": ["in_app", "push", "email"]
             },
             "payload": {
@@ -64,6 +68,7 @@ class TriggerEvent(BaseModel):
                         "subscriberId": "creator-1001",
                         "email": "creator@example.com",
                         "phone": "+8613800000000",
+                        "deviceToken": "fcm-token-9f2c1d",
                         "channels": ["in_app", "push", "email"],
                     },
                     "payload": {
@@ -98,6 +103,7 @@ class QueuedMessage(BaseModel):
     subscriber_id: str
     email: Optional[str] = None
     phone: Optional[str] = None
+    device_token: Optional[str] = None
     channels: Optional[list[str]] = None
     payload: dict[str, Any] = Field(default_factory=dict)
     overrides: dict[str, Any] = Field(default_factory=dict)
@@ -111,6 +117,7 @@ def new_queued_message(event: TriggerEvent) -> QueuedMessage:
         subscriber_id=event.to.subscriber_id,
         email=event.to.email,
         phone=event.to.phone,
+        device_token=event.to.device_token,
         channels=event.to.channels,
         payload=event.payload,
         overrides=event.overrides,

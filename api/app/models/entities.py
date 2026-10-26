@@ -50,7 +50,7 @@ class Workflow(BaseModel):
     """工作流/通知模板：定义从触发到投递的步骤序列。"""
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="工作流唯一标识")
-    name: str = Field(description="触发标识（业务侧使用），例如 welcome")
+    name: str = Field(description="触发标识（业务侧使用），例如 post_liked")
     description: Optional[str] = None
     steps: list[Step] = Field(default_factory=list, description="步骤序列（有序）")
     version: int = Field(default=1, ge=1, description="模板版本号")

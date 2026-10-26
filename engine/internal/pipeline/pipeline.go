@@ -19,13 +19,22 @@ type Pipeline struct {
 // New 创建默认管线（filter → transform → render → dispatch）。
 // logger 为 nil 时使用默认 logger。
 //
-// 默认注册 email 渠道的 console mock provider；其余渠道尚未落地 provider，
-// dispatch 阶段对它们保持 mock 打印。后续渠道（sms/push/in-app/chat）落地时
-// 在 NewWithRegistry 中追加注册即可。
+// 默认注册 email / sms / push 三个渠道的 console mock provider；其余渠道
+// （in-app/chat）尚未落地 provider，dispatch 阶段对它们保持 mock 打印。
+// 后续渠道落地时在 NewWithRegistry 中追加注册即可。
 func New(logger *slog.Logger) *Pipeline {
+	registry := DefaultProviderRegistry(logger)
+	return NewWithRegistry(logger, registry)
+}
+
+// DefaultProviderRegistry 构造默认 provider 注册表：email / sms / push 三个
+// 已落地渠道各自注册 console mock 实现。
+func DefaultProviderRegistry(logger *slog.Logger) *ProviderRegistry {
 	registry := NewProviderRegistry()
 	registry.Register(NewConsoleEmailProvider(logger))
-	return NewWithRegistry(logger, registry)
+	registry.Register(NewConsoleSMSProvider(logger))
+	registry.Register(NewConsolePushProvider(logger))
+	return registry
 }
 
 // NewWithRegistry 使用指定 provider 注册表创建管线，便于测试与自定义渠道集合。

@@ -19,6 +19,7 @@ type QueuedMessage struct {
 	SubscriberID  string         `json:"subscriber_id"`
 	Email         string         `json:"email,omitempty"`
 	Phone         string         `json:"phone,omitempty"`
+	DeviceToken   string         `json:"device_token,omitempty"`
 	Channels      []string       `json:"channels,omitempty"`
 	Payload       map[string]any `json:"payload,omitempty"`
 	Overrides     map[string]any `json:"overrides,omitempty"`

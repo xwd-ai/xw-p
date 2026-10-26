@@ -15,7 +15,7 @@ def _record(status="sent", channels=None, days_ago=0):
     return {
         "trigger_id": "t",
         "transaction_id": "tx",
-        "workflow": "welcome",
+        "workflow": "post_liked",
         "subscriber_id": "u1",
         "channels": channels or ["in_app"],
         "payload": {},

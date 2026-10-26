@@ -137,7 +137,7 @@ func TestRenderWithFunctionsAndNestedVars(t *testing.T) {
 		SubscriberID: "sub_1",
 		Payload: map[string]any{
 			"post_id": "P1001",
-			"amount":   "199.00",
+			"amount":  "199.00",
 			"customer": map[string]any{
 				"name": "张三",
 			},

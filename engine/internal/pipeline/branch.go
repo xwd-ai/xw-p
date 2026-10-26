@@ -37,12 +37,12 @@ func (b *branchStage) Apply(ctx *Context, step domain.Step) error {
 	conds, err := branchConditions(step)
 	if err != nil {
 		ctx.Results[step.ID] = StepResult{
-			StepID:      step.ID,
-			StepType:    domain.StepType(step.Type),
-			Channel:     step.Type,
-			Skipped:     true,
-			SkipReason:  "condition",
-			Error:       err.Error(),
+			StepID:     step.ID,
+			StepType:   domain.StepType(step.Type),
+			Channel:    step.Type,
+			Skipped:    true,
+			SkipReason: "condition",
+			Error:      err.Error(),
 		}
 		return errSkipStep
 	}
@@ -53,11 +53,11 @@ func (b *branchStage) Apply(ctx *Context, step domain.Step) error {
 	for _, cond := range conds {
 		if !b.fs.match(ctx, cond) {
 			ctx.Results[step.ID] = StepResult{
-				StepID:      step.ID,
-				StepType:    domain.StepType(step.Type),
-				Channel:     step.Type,
-				Skipped:     true,
-				SkipReason:  "condition",
+				StepID:     step.ID,
+				StepType:   domain.StepType(step.Type),
+				Channel:    step.Type,
+				Skipped:    true,
+				SkipReason: "condition",
 			}
 			return errSkipStep
 		}

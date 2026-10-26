@@ -10,8 +10,8 @@ import (
 //
 // 优先经 ProviderRegistry 查找该渠道的 provider 并真正投递；未注册 provider
 // 的渠道回退为 mock 打印（保持管线在渠道逐批落地期间可运行）。
-// 当前已落地 provider：email（console mock）。sms/push/in-app/chat 在
-// 后续 Phase 接入。
+// 当前已落地 provider：email / sms / push（均为 console mock）。
+// in-app / chat 在后续 Phase 接入。
 type dispatchStage struct {
 	logger   *slog.Logger
 	registry *ProviderRegistry
@@ -93,16 +93,19 @@ func (d *dispatchStage) recipientFor(ctx *Context, ch domain.Channel) string {
 		if ctx.Subscriber != nil && ctx.Subscriber.DeviceToken != "" {
 			return ctx.Subscriber.DeviceToken
 		}
-		return ""
+		return ctx.Msg.DeviceToken
 	default:
 		return ""
 	}
 }
 
-// subjectFor 返回邮件主题：优先步骤 config 的 subject 字段，否则回退工作流名。
+// subjectFor 返回消息标题：email 用 subject、push 用 title，二者取其一。
+// 优先步骤 config 的 subject/title 字段，否则回退工作流名。
 func (d *dispatchStage) subjectFor(ctx *Context, step domain.Step) string {
-	if s, ok := step.Config["subject"].(string); ok && s != "" {
-		return s
+	for _, key := range []string{"subject", "title"} {
+		if s, ok := step.Config[key].(string); ok && s != "" {
+			return s
+		}
 	}
 	if ctx.Workflow != nil && ctx.Workflow.Name != "" {
 		return ctx.Workflow.Name

@@ -17,7 +17,7 @@ func filterContext() *Context {
 		Name:         "post_commented",
 		SubscriberID: "sub_1",
 		Payload: map[string]any{
-			"post_id":  "P1001",
+			"post_id":   "P1001",
 			"status":    "paid",
 			"amount":    199.00,
 			"channel":   "email",

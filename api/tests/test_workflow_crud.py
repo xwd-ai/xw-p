@@ -53,10 +53,10 @@ def test_validate_steps_cycle_detected():
 
 # ---------- 内存存储 ----------
 
-def _workflow(name="welcome", step_id="s1"):
+def _workflow(name="post_commented", step_id="s1"):
     return Workflow(
         name=name,
-        steps=[Step(id=step_id, type="in_app", name="欢迎", config={})],
+        steps=[Step(id=step_id, type="in_app", name="站内信通知", config={})],
         version=1,
     )
 
@@ -66,7 +66,7 @@ def test_store_create_and_get():
     wf = _workflow()
     store.create(wf)
     assert store.get(wf.id) is wf
-    assert store.get_by_name("welcome") is wf
+    assert store.get_by_name("post_commented") is wf
     assert store.list() == [wf]
 
 
@@ -112,7 +112,7 @@ def client(monkeypatch):
     return TestClient(app)
 
 
-def _create_body(name="welcome", steps=None):
+def _create_body(name="post_commented", steps=None):
     return {
         "name": name,
         "description": "测试工作流",
@@ -125,7 +125,7 @@ def test_create_workflow(client):
     resp = client.post("/v1/workflows", json=_create_body())
     assert resp.status_code == 201
     data = resp.json()
-    assert data["name"] == "welcome"
+    assert data["name"] == "post_commented"
     assert data["version"] == 1
     assert data["active"] is True
     assert len(data["steps"]) == 1
@@ -180,7 +180,7 @@ def test_update_workflow_increments_version(client):
     data = resp.json()
     assert data["description"] == "更新后的描述"
     assert data["version"] == 2
-    assert data["name"] == "welcome"
+    assert data["name"] == "post_commented"
 
 
 def test_update_workflow_404(client):

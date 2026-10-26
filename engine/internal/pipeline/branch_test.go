@@ -42,7 +42,7 @@ func branchWorkflow() domain.Workflow {
 				Type: domain.ChannelPush,
 				Config: map[string]any{
 					"template": "互动推送",
-					"if":      []any{"payload.actor"},
+					"if":       []any{"payload.actor"},
 				},
 			},
 		},

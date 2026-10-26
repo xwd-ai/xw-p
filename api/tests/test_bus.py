@@ -4,14 +4,14 @@ from __future__ import annotations
 import json
 
 from app.bus import MemoryMessageBus, RedisMessageBus
-from app.schemas import QueuedMessage
+from app.schemas import QueuedMessage, TriggerEvent, new_queued_message
 
 
 def _make_msg(trigger_id: str = "t-1") -> QueuedMessage:
     return QueuedMessage(
         trigger_id=trigger_id,
         transaction_id="tx-1",
-        name="welcome",
+        name="post_liked",
         subscriber_id="user_1",
         email="hi@example.com",
         channels=["in_app"],
@@ -86,3 +86,24 @@ def test_redis_bus_empty_returns_none(monkeypatch):
     monkeypatch.setattr("redis.Redis.from_url", lambda *a, **k: FakeRedis())
     bus = RedisMessageBus(url="redis://localhost:6379/0", queue_key="xw:q")
     assert bus.consume(timeout=1.0) is None
+
+
+def test_device_token_carried_through_queue_contract():
+    """push 渠道依赖 device_token：触发入参为 camelCase，队列契约为 snake_case，
+    两侧都要能透传，否则 Go 引擎的 push 步骤会因缺 token 投递失败。"""
+    event = TriggerEvent(
+        name="post_mentioned",
+        to={"subscriberId": "creator-1", "deviceToken": "fcm-token-9f2c1d"},
+        payload={"post_id": "P1001", "actor": "小林"},
+    )
+
+    msg = new_queued_message(event)
+    assert msg.device_token == "fcm-token-9f2c1d"
+    assert msg.model_dump()["device_token"] == "fcm-token-9f2c1d"
+
+    # 反序列化（模拟 Go 侧或 Redis 回读）后仍保留该字段
+    restored = QueuedMessage.model_validate(json.loads(msg.model_dump_json()))
+    assert restored.device_token == "fcm-token-9f2c1d"
+    # 未提供时不报错，保持向后兼容
+    assert QueuedMessage.model_validate({"trigger_id": "t", "transaction_id": "tx",
+                                         "name": "post_liked", "subscriber_id": "s"}).device_token is None

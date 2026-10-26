@@ -37,7 +37,7 @@ def test_channel_json_serialization():
 
 
 def test_workflow_defaults_and_delivery_steps():
-    wf = Workflow(name="welcome", steps=[Step(type=Channel.EMAIL), Step(type=Channel.DELAY)])
+    wf = Workflow(name="post_liked", steps=[Step(type=Channel.EMAIL), Step(type=Channel.DELAY)])
     assert wf.version == 1
     assert wf.environment == Environment.DEVELOPMENT
     assert wf.active is True
