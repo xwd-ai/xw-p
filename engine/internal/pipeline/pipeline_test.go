@@ -41,7 +41,7 @@ func orderWorkflow() domain.Workflow {
 }
 
 func TestPipelineRendersAndDispatches(t *testing.T) {
-	p := New(nil)
+	p := newMockPipeline()
 	ctx := NewContext(queue.QueuedMessage{
 		TriggerID:    "t1",
 		Name:         "order_confirmed",
@@ -80,7 +80,7 @@ func TestPipelineRendersAndDispatches(t *testing.T) {
 }
 
 func TestPipelineFilterSkipsWhenMissing(t *testing.T) {
-	p := New(nil)
+	p := newMockPipeline()
 	ctx := NewContext(queue.QueuedMessage{
 		TriggerID:    "t2",
 		Name:         "order_confirmed",

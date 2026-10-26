@@ -15,6 +15,8 @@ type StepResult struct {
 	ShortCircuited bool
 	// Rendered 表示 render 阶段产出的内容（如模板渲染后的文本）。
 	Rendered string
+	// Sent 表示该步骤经 provider 成功投递（仅注册了 provider 的渠道有意义）。
+	Sent bool
 	// Error 表示该步骤执行失败的原因。
 	Error string
 }

@@ -61,7 +61,7 @@ func TestValidateTemplateSizeLimit(t *testing.T) {
 }
 
 func TestRenderRejectsDangerousPathInTemplate(t *testing.T) {
-	p := New(nil)
+	p := newMockPipeline()
 	ctx := NewContext(queue.QueuedMessage{
 		TriggerID:    "t3",
 		Name:         "order_confirmed",
@@ -112,7 +112,7 @@ func TestRenderDepthLimit(t *testing.T) {
 }
 
 func TestRenderNormalEcommerceStillWorks(t *testing.T) {
-	p := New(nil)
+	p := newMockPipeline()
 	ctx := NewContext(queue.QueuedMessage{
 		TriggerID:    "t4",
 		Name:         "order_delivered",

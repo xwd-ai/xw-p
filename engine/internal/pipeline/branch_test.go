@@ -50,7 +50,7 @@ func branchWorkflow() domain.Workflow {
 }
 
 func TestConditionalBranchSkipsWhenFalse(t *testing.T) {
-	p := New(nil)
+	p := newMockPipeline()
 	ctx := NewContext(queue.QueuedMessage{
 		TriggerID:    "t1",
 		Name:         "order_confirmed",
@@ -99,7 +99,7 @@ func TestConditionalBranchArrayAllMustMatch(t *testing.T) {
 		},
 	}
 
-	p := New(nil)
+	p := newMockPipeline()
 	// 仅满足一个条件：应跳过
 	ctx := NewContext(queue.QueuedMessage{
 		Name: "order_paid",
@@ -156,7 +156,7 @@ func TestFailureShortCircuitStopsSubsequentSteps(t *testing.T) {
 		},
 	}
 
-	p := New(nil)
+	p := newMockPipeline()
 	ctx := NewContext(queue.QueuedMessage{Name: "order_confirmed"})
 	results := p.Run(ctx, wf)
 

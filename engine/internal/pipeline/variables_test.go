@@ -130,7 +130,7 @@ func TestBuiltinFunctions(t *testing.T) {
 }
 
 func TestRenderWithFunctionsAndNestedVars(t *testing.T) {
-	p := New(nil)
+	p := newMockPipeline()
 	ctx := NewContext(queue.QueuedMessage{
 		TriggerID:    "t1",
 		Name:         "order_confirmed",
@@ -177,7 +177,7 @@ func TestRenderWithFunctionsAndNestedVars(t *testing.T) {
 }
 
 func TestRenderMissingVariablePreserved(t *testing.T) {
-	p := New(nil)
+	p := newMockPipeline()
 	ctx := NewContext(queue.QueuedMessage{
 		TriggerID:    "t2",
 		Name:         "order_confirmed",
