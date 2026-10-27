@@ -15,6 +15,10 @@ type Config struct {
 	QueueKey      string
 	PollTimeout   int // 秒
 	EnginePort    int
+	// DigestStore 选择聚合卡片存储：redis（跨实例共享，默认）或 memory（进程内）。
+	DigestStore string
+	// DigestPrefix 是聚合卡片在 Redis 里的键前缀，用于环境隔离。
+	DigestPrefix string
 }
 
 // Load 从环境变量读取配置。
@@ -30,6 +34,8 @@ func Load() Config {
 		QueueKey:      envOr("XW_REDIS_QUEUE_KEY", "xw:queue:events"),
 		PollTimeout:   envInt("XW_POLL_TIMEOUT", 2),
 		EnginePort:    envInt("ENGINE_PORT", 8081),
+		DigestStore:   envOr("XW_DIGEST_STORE", "redis"),
+		DigestPrefix:  envOr("XW_DIGEST_PREFIX", "xw:digest"),
 	}
 }
 

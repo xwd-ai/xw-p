@@ -249,9 +249,12 @@ func (c DigestCard) clone() DigestCard {
 
 // DigestStore 是聚合卡片存储接口。
 //
-// 当前只有内存实现（单引擎进程）。后续接入 Redis（HINCRBY + 过期时间）时
-// 替换实现即可，接口刻意保持「一次调用完成累计并返回快照」的语义，
-// 便于把计数与开卡判定交给存储层用原子操作完成。
+// 两个实现：
+//   - MemoryDigestStore：进程内，单引擎实例可用，测试与本地 demo 的默认值；
+//   - RedisDigestStore：跨实例共享，用 SET NX 开卡 + HINCRBY 计数保证并发正确。
+//
+// 接口刻意保持「一次调用完成累计并返回快照」的语义，计数与开卡判定由存储层
+// 用原子操作一次做完，避免调用方分两步读改写而留下竞态窗口。
 type DigestStore interface {
 	// Accumulate 在窗口内累计一次互动。
 	// opened=true 表示本次开了新卡（窗口内首次或窗口已过期）。

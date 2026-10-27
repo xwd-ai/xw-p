@@ -10,8 +10,11 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
+
+	"github.com/redis/go-redis/v9"
 
 	"github.com/cdgjhg/xw-p/engine/internal/config"
 	"github.com/cdgjhg/xw-p/engine/internal/pipeline"
@@ -43,8 +46,13 @@ func main() {
 		"pollTimeout", cfg.PollTimeoutDuration(),
 	)
 
-	// 延迟调度器：内存存储 + 管线续跑。delay 步骤到期后把剩余步骤跑完。
-	scheduler := newDelayScheduler(logger)
+	// 聚合卡片存储：多实例共享走 Redis，Redis 不可用时回退进程内存
+	// （单实例语义正确，多实例会各开一张卡，日志里明示这件事）。
+	pipe, closeDigest := newPipeline(logger, cfg)
+	defer closeDigest()
+
+	// 延迟调度器：到期任务 → 管线续跑。delay 步骤到期后把剩余步骤跑完。
+	scheduler := newDelayScheduler(logger, pipe)
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -64,8 +72,7 @@ func main() {
 //
 // in_app 渠道写入默认收件箱存储，其余渠道走 console mock，
 // 与本进程的投递语义保持一致。
-func newDelayScheduler(logger *slog.Logger) *schedule.Scheduler {
-	pipe := pipeline.New(logger)
+func newDelayScheduler(logger *slog.Logger, pipe *pipeline.Pipeline) *schedule.Scheduler {
 	handler := func(ctx context.Context, item schedule.Item) error {
 		deferral, results, err := pipe.Resume(item.Payload)
 		if err != nil {
@@ -95,4 +102,37 @@ func newDelayScheduler(logger *slog.Logger) *schedule.Scheduler {
 		return nil
 	}
 	return schedule.New(schedule.NewMemoryStore(), handler, logger)
+}
+
+// newPipeline 组装执行管线并选定聚合卡片存储，返回管线与资源释放函数。
+//
+// 默认使用 Redis 存储：多个引擎实例共享同一张聚合卡片，计数走 HINCRBY，
+// 窗口靠键的 TTL 收敛。显式配置 XW_DIGEST_STORE=memory 或 Redis 不可用时
+// 回退进程内存储——那意味着多实例会各开一张卡，只在单实例部署下成立。
+func newPipeline(logger *slog.Logger, cfg config.Config) (*pipeline.Pipeline, func()) {
+	pipe := pipeline.New(logger)
+
+	if strings.EqualFold(strings.TrimSpace(cfg.DigestStore), "memory") {
+		logger.Info("[engine] 聚合卡片存储：进程内存（单实例语义）")
+		return pipe, func() {}
+	}
+
+	client := redis.NewClient(&redis.Options{
+		Addr:     cfg.RedisAddr,
+		Password: cfg.RedisPassword,
+		DB:       cfg.RedisDB,
+	})
+	pingCtx, cancel := context.WithTimeout(context.Background(), cfg.PollTimeoutDuration())
+	defer cancel()
+	if err := client.Ping(pingCtx).Err(); err != nil {
+		logger.Warn("[engine] 聚合卡片存储连接 Redis 失败，本次回退进程内存；多实例下计数会各算各的",
+			"redis", cfg.RedisAddr, "error", err)
+		_ = client.Close()
+		return pipe, func() {}
+	}
+
+	store := pipeline.NewRedisDigestStoreWithPrefix(client, cfg.DigestPrefix)
+	pipe.WithDigestStore(store)
+	logger.Info("[engine] 聚合卡片存储：Redis", "redis", cfg.RedisAddr, "prefix", store.Prefix())
+	return pipe, func() { _ = client.Close() }
 }
