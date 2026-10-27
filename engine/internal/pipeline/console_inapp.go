@@ -69,15 +69,18 @@ func (p *inAppProvider) Send(d Delivery) SendResult {
 		return SendResult{Sent: false, Reason: "站内信正文为空"}
 	}
 
+	now := p.now().UTC()
 	entry := InboxEntry{
-		ID:           inboxEntryID(d, p.now()),
+		ID:           inboxEntryID(d, now),
 		TriggerID:    d.TriggerID,
 		SubscriberID: subscriberID,
 		Workflow:     d.WorkflowName,
 		StepID:       d.StepID,
 		Title:        inAppTitle(d),
 		Body:         body,
-		CreatedAt:    p.now().UTC(),
+		CreatedAt:    now,
+		// 普通站内信没有「原地改写」语义，更新时间与创建时间一致。
+		UpdatedAt: now,
 	}
 
 	inserted, err := p.store.Save(entry)

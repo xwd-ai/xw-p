@@ -42,8 +42,12 @@ type InboxEntry struct {
 	Title string `json:"title"`
 	// Body 是收件箱条目正文（已渲染）。
 	Body string `json:"body"`
-	// CreatedAt 是写入收件箱的时间。
+	// CreatedAt 是写入收件箱的时间（聚合卡片为开卡时刻，窗口内不变）。
 	CreatedAt time.Time `json:"created_at"`
+	// UpdatedAt 是条目内容最近一次变更的时间：普通站内信与 CreatedAt 相同，
+	// 聚合卡片每次命中窗口都会推进它。API 侧用它判定「已读的卡片又被新互动
+	// 顶起来」应该重新算未读。
+	UpdatedAt time.Time `json:"updated_at"`
 	// Read 标记是否已读；引擎侧始终写入 false，已读状态由 API 侧维护。
 	Read bool `json:"read"`
 }

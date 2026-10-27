@@ -32,6 +32,9 @@ type StepResult struct {
 	AggregateCount int
 	// AggregateOpened 表示本次 digest 执行开了新卡（窗口内首次互动）。
 	AggregateOpened bool
+	// AggregateReplayed 表示本次事件在窗口内已累计过（重放），计数未变化、
+	// 也没有重复投递。此时 AggregateCount 是卡片的当前累计值。
+	AggregateReplayed bool
 	// AggregateExpiresAt 是当前聚合窗口的到期时刻。
 	AggregateExpiresAt time.Time
 	// Error 表示该步骤执行失败的原因。

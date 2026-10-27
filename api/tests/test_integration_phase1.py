@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import threading
+from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -43,20 +44,31 @@ class _InMemoryListStore:
 
 
 class _InMemoryReadState:
-    """进程内已读状态存储，替代 JSONL ReadStateStore。"""
+    """进程内已读状态存储，替代 JSONL ReadStateStore。
+
+    与真实实现同样按「消息 ID + 已读时刻」记录：内容更新时间晚于已读时刻时
+    重新算未读（聚合卡片被新互动改写后的行为）。
+    """
 
     def __init__(self):
-        self._read: dict[str, set[str]] = {}
+        self._read: dict[str, dict[str, datetime]] = {}
 
-    def is_read(self, subscriber_id: str, trigger_id: str) -> bool:
-        return trigger_id in self._read.get(subscriber_id, set())
-
-    def mark_read(self, subscriber_id: str, trigger_id: str) -> bool:
-        s = self._read.setdefault(subscriber_id, set())
-        if trigger_id in s:
+    def is_read(self, subscriber_id: str, message_id: str, updated_at=None) -> bool:
+        read_at = (self._read.get(subscriber_id) or {}).get(message_id)
+        if read_at is None:
             return False
-        s.add(trigger_id)
+        return updated_at is None or read_at >= updated_at
+
+    def mark_read(self, subscriber_id: str, message_id: str, updated_at=None) -> bool:
+        bucket = self._read.setdefault(subscriber_id, {})
+        read_at = bucket.get(message_id)
+        if read_at is not None and (updated_at is None or read_at >= updated_at):
+            return False
+        bucket[message_id] = datetime.now(timezone.utc)
         return True
+
+    def is_legacy_read(self, subscriber_id: str, trigger_id: str) -> bool:
+        return False
 
 
 @pytest.fixture

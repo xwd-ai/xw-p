@@ -29,6 +29,7 @@ import (
 //	xw:digest:window:<scopeHash>  string 卡片身份，值形如 entryID|开卡纳秒|到期纳秒，TTL = 窗口
 //	xw:digest:card:<entryID>      hash   计数、最近互动时刻、渠道与作用域字段（观测用）
 //	xw:digest:actors:<entryID>    list   互动者（去重、上限 maxDigestActors）
+//	xw:digest:events:<entryID>    set    已累计的事件 ID，用于重放去重，TTL = 窗口余量
 //
 // 窗口语义与内存实现一致，仍是固定窗口：互动不刷新窗口键的 TTL，否则热门帖子
 // 会一直续期、卡片永远不结算。窗口到期后窗口键被 Redis 淘汰，下一次互动自然
@@ -154,6 +155,11 @@ func (s *RedisDigestStore) actorsKey(entryID string) string {
 	return s.prefix + ":actors:" + entryID
 }
 
+// eventsKey 是重放去重集合的键：成员为已累计的事件 ID。
+func (s *RedisDigestStore) eventsKey(entryID string) string {
+	return s.prefix + ":events:" + entryID
+}
+
 // digestScopeHash 把卡片作用域压成定长键片段：作用域里的帖子 ID、订阅者 ID
 // 都是外部输入，不能直接把原始字符串拼进键名（长度与特殊字符都不可控）。
 func digestScopeHash(scope DigestScope) string {
@@ -161,75 +167,104 @@ func digestScopeHash(scope DigestScope) string {
 	return hex.EncodeToString(sum[:12])
 }
 
-// Accumulate 实现 DigestStore：在窗口内累计一次互动。
+// Apply 实现 DigestStore：在窗口内累计一次互动事件，并按事件 ID 去重。
 //
-// 步骤：先拿窗口（可能开卡）→ HINCRBY 计数 → 写卡片状态 → 追加互动者。
-// 开卡与计数都是原子的，因此并发互动既不会重复开卡，也不会丢计数。
-func (s *RedisDigestStore) Accumulate(scope DigestScope, actor string, channel domain.Channel, now time.Time, window time.Duration) (DigestCard, bool, error) {
-	if window <= 0 {
-		return DigestCard{}, false, fmt.Errorf("聚合窗口必须为正，实际为 %s", window)
-	}
-	if strings.TrimSpace(scope.Key) == "" {
-		return DigestCard{}, false, errors.New("聚合键为空，无法聚合")
+// 步骤：先拿窗口（可能开卡）→ SADD 事件 ID 判重 → HINCRBY 计数 → 写卡片状态
+// → 追加互动者。SADD 的返回值就是「本次是否首次」的权威判定，两个副本并发
+// 重投同一事件时只有一个能拿到 1，因此计数不会翻倍。
+func (s *RedisDigestStore) Apply(event DigestEvent) (DigestCard, DigestOutcome, error) {
+	if err := event.validate(); err != nil {
+		return DigestCard{}, DigestOutcome{}, err
 	}
 	if s == nil || s.client == nil {
-		return DigestCard{}, false, errors.New("Redis 聚合存储未初始化")
+		return DigestCard{}, DigestOutcome{}, errors.New("Redis 聚合存储未初始化")
 	}
 
 	ctx := context.Background()
-	win, opened, err := s.openWindow(ctx, scope, now, window)
+	win, opened, err := s.openWindow(ctx, event.Scope, event.Now, event.Window)
 	if err != nil {
-		return DigestCard{}, false, err
+		return DigestCard{}, DigestOutcome{}, err
+	}
+
+	ttl := event.Window + digestCardTTLSlack
+	if eventID := strings.TrimSpace(event.EventID); eventID != "" {
+		eventsKey := s.eventsKey(win.entryID)
+		added, err := s.client.SAdd(ctx, eventsKey, eventID).Result()
+		if err != nil {
+			return DigestCard{}, DigestOutcome{}, fmt.Errorf("写入聚合事件去重集合失败: %w", err)
+		}
+		if err := s.client.Expire(ctx, eventsKey, ttl).Err(); err != nil {
+			return DigestCard{}, DigestOutcome{}, fmt.Errorf("设置聚合事件去重集合过期时间失败: %w", err)
+		}
+		if added == 0 {
+			// 重放：计数与互动者都已在首次执行时写过，这里只回读当前状态。
+			card, err := s.readCard(ctx, win, event.Scope)
+			if err != nil {
+				return DigestCard{}, DigestOutcome{}, err
+			}
+			return card, DigestOutcome{Opened: opened, Replayed: true}, nil
+		}
 	}
 
 	cardKey := s.cardKey(win.entryID)
 	count, err := s.client.HIncrBy(ctx, cardKey, "count", 1).Result()
 	if err != nil {
-		return DigestCard{}, false, fmt.Errorf("累加聚合计数失败: %w", err)
+		return DigestCard{}, DigestOutcome{}, fmt.Errorf("累加聚合计数失败: %w", err)
 	}
 
-	ttl := window + digestCardTTLSlack
 	fields := map[string]any{
-		"last_at":    now.UTC().Format(time.RFC3339Nano),
-		"key":        scope.Key,
-		"workflow":   scope.Workflow,
-		"subscriber": scope.Subscriber,
-		"step":       scope.StepID,
+		"last_at":    event.Now.UTC().Format(time.RFC3339Nano),
+		"key":        event.Scope.Key,
+		"workflow":   event.Scope.Workflow,
+		"subscriber": event.Scope.Subscriber,
+		"step":       event.Scope.StepID,
 		"expires_at": win.expiresAt.UTC().Format(time.RFC3339Nano),
 	}
-	if channel != "" {
-		fields["channel"] = string(channel)
+	if event.Channel != "" {
+		fields["channel"] = string(event.Channel)
 	}
 	if err := s.client.HSet(ctx, cardKey, fields).Err(); err != nil {
-		return DigestCard{}, false, fmt.Errorf("写入聚合卡片状态失败: %w", err)
+		return DigestCard{}, DigestOutcome{}, fmt.Errorf("写入聚合卡片状态失败: %w", err)
 	}
 	if err := s.client.Expire(ctx, cardKey, ttl).Err(); err != nil {
-		return DigestCard{}, false, fmt.Errorf("设置聚合卡片过期时间失败: %w", err)
+		return DigestCard{}, DigestOutcome{}, fmt.Errorf("设置聚合卡片过期时间失败: %w", err)
 	}
 
 	actorsKey := s.actorsKey(win.entryID)
-	actor = strings.TrimSpace(actor)
+	actor := strings.TrimSpace(event.Actor)
 	if actor != "" {
 		if err := s.appendActor(ctx, actorsKey, actor, ttl); err != nil {
-			return DigestCard{}, false, err
+			return DigestCard{}, DigestOutcome{}, err
 		}
 	}
 	actors, err := s.client.LRange(ctx, actorsKey, 0, -1).Result()
 	if err != nil {
-		return DigestCard{}, false, fmt.Errorf("读取聚合卡片互动者失败: %w", err)
+		return DigestCard{}, DigestOutcome{}, fmt.Errorf("读取聚合卡片互动者失败: %w", err)
 	}
 
 	card := DigestCard{
-		Scope:     scope,
+		Scope:     event.Scope,
 		EntryID:   win.entryID,
 		Count:     int(count),
 		Actors:    actors,
-		Channel:   channel,
+		Channel:   event.Channel,
 		OpenedAt:  win.openedAt,
-		LastAt:    now,
+		LastAt:    event.Now,
 		ExpiresAt: win.expiresAt,
 	}
-	return card, opened, nil
+	return card, DigestOutcome{Opened: opened}, nil
+}
+
+// Accumulate 实现 DigestStore：不带事件 ID 的累计（不去重）。
+func (s *RedisDigestStore) Accumulate(scope DigestScope, actor string, channel domain.Channel, now time.Time, window time.Duration) (DigestCard, bool, error) {
+	card, outcome, err := s.Apply(DigestEvent{
+		Scope:   scope,
+		Actor:   actor,
+		Channel: channel,
+		Now:     now,
+		Window:  window,
+	})
+	return card, outcome.Opened, err
 }
 
 // openWindow 取得当前窗口；窗口不存在或已越过到期时刻时开一张新卡。
@@ -339,11 +374,19 @@ func (s *RedisDigestStore) Snapshot(scope DigestScope, now time.Time) (DigestCar
 	if err != nil || !now.Before(win.expiresAt) {
 		return DigestCard{}, false
 	}
+	card, err := s.readCard(ctx, win, scope)
+	if err != nil {
+		return DigestCard{}, false
+	}
+	return card, true
+}
 
+// readCard 按窗口身份回读卡片当前状态（计数、互动者、渠道、最近互动时刻）。
+func (s *RedisDigestStore) readCard(ctx context.Context, win digestWindow, scope DigestScope) (DigestCard, error) {
 	cardKey := s.cardKey(win.entryID)
 	count, err := s.client.HGet(ctx, cardKey, "count").Int()
 	if err != nil && !errors.Is(err, redis.Nil) {
-		return DigestCard{}, false
+		return DigestCard{}, fmt.Errorf("读取聚合计数失败: %w", err)
 	}
 
 	card := DigestCard{
@@ -365,5 +408,5 @@ func (s *RedisDigestStore) Snapshot(scope DigestScope, now time.Time) (DigestCar
 			card.LastAt = t
 		}
 	}
-	return card, true
+	return card, nil
 }

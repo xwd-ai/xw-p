@@ -199,3 +199,186 @@ def test_inbox_skips_corrupted_engine_line(client, monkeypatch, tmp_path):
 
     data = client.get("/v1/inbox", params={"subscriberId": "u1"}).json()
     assert "e1" in [i["trigger_id"] for i in data["items"]]
+
+# ---------------------------------------------------------------------------
+# 聚合卡片：同一张卡在窗口内被原地改写，未读计数按消息条数联动
+# ---------------------------------------------------------------------------
+
+
+class _ListStorage:
+    """只用于本组测试的最小存储桩：隔离掉其他用例写入的投递记录。"""
+
+    def __init__(self, records=None):
+        self.records = list(records or [])
+
+    def save(self, record):
+        self.records.append(record)
+
+    def read_all(self):
+        return list(self.records)
+
+
+def _digest_entry(
+    message_id="digest-abc",
+    trigger_id="t1",
+    subscriber="u1",
+    count=3,
+    created_at=None,
+    updated_at=None,
+):
+    created = created_at or datetime.now(timezone.utc)
+    return {
+        "id": message_id,
+        "trigger_id": trigger_id,
+        "subscriber_id": subscriber,
+        "workflow": "post_liked",
+        "step_id": "dg1",
+        "title": "互动汇总",
+        "body": f"你的帖子 P1001 累计 {count} 条互动",
+        "created_at": created.isoformat(),
+        "updated_at": (updated_at or created).isoformat(),
+        "read": False,
+    }
+
+
+def test_digest_card_merges_with_delivery_record(client, monkeypatch, tmp_path):
+    """聚合卡片与同一次触发的投递记录只出现一条，未读不重复累加。"""
+    import app.inbox as inbox_mod
+
+    path = tmp_path / "inbox.jsonl"
+    _write_engine_inbox(path, [_digest_entry(trigger_id="t1", count=5)])
+    monkeypatch.setattr(inbox_mod, "_INBOX_FILE", path)
+    # 同一次触发既写进了引擎收件箱，也留下了 in_app 投递记录
+    monkeypatch.setattr(
+        inbox_mod,
+        "get_storage",
+        lambda: _ListStorage([_record(trigger_id="t1", channels=["in_app"])]),
+    )
+
+    data = client.get("/v1/inbox", params={"subscriberId": "u1"}).json()
+    assert data["total"] == 1
+    assert data["unread"] == 1
+    assert data["items"][0]["message_id"] == "digest-abc"
+    assert "累计 5 条互动" in data["items"][0]["body"]
+
+
+def test_digest_card_update_marks_again_unread(client, monkeypatch, tmp_path):
+    """已读的聚合卡片被新互动顶起来后应重新算未读，且仍是同一条消息。"""
+    import app.inbox as inbox_mod
+
+    path = tmp_path / "inbox.jsonl"
+    now = datetime.now(timezone.utc)
+    _write_engine_inbox(
+        path,
+        [
+            _digest_entry(
+                trigger_id="t1", count=2,
+                created_at=now - timedelta(minutes=5),
+                updated_at=now - timedelta(minutes=5),
+            )
+        ],
+    )
+    monkeypatch.setattr(inbox_mod, "_INBOX_FILE", path)
+    monkeypatch.setattr(inbox_mod, "get_storage", lambda: _ListStorage())
+
+    first = client.get("/v1/inbox", params={"subscriberId": "u1"}).json()
+    assert first["unread"] == 1
+
+    read = client.post(
+        "/v1/inbox/read", json={"subscriberId": "u1", "messageIds": ["digest-abc"]}
+    ).json()
+    assert read["marked"] == 1
+    assert read["unread"] == 0
+
+    # 窗口内又来互动：卡片原地改写，更新时间晚于已读时刻
+    _write_engine_inbox(
+        path,
+        [
+            _digest_entry(
+                trigger_id="t3", count=4,
+                created_at=now - timedelta(minutes=5),
+                updated_at=now + timedelta(seconds=30),
+            )
+        ],
+    )
+
+    after = client.get("/v1/inbox", params={"subscriberId": "u1"}).json()
+    assert after["total"] == 1
+    assert after["unread"] == 1, "卡片被更新后应重新回到未读"
+    assert after["items"][0]["message_id"] == "digest-abc"
+    assert after["items"][0]["trigger_id"] == "t3"
+    assert "累计 4 条互动" in after["items"][0]["body"]
+
+
+def test_read_state_compares_read_time_with_update(tmp_path):
+    """已读时刻早于卡片更新时间就算未读；同一内容重复标记不重复计数。"""
+    from app.inbox import ReadStateStore
+
+    store = ReadStateStore(tmp_path / "read_state.jsonl")
+    now = datetime.now(timezone.utc)
+    past = now - timedelta(minutes=5)
+
+    # 没有更新时间的消息：标记过就算已读；同一内容重复标记幂等
+    assert store.mark_read("u1", "m-plain") is True
+    assert store.is_read("u1", "m-plain", None) is True
+    assert store.mark_read("u1", "m-plain") is False
+
+    # 已读后被新互动改写（更新时间晚于已读时刻）→ 重新算未读
+    assert store.mark_read("u1", "m-card") is True
+    assert store.is_read("u1", "m-card", past) is True
+    assert store.is_read("u1", "m-card", now + timedelta(minutes=1)) is False
+
+    # 落盘可回放：新实例读到同样的已读时刻
+    reopened = ReadStateStore(tmp_path / "read_state.jsonl")
+    assert reopened.is_read("u1", "m-card", past) is True
+    assert reopened.is_read("u1", "m-card", now + timedelta(minutes=1)) is False
+
+
+def test_read_state_loads_legacy_trigger_records(tmp_path):
+    """旧格式（trigger_id、无时刻）记录仍被认作已读，不会让历史消息复活。"""
+    from app.inbox import ReadStateStore
+
+    path = tmp_path / "read_state.jsonl"
+    path.write_text(
+        json.dumps({"subscriber_id": "u1", "trigger_id": "old-trigger"}) + "\n",
+        encoding="utf-8",
+    )
+    store = ReadStateStore(path)
+    assert store.is_legacy_read("u1", "old-trigger") is True
+    assert store.is_legacy_read("u1", "other") is False
+    assert store.is_read("u1", "digest-abc", None) is False
+
+
+def test_inbox_unread_counts_messages_not_updates(client, monkeypatch, tmp_path):
+    """两张卡片 + 一条普通站内信：未读按条数算，与互动次数无关。"""
+    import app.inbox as inbox_mod
+
+    path = tmp_path / "inbox.jsonl"
+    now = datetime.now(timezone.utc)
+    plain = _engine_entry("e1")
+    plain["created_at"] = (now - timedelta(minutes=3)).isoformat()
+    _write_engine_inbox(
+        path,
+        [
+            _digest_entry(
+                message_id="digest-p1", trigger_id="t9", count=42,
+                created_at=now - timedelta(minutes=9), updated_at=now,
+            ),
+            _digest_entry(
+                message_id="digest-p2", trigger_id="t8", count=7,
+                created_at=now - timedelta(minutes=8), updated_at=now - timedelta(minutes=1),
+            ),
+            plain,
+        ],
+    )
+    monkeypatch.setattr(inbox_mod, "_INBOX_FILE", path)
+    monkeypatch.setattr(inbox_mod, "get_storage", lambda: _ListStorage())
+
+    data = client.get("/v1/inbox", params={"subscriberId": "u1"}).json()
+    assert data["unread"] == 3
+    # 按最近更新时间倒序：刚被顶起来的卡片在最前
+    assert [i["message_id"] for i in data["items"]] == [
+        "digest-p1",
+        "digest-p2",
+        "e1:s1",
+    ]

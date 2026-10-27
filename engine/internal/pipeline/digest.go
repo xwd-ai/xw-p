@@ -43,6 +43,10 @@ const (
 	maxDigestWindow = 24 * time.Hour
 	// maxDigestActors 是卡片上保留的互动者数量上限（只保留前几位用于展示）。
 	maxDigestActors = 5
+	// maxDigestTrackedEvents 是单张卡片记录的事件 ID 数量上限。
+	// 去重集合只服务于「重放不重复计数」，超出上限后不再记录新事件
+	// （内存实现），避免热门帖子把进程内存吃满。
+	maxDigestTrackedEvents = 4096
 )
 
 // 卡片默认文案：工作流可通过 config.title / config.template 覆盖。
@@ -247,6 +251,43 @@ func (c DigestCard) clone() DigestCard {
 	return out
 }
 
+// DigestEvent 是一次待累计的互动事件。
+type DigestEvent struct {
+	// Scope 是卡片身份（工作流 + 订阅者 + 步骤 + 聚合键）。
+	Scope DigestScope
+	// EventID 是事件的幂等键（引擎用 trigger_id）。
+	// 同一张卡片内重复出现的事件 ID 视为重放，不再累加计数；为空表示不去重。
+	EventID string
+	// Actor 是互动者（用于卡片文案展示，可空）。
+	Actor string
+	// Channel 是卡片投递渠道。
+	Channel domain.Channel
+	// Now 是本次互动的时刻。
+	Now time.Time
+	// Window 是聚合窗口长度。
+	Window time.Duration
+}
+
+// validate 校验事件的基本约束。
+func (e DigestEvent) validate() error {
+	if e.Window <= 0 {
+		return fmt.Errorf("聚合窗口必须为正，实际为 %s", e.Window)
+	}
+	if strings.TrimSpace(e.Scope.Key) == "" {
+		return errors.New("聚合键为空，无法聚合")
+	}
+	return nil
+}
+
+// DigestOutcome 描述一次累计的性质。
+type DigestOutcome struct {
+	// Opened 表示本次开了新卡（窗口内首次互动，或上一个窗口已过期）。
+	Opened bool
+	// Replayed 表示本次事件在窗口内已累计过（队列重投、进程重启续跑等），
+	// 计数没有增加，返回的是卡片当前状态。
+	Replayed bool
+}
+
 // DigestStore 是聚合卡片存储接口。
 //
 // 两个实现：
@@ -256,8 +297,12 @@ func (c DigestCard) clone() DigestCard {
 // 接口刻意保持「一次调用完成累计并返回快照」的语义，计数与开卡判定由存储层
 // 用原子操作一次做完，避免调用方分两步读改写而留下竞态窗口。
 type DigestStore interface {
-	// Accumulate 在窗口内累计一次互动。
-	// opened=true 表示本次开了新卡（窗口内首次或窗口已过期）。
+	// Apply 在窗口内累计一次互动事件，并按 EventID 做重放去重。
+	//
+	// 重放判定与累加必须是同一次原子操作：先查去重集合再累加的两步写法，
+	// 在并发重投下两个副本会同时通过检查，计数照样翻倍。
+	Apply(event DigestEvent) (DigestCard, DigestOutcome, error)
+	// Accumulate 是不带事件 ID 的简写：不做去重，每调一次计数 +1。
 	Accumulate(scope DigestScope, actor string, channel domain.Channel, now time.Time, window time.Duration) (DigestCard, bool, error)
 	// Snapshot 读取卡片当前状态（不改变计数）；不存在或已过期时 ok=false。
 	Snapshot(scope DigestScope, now time.Time) (DigestCard, bool)
@@ -267,53 +312,104 @@ type DigestStore interface {
 type MemoryDigestStore struct {
 	mu    sync.Mutex
 	cards map[string]*DigestCard
+	// events 按卡片条目 ID 记录已累计的事件 ID，用于重放去重。
+	// 卡片换新（窗口过期）时旧的集合一并丢弃，不去维护跨窗口的历史。
+	events map[string]map[string]struct{}
 }
 
 // NewMemoryDigestStore 创建空的内存卡片存储。
 func NewMemoryDigestStore() *MemoryDigestStore {
-	return &MemoryDigestStore{cards: make(map[string]*DigestCard)}
+	return &MemoryDigestStore{
+		cards:  make(map[string]*DigestCard),
+		events: make(map[string]map[string]struct{}),
+	}
 }
 
-// Accumulate 实现 DigestStore：命中未过期卡片则累加，否则开新卡。
+// Apply 实现 DigestStore：命中未过期卡片则累加，否则开新卡。
 //
-// 整个判定 + 累加在同一把锁内完成，同一篇帖子的并发互动不会重复开卡，
-// 也不会丢计数。
-func (s *MemoryDigestStore) Accumulate(scope DigestScope, actor string, channel domain.Channel, now time.Time, window time.Duration) (DigestCard, bool, error) {
-	if window <= 0 {
-		return DigestCard{}, false, fmt.Errorf("聚合窗口必须为正，实际为 %s", window)
-	}
-	if strings.TrimSpace(scope.Key) == "" {
-		return DigestCard{}, false, errors.New("聚合键为空，无法聚合")
+// 整个「重放判定 + 累加」在同一把锁内完成，同一篇帖子的并发互动不会重复开卡，
+// 也不会因为队列重投把同一次点赞记两遍。
+func (s *MemoryDigestStore) Apply(event DigestEvent) (DigestCard, DigestOutcome, error) {
+	if err := event.validate(); err != nil {
+		return DigestCard{}, DigestOutcome{}, err
 	}
 
-	id := scope.ID()
+	id := event.Scope.ID()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	card, ok := s.cards[id]
 	// 命中条件：卡片存在且窗口未过期。过期即重新开卡（固定窗口语义）。
-	if ok && now.Before(card.ExpiresAt) {
-		card.Count++
-		card.LastAt = now
-		if channel != "" {
-			card.Channel = channel
+	if card, ok := s.cards[id]; ok && event.Now.Before(card.ExpiresAt) {
+		if s.alreadyApplied(card.EntryID, event.EventID) {
+			return card.clone(), DigestOutcome{Replayed: true}, nil
 		}
-		card.Actors = appendActor(card.Actors, actor, maxDigestActors)
-		return card.clone(), false, nil
+		card.Count++
+		card.LastAt = event.Now
+		if event.Channel != "" {
+			card.Channel = event.Channel
+		}
+		card.Actors = appendActor(card.Actors, event.Actor, maxDigestActors)
+		s.trackEvent(card.EntryID, event.EventID)
+		return card.clone(), DigestOutcome{}, nil
+	}
+
+	// 窗口过期：丢弃旧卡的去重集合，避免按条目 ID 记录的事件集合无限增长。
+	if old, ok := s.cards[id]; ok {
+		delete(s.events, old.EntryID)
 	}
 
 	opened := &DigestCard{
-		Scope:     scope,
-		EntryID:   digestEntryID(scope, now),
+		Scope:     event.Scope,
+		EntryID:   digestEntryID(event.Scope, event.Now),
 		Count:     1,
-		Channel:   channel,
-		OpenedAt:  now,
-		LastAt:    now,
-		ExpiresAt: now.Add(window),
+		Channel:   event.Channel,
+		OpenedAt:  event.Now,
+		LastAt:    event.Now,
+		ExpiresAt: event.Now.Add(event.Window),
 	}
-	opened.Actors = appendActor(nil, actor, maxDigestActors)
+	opened.Actors = appendActor(nil, event.Actor, maxDigestActors)
 	s.cards[id] = opened
-	return opened.clone(), true, nil
+	s.trackEvent(opened.EntryID, event.EventID)
+	return opened.clone(), DigestOutcome{Opened: true}, nil
+}
+
+// Accumulate 实现 DigestStore：不带事件 ID 的累计（不去重）。
+func (s *MemoryDigestStore) Accumulate(scope DigestScope, actor string, channel domain.Channel, now time.Time, window time.Duration) (DigestCard, bool, error) {
+	card, outcome, err := s.Apply(DigestEvent{
+		Scope:   scope,
+		Actor:   actor,
+		Channel: channel,
+		Now:     now,
+		Window:  window,
+	})
+	return card, outcome.Opened, err
+}
+
+// alreadyApplied 判断事件是否已计入该卡片；调用方需持有锁。
+func (s *MemoryDigestStore) alreadyApplied(entryID, eventID string) bool {
+	if strings.TrimSpace(eventID) == "" {
+		return false
+	}
+	_, ok := s.events[entryID][eventID]
+	return ok
+}
+
+// trackEvent 记录事件 ID；调用方需持有锁。
+func (s *MemoryDigestStore) trackEvent(entryID, eventID string) {
+	eventID = strings.TrimSpace(eventID)
+	if eventID == "" || entryID == "" {
+		return
+	}
+	seen, ok := s.events[entryID]
+	if !ok {
+		seen = make(map[string]struct{})
+		s.events[entryID] = seen
+	}
+	if len(seen) >= maxDigestTrackedEvents {
+		// 超上限后不再记录：重放保护降级为尽力而为，计数正确性不受影响。
+		return
+	}
+	seen[eventID] = struct{}{}
 }
 
 // Snapshot 实现 DigestStore：返回未过期卡片的副本。
@@ -430,10 +526,39 @@ func (p *Pipeline) handleDigest(ctx *Context, step domain.Step) StepResult {
 		return res
 	}
 
-	card, opened, err := store.Accumulate(scope, p.resolveDigestField(ctx, spec.ActorField), spec.Channel, at, spec.Window)
+	card, outcome, err := store.Apply(DigestEvent{
+		Scope:   scope,
+		EventID: ctx.Msg.TriggerID,
+		Actor:   p.resolveDigestField(ctx, spec.ActorField),
+		Channel: spec.Channel,
+		Now:     at,
+		Window:  spec.Window,
+	})
 	if err != nil {
 		res.Error = "聚合失败: " + err.Error()
 		ctx.Results[step.ID] = res
+		return res
+	}
+
+	// 重放（队列重投、崩溃续跑）：这次互动在窗口内已经计过数，只把当前累计
+	// 结果回填给上游，不重复投递——重复发一条邮件比少发一条卡片糟得多。
+	// 代价是首次执行若在落卡前崩溃，这条卡片要等下一条互动或下一个窗口补上；
+	// 收件箱卡片本身按条目 ID 幂等写入，不依赖这条路径自愈。
+	if outcome.Replayed {
+		res.AggregateKey = card.Scope.Key
+		res.AggregateCount = card.Count
+		res.AggregateReplayed = true
+		res.AggregateExpiresAt = card.ExpiresAt
+		ctx.Results[step.ID] = res
+		p.logger.Info("[digest] 事件已计入当前卡片，重放跳过重复累计与投递",
+			"workflow", scope.Workflow,
+			"subscriberId", scope.Subscriber,
+			"stepId", step.ID,
+			"key", key,
+			"count", card.Count,
+			"eventId", ctx.Msg.TriggerID,
+			"entryId", card.EntryID,
+		)
 		return res
 	}
 
@@ -442,7 +567,7 @@ func (p *Pipeline) handleDigest(ctx *Context, step domain.Step) StepResult {
 	ctx.Variables["digest.count"] = card.Count
 	ctx.Variables["digest.actor"] = lastActor(card.Actors)
 	ctx.Variables["digest.actors"] = strings.Join(card.Actors, "、")
-	ctx.Variables["digest.opened"] = opened
+	ctx.Variables["digest.opened"] = outcome.Opened
 
 	title, err := p.renderText(ctx, spec.Title)
 	if err != nil {
@@ -465,10 +590,10 @@ func (p *Pipeline) handleDigest(ctx *Context, step domain.Step) StepResult {
 	res.Rendered = body
 	res.AggregateKey = key
 	res.AggregateCount = card.Count
-	res.AggregateOpened = opened
+	res.AggregateOpened = outcome.Opened
 	res.AggregateExpiresAt = card.ExpiresAt
 
-	if sent, err := p.deliverDigest(ctx, step, spec, card, opened, title, body); err != nil {
+	if sent, err := p.deliverDigest(ctx, step, spec, card, outcome.Opened, title, body); err != nil {
 		res.Error = err.Error()
 		ctx.Results[step.ID] = res
 		return res
@@ -485,7 +610,7 @@ func (p *Pipeline) handleDigest(ctx *Context, step domain.Step) StepResult {
 		"stepId", step.ID,
 		"key", key,
 		"count", card.Count,
-		"opened", opened,
+		"opened", outcome.Opened,
 		"entryId", card.EntryID,
 		"channel", string(spec.Channel),
 	)
@@ -511,9 +636,12 @@ func (p *Pipeline) deliverDigest(ctx *Context, step domain.Step, spec DigestSpec
 			StepID:       step.ID,
 			Title:        title,
 			Body:         body,
-			// 卡片按最近一次互动时间排序，新互动会把它顶到收件箱顶部。
-			CreatedAt: card.LastAt.UTC(),
-			// 新的互动让卡片重新回到未读（未读计数联动在后续细化）。
+			// 开卡时刻固定不变，窗口内的互动只推进 UpdatedAt：收件箱按更新时间
+			// 排序能把被顶起来的卡片排到前面，同时保留「这张卡是什么时候开的」。
+			CreatedAt: card.OpenedAt.UTC(),
+			UpdatedAt: card.LastAt.UTC(),
+			// 新的互动让卡片重新回到未读：API 侧用「已读时刻 vs 更新时间」
+			// 判定未读，这里写入的 Read 只是引擎侧快照。
 			Read: false,
 		}
 		if opened {

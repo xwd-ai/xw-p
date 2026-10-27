@@ -173,13 +173,13 @@
       return;
     }
     box.innerHTML = list.map(i => `
-      <div class="inbox-item${i.read ? '' : ' unread'}" data-id="${i.trigger_id}">
+      <div class="inbox-item${i.read ? '' : ' unread'}" data-id="${i.message_id || i.trigger_id}">
         <div class="inbox-dot"></div>
         <div class="inbox-body">
           <div class="inbox-title">${i.title || '通知'}</div>
           ${i.body ? `<div class="inbox-text">${i.body}</div>` : ''}
         </div>
-        <div class="inbox-ts">${fmtTs(i.created_at)}</div>
+        <div class="inbox-ts">${fmtTs(i.updated_at || i.created_at)}</div>
       </div>`).join('');
 
     box.querySelectorAll('.inbox-item').forEach(el => {
@@ -187,11 +187,11 @@
     });
   }
 
-  // 标记单条已读
-  function markInboxRead(triggerId) {
-    const item = inboxItems.find(i => i.trigger_id === triggerId);
+  // 标记单条已读（按消息 ID；聚合卡片窗口内多次更新始终是同一条消息）
+  function markInboxRead(messageId) {
+    const item = inboxItems.find(i => (i.message_id || i.trigger_id) === messageId);
     if (!item || item.read) return;
-    apiTrack('/v1/inbox/read', { method: 'POST', body: { subscriberId: INBOX_SUBSCRIBER, triggerIds: [triggerId] } })
+    apiTrack('/v1/inbox/read', { method: 'POST', body: { subscriberId: INBOX_SUBSCRIBER, messageIds: [messageId] } })
       .then(res => {
         item.read = true;
         if (typeof res.unread === 'number') updateInboxBadge(res.unread);
