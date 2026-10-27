@@ -19,21 +19,24 @@ type Pipeline struct {
 // New 创建默认管线（filter → transform → render → dispatch）。
 // logger 为 nil 时使用默认 logger。
 //
-// 默认注册 email / sms / push 三个渠道的 console mock provider；其余渠道
-// （in-app/chat）尚未落地 provider，dispatch 阶段对它们保持 mock 打印。
-// 后续渠道落地时在 NewWithRegistry 中追加注册即可。
+// 默认注册全部五个投递渠道：in_app（写收件箱）、email / sms / push（console
+// mock）、chat（webhook mock）。真实网关在 Phase 3 接入时替换对应实现即可。
 func New(logger *slog.Logger) *Pipeline {
 	registry := DefaultProviderRegistry(logger)
 	return NewWithRegistry(logger, registry)
 }
 
-// DefaultProviderRegistry 构造默认 provider 注册表：email / sms / push 三个
-// 已落地渠道各自注册 console mock 实现。
+// DefaultProviderRegistry 构造默认 provider 注册表：五个投递渠道各自注册实现。
+//
+// in_app 使用默认收件箱存储（JSONL，可由 XW_INBOX_FILE 指定）；
+// 测试或无持久化需求时可改用 NewInAppProvider + MemoryInboxStore 自行组装。
 func DefaultProviderRegistry(logger *slog.Logger) *ProviderRegistry {
 	registry := NewProviderRegistry()
+	registry.Register(NewInAppProvider(logger, DefaultInboxStore(logger)))
 	registry.Register(NewConsoleEmailProvider(logger))
 	registry.Register(NewConsoleSMSProvider(logger))
 	registry.Register(NewConsolePushProvider(logger))
+	registry.Register(NewConsoleChatProvider(logger))
 	return registry
 }
 

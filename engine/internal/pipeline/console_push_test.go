@@ -165,14 +165,15 @@ func TestDispatchPushFailsWithoutToken(t *testing.T) {
 	}
 }
 
-func TestDefaultProviderRegistryCoversSMSAndPush(t *testing.T) {
+func TestDefaultProviderRegistryCoversAllDeliveryChannels(t *testing.T) {
 	r := DefaultProviderRegistry(discardLogger())
-	for _, ch := range []domain.Channel{domain.ChannelEmail, domain.ChannelSMS, domain.ChannelPush} {
+	for _, ch := range domain.DeliveryChannels() {
 		if !r.Has(ch) {
 			t.Errorf("默认注册表应包含 %s", ch)
 		}
 	}
-	if r.Has(domain.ChannelInApp) {
-		t.Error("in-app provider 尚未落地，默认注册表不应包含")
+	// 编排步骤（delay/digest）不是投递渠道，不应有 provider。
+	if r.Has(domain.ChannelDelay) || r.Has(domain.ChannelDigest) {
+		t.Error("编排步骤不应注册 provider")
 	}
 }

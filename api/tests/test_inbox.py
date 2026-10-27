@@ -1,6 +1,7 @@
-"""In-app 收件箱 API 测试：列表过滤、未读计数、已读标记。"""
+"""In-app 收件箱 API 测试：列表过滤、未读计数、已读标记、引擎收件箱合并。"""
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -48,6 +49,8 @@ def client(monkeypatch, tmp_path):
     monkeypatch.setattr(storage_mod, "_storage", _FakeStorage())
     # 隔离已读状态：使用临时文件，避免污染真实 read_state.jsonl
     monkeypatch.setattr(inbox_mod, "_read_store", inbox_mod.ReadStateStore(tmp_path / "read_state.jsonl"))
+    # 隔离引擎收件箱文件：默认不存在，模拟尚未跑过引擎
+    monkeypatch.setattr(inbox_mod, "_INBOX_FILE", tmp_path / "inbox.jsonl")
     return TestClient(app)
 
 
@@ -113,3 +116,86 @@ def test_mark_read_idempotent(client):
 
 def test_mark_read_missing_subscriber_returns_422(client):
     assert client.post("/v1/inbox/read", json={"triggerIds": ["a"]}).status_code == 422
+
+
+def _engine_entry(trigger_id, subscriber="u1", title="你的帖子被点赞了", body="小林 赞了你的帖子 P1001"):
+    return {
+        "id": f"{trigger_id}:s1",
+        "trigger_id": trigger_id,
+        "subscriber_id": subscriber,
+        "workflow": "post_liked",
+        "step_id": "s1",
+        "title": title,
+        "body": body,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "read": False,
+    }
+
+
+def _write_engine_inbox(path, entries):
+    path.write_text(
+        "\n".join(json.dumps(e, ensure_ascii=False) for e in entries) + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_inbox_merges_engine_entries(client, monkeypatch, tmp_path):
+    """引擎 in_app 步骤写入的条目应出现在收件箱，且与投递记录按 trigger_id 去重。"""
+    import app.inbox as inbox_mod
+
+    path = tmp_path / "engine_inbox.jsonl"
+    _write_engine_inbox(
+        path,
+        [
+            _engine_entry("a", title="渲染后的标题", body="渲染后的正文"),
+            _engine_entry("e1"),
+            _engine_entry("e2", subscriber="u2"),
+        ],
+    )
+    monkeypatch.setattr(inbox_mod, "_INBOX_FILE", path)
+
+    data = client.get("/v1/inbox", params={"subscriberId": "u1"}).json()
+    by_id = {i["trigger_id"]: i for i in data["items"]}
+
+    # a 同时存在于引擎文件与投递记录：只保留一份，且使用引擎渲染后的内容
+    assert [i["trigger_id"] for i in data["items"]].count("a") == 1
+    assert by_id["a"]["title"] == "渲染后的标题"
+    assert by_id["a"]["body"] == "渲染后的正文"
+    # 引擎独有条目 e1 出现，u2 的 e2 不出现
+    assert "e1" in by_id and "e2" not in by_id
+    # u1 共 3 条：引擎 e1 + 投递记录 a（去重后仅保留引擎版本）、c
+    assert data["total"] == 3
+    assert data["items"][0]["trigger_id"] == "e1"
+    assert data["unread"] == 3
+
+
+def test_mark_all_read_includes_engine_entries(client, monkeypatch, tmp_path):
+    """「全部已读」应同时覆盖引擎写入的收件箱条目。"""
+    import app.inbox as inbox_mod
+
+    path = tmp_path / "engine_inbox.jsonl"
+    _write_engine_inbox(path, [_engine_entry("e1")])
+    monkeypatch.setattr(inbox_mod, "_INBOX_FILE", path)
+
+    resp = client.post("/v1/inbox/read", json={"subscriberId": "u1"}).json()
+    assert resp["marked"] == 3  # a、c、e1
+    assert resp["unread"] == 0
+
+    inbox = client.get("/v1/inbox", params={"subscriberId": "u1"}).json()
+    by_id = {i["trigger_id"]: i["read"] for i in inbox["items"]}
+    assert by_id["e1"] is True
+
+
+def test_inbox_skips_corrupted_engine_line(client, monkeypatch, tmp_path):
+    """引擎文件中的损坏行应被跳过，不影响其余条目。"""
+    import app.inbox as inbox_mod
+
+    path = tmp_path / "engine_inbox.jsonl"
+    path.write_text(
+        "{不是合法 JSON\n" + json.dumps(_engine_entry("e1"), ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(inbox_mod, "_INBOX_FILE", path)
+
+    data = client.get("/v1/inbox", params={"subscriberId": "u1"}).json()
+    assert "e1" in [i["trigger_id"] for i in data["items"]]

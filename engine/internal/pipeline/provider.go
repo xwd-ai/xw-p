@@ -21,6 +21,8 @@ type Delivery struct {
 	Body string
 	// StepID 是触发该投递的步骤 ID。
 	StepID string
+	// TriggerID 是触发本次投递的事件回执 ID，用于幂等去重与收件箱溯源。
+	TriggerID string
 	// WorkflowName 是触发工作流名（如 post_commented）。
 	WorkflowName string
 	// SubscriberID 是订阅者 ID。
