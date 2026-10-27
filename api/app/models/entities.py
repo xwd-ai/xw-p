@@ -1,6 +1,6 @@
 """核心领域实体定义。
 
-对应 ROADMAP：Workflow / Step / Subscriber / Message / Environment / Channel。
+对应 ROADMAP Phase 1：Workflow / Step / Subscriber / Message / Environment / Channel。
 使用 Pydantic v2 描述实体结构与校验规则；Channel 枚举见 ``channel.py``。
 这些实体是纯领域模型（无持久化逻辑），持久化由 ``db.py`` 的 ORM 模型承担。
 """

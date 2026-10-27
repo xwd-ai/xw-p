@@ -1,6 +1,6 @@
 """SQLAlchemy ORM 模型：核心实体的 Postgres 表结构。
 
-对应 ROADMAP 的建表 DDL。采用 SQLAlchemy 2.0 声明式风格，为后续
+对应 ROADMAP Phase 1 的建表 DDL。采用 SQLAlchemy 2.0 声明式风格，为后续
 Alembic 迁移预留；同时提供一份等价的纯 SQL 迁移脚本（见
 ``scripts/migrations/002_core_entities.sql``）。
 

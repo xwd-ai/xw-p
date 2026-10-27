@@ -1,4 +1,4 @@
-"""工作流模板 CRUD API（ROADMAP）。
+"""工作流模板 CRUD API（ROADMAP Phase 1）。
 
 提供工作流模板的创建/查询/列表/更新/删除端点，接入 ``workflow_store``
 存储层（内存 / Postgres 双后端）。创建与更新时做步骤校验，更新时版本号自增。

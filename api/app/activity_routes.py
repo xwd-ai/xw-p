@@ -1,4 +1,4 @@
-"""活动流查询 API（ROADMAP Phase S）。
+"""活动流查询 API（ROADMAP Phase S / Phase 1）。
 
 提供 ``GET /v1/activity``，从活动日志存储（``activity_log``）读取触发事件，
 返回按时间倒序的活动列表，供前端「活动流」消费。
