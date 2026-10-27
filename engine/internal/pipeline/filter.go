@@ -35,6 +35,11 @@ type filterStage struct {
 
 // NewFilterStage 创建过滤阶段。
 func NewFilterStage() Stage {
+	return newFilterStage()
+}
+
+// newFilterStage 创建过滤阶段并返回具体类型，供管线在编排步骤中复用同一实例。
+func newFilterStage() *filterStage {
 	return &filterStage{vs: newVariableSystem()}
 }
 

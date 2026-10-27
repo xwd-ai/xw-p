@@ -19,6 +19,11 @@ type transformStage struct {
 
 // NewTransformStage 创建变换阶段。
 func NewTransformStage() Stage {
+	return newTransformStage()
+}
+
+// newTransformStage 创建变换阶段并返回具体类型，供管线在编排步骤中复用同一实例。
+func newTransformStage() *transformStage {
 	return &transformStage{vs: newVariableSystem()}
 }
 

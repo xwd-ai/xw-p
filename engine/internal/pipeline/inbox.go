@@ -52,20 +52,33 @@ type InboxEntry struct {
 type InboxStore interface {
 	// Save 写入一条站内信；返回 inserted=false 表示同 ID 条目已存在（幂等）。
 	Save(entry InboxEntry) (inserted bool, err error)
+	// Update 覆盖写入同 ID 条目，用于摘要卡片（digest）原地累加计数；
+	// 返回 updated=false 表示该条目已不存在（需要按新条目重新落库）。
+	Update(entry InboxEntry) (updated bool, err error)
 	// List 返回某订阅者的收件箱条目（按写入顺序）。
 	List(subscriberID string) ([]InboxEntry, error)
+}
+
+// InboxStoreProvider 由「投递即落库」的 provider 实现（当前为 in_app）。
+//
+// digest 步骤需要往收件箱里写聚合卡片、并在窗口内原地改写同一条目，
+// 因此它必须拿到与 in_app provider 完全相同的存储实例；由 provider 主动
+// 暴露存储，避免管线另外 new 一份（两份索引会各自漂移）。
+type InboxStoreProvider interface {
+	InboxStore() InboxStore
 }
 
 // MemoryInboxStore 是进程内收件箱存储，线程安全。
 type MemoryInboxStore struct {
 	mu      sync.Mutex
 	entries []InboxEntry
-	index   map[string]struct{}
+	// index 记录条目 ID → entries 下标，供 Update 原地改写而不打乱写入顺序。
+	index map[string]int
 }
 
 // NewMemoryInboxStore 创建空的内存收件箱。
 func NewMemoryInboxStore() *MemoryInboxStore {
-	return &MemoryInboxStore{index: make(map[string]struct{})}
+	return &MemoryInboxStore{index: make(map[string]int)}
 }
 
 // Save 写入条目；同 ID 已存在时返回 false。
@@ -78,8 +91,23 @@ func (s *MemoryInboxStore) Save(entry InboxEntry) (bool, error) {
 	if _, ok := s.index[entry.ID]; ok {
 		return false, nil
 	}
-	s.index[entry.ID] = struct{}{}
+	s.index[entry.ID] = len(s.entries)
 	s.entries = append(s.entries, entry)
+	return true, nil
+}
+
+// Update 原地覆盖同 ID 条目（摘要卡片累加计数走这条路，不新增条目）。
+func (s *MemoryInboxStore) Update(entry InboxEntry) (bool, error) {
+	if entry.ID == "" {
+		return false, errors.New("收件箱条目缺少 ID")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pos, ok := s.index[entry.ID]
+	if !ok {
+		return false, nil
+	}
+	s.entries[pos] = entry
 	return true, nil
 }
 
@@ -181,6 +209,96 @@ func (s *JSONLInboxStore) Save(entry InboxEntry) (bool, error) {
 	}
 	s.index[entry.ID] = struct{}{}
 	return true, nil
+}
+
+// Update 覆盖写入同 ID 条目：重写整个文件（保留其余行与顺序）。
+//
+// JSONL 是追加写入格式，原地改写需要「全量重写 + 临时文件改名」，
+// 这样即使进程在写一半时被中断，也不会留下半截文件。
+func (s *JSONLInboxStore) Update(entry InboxEntry) (bool, error) {
+	if entry.ID == "" {
+		return false, errors.New("收件箱条目缺少 ID")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.index[entry.ID]; !ok {
+		return false, nil
+	}
+
+	line, err := json.Marshal(entry)
+	if err != nil {
+		return false, err
+	}
+	data, err := os.ReadFile(s.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			delete(s.index, entry.ID)
+			return false, nil
+		}
+		return false, err
+	}
+
+	var buf strings.Builder
+	replaced := false
+	for _, raw := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		var existing InboxEntry
+		if err := json.Unmarshal([]byte(trimmed), &existing); err != nil {
+			// 损坏行原样保留，避免为了改一条卡片丢其它数据。
+			buf.WriteString(trimmed)
+			buf.WriteByte('\n')
+			continue
+		}
+		if existing.ID == entry.ID {
+			buf.Write(line)
+			buf.WriteByte('\n')
+			replaced = true
+			continue
+		}
+		buf.WriteString(trimmed)
+		buf.WriteByte('\n')
+	}
+	if !replaced {
+		delete(s.index, entry.ID)
+		return false, nil
+	}
+	if err := s.writeAtomic(buf.String()); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// writeAtomic 以「同目录临时文件 + rename」的方式整体替换收件箱文件。
+func (s *JSONLInboxStore) writeAtomic(content string) error {
+	dir := filepath.Dir(s.path)
+	if dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	tmp, err := os.CreateTemp(dir, filepath.Base(s.path)+".tmp*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.WriteString(content); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return os.Rename(tmpName, s.path)
 }
 
 // List 读取文件并返回某订阅者的条目。

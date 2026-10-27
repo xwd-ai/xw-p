@@ -78,11 +78,21 @@ func (d *dispatchStage) Apply(ctx *Context, step domain.Step) error {
 }
 
 // recipientFor 按渠道返回收件地址。
+func (d *dispatchStage) recipientFor(ctx *Context, step domain.Step, ch domain.Channel) string {
+	return deliveryRecipient(ctx, step, ch)
+}
+
+// subjectFor 返回消息标题。
+func (d *dispatchStage) subjectFor(ctx *Context, step domain.Step) string {
+	return deliverySubject(ctx, step)
+}
+
+// deliveryRecipient 按渠道解析收件地址（dispatch 与 digest 步骤共用）。
 //
 // in_app 不需要地址（收件人是订阅者本人，由 SubscriberID 标识）；
 // chat 的收件目标是群机器人 webhook，优先取步骤 config 的 webhook，
 // 其次回退环境变量 XW_CHAT_WEBHOOK（便于本地 demo 统一配置）。
-func (d *dispatchStage) recipientFor(ctx *Context, step domain.Step, ch domain.Channel) string {
+func deliveryRecipient(ctx *Context, step domain.Step, ch domain.Channel) string {
 	// 订阅者已解析时优先取订阅者联系方式，否则回退消息契约字段。
 	switch ch {
 	case domain.ChannelEmail:
@@ -110,9 +120,9 @@ func (d *dispatchStage) recipientFor(ctx *Context, step domain.Step, ch domain.C
 	}
 }
 
-// subjectFor 返回消息标题：email 用 subject、push 用 title，二者取其一。
+// deliverySubject 返回消息标题：email 用 subject、push 用 title，二者取其一。
 // 优先步骤 config 的 subject/title 字段，否则回退工作流名。
-func (d *dispatchStage) subjectFor(ctx *Context, step domain.Step) string {
+func deliverySubject(ctx *Context, step domain.Step) string {
 	for _, key := range []string{"subject", "title"} {
 		if s, ok := step.Config[key].(string); ok && s != "" {
 			return s

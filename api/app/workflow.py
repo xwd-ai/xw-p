@@ -29,10 +29,12 @@ def _post_liked_workflow() -> Workflow:
                 type=Channel.DIGEST,
                 name="点赞聚合",
                 config={
-                    # 聚合键：同一篇帖子的点赞合并成一条，避免刷屏
-                    "key": "payload.post_id",
+                    # 聚合键：同一篇帖子的点赞合并成一张卡片，避免刷屏；
+                    # 窗口内的后续点赞在地图上原地累加计数（引擎 digest.go）。
+                    "key": "post_id",
                     "window": "10m",
-                    "template": "{{payload.actor}} 等 {{payload.count}} 人赞了你的帖子",
+                    "title": "你的帖子有新互动",
+                    "template": "{{ digest.actor }} 等 {{ digest.count }} 人赞了你的帖子《{{ payload.post_title }}》",
                 },
             ),
             Step(
@@ -41,7 +43,7 @@ def _post_liked_workflow() -> Workflow:
                 name="站内信",
                 config={
                     "depends_on": ["step-1"],
-                    "template": "{{payload.actor}} 等 {{payload.count}} 人赞了你的帖子《{{payload.post_title}}》",
+                    "template": "{{ payload.actor }} 赞了你的帖子《{{ payload.post_title }}》",
                 },
             ),
             Step(
@@ -50,7 +52,7 @@ def _post_liked_workflow() -> Workflow:
                 name="推送",
                 config={
                     "depends_on": ["step-1"],
-                    "template": "你有 {{payload.count}} 个新点赞",
+                    "template": "{{ payload.actor }} 赞了你的帖子",
                 },
             ),
         ],

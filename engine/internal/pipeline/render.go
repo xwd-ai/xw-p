@@ -24,6 +24,12 @@ type renderStage struct {
 
 // NewRenderStage 创建渲染阶段。
 func NewRenderStage() Stage {
+	return newRenderStage()
+}
+
+// newRenderStage 创建渲染阶段并返回具体类型，供管线在编排步骤中复用同一实例
+// （digest 需要直接调用它的 Render 渲染卡片文案）。
+func newRenderStage() *renderStage {
 	return &renderStage{
 		expr: regexp.MustCompile(`\{\{\s*([^{}]+?)\s*\}\}`),
 		vs:   newVariableSystem(),
@@ -44,7 +50,8 @@ func (r *renderStage) Apply(ctx *Context, step domain.Step) error {
 	}
 
 	// 安全沙箱：渲染前校验模板大小，超大模板直接失败。
-	if err := validateTemplate(tmpl); err != nil {
+	rendered, err := r.Render(ctx, tmpl)
+	if err != nil {
 		ctx.Results[step.ID] = StepResult{
 			StepID:   step.ID,
 			StepType: domain.StepType(step.Type),
@@ -54,11 +61,6 @@ func (r *renderStage) Apply(ctx *Context, step domain.Step) error {
 		return err
 	}
 
-	rendered := r.expr.ReplaceAllStringFunc(tmpl, func(m string) string {
-		inner := strings.TrimSpace(r.expr.FindStringSubmatch(m)[1])
-		return r.eval(ctx, inner, 0)
-	})
-
 	ctx.Results[step.ID] = StepResult{
 		StepID:   step.ID,
 		StepType: domain.StepType(step.Type),
@@ -66,6 +68,25 @@ func (r *renderStage) Apply(ctx *Context, step domain.Step) error {
 		Rendered: rendered,
 	}
 	return nil
+}
+
+// Render 渲染一段模板文本并返回结果。
+//
+// 抽成独立方法供编排步骤复用：digest 步骤需要在聚合计数据算完之后，
+// 用注入的 digest.* 变量渲染卡片标题与正文，但它的产出并不走
+// 「一阶段一结果」的常规流程（否则同一步骤的聚合元数据会被覆盖）。
+func (r *renderStage) Render(ctx *Context, tmpl string) (string, error) {
+	if tmpl == "" {
+		return "", nil
+	}
+	// 安全沙箱：渲染前校验模板大小，超大模板直接失败。
+	if err := validateTemplate(tmpl); err != nil {
+		return "", err
+	}
+	return r.expr.ReplaceAllStringFunc(tmpl, func(m string) string {
+		inner := strings.TrimSpace(r.expr.FindStringSubmatch(m)[1])
+		return r.eval(ctx, inner, 0)
+	}), nil
 }
 
 // eval 求值一个模板表达式：若含空格则视为函数调用，否则视为变量替换。

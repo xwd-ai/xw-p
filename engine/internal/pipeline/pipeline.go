@@ -15,13 +15,22 @@ var errSkipStep = errors.New("pipeline: step skipped by filter or condition")
 // Pipeline 将 filter → transform → render → dispatch 四个阶段串成一条管线，
 // 对工作流的每个投递步骤依次执行。
 //
-// delay 步骤不走这四个阶段：它在步骤序列中把「之后的步骤」整体推迟到
-// 到期时刻，交由 Deferrer 唤醒续跑（见 delay.go）。
+// 两个编排步骤不走这四个阶段：
+//   - delay 在步骤序列中把「之后的步骤」整体推迟到到期时刻，交由 Deferrer 唤醒续跑（见 delay.go）；
+//   - digest 把同一聚合键的多次互动收敛成一张卡片，窗口内原地累加计数（见 digest.go）。
 type Pipeline struct {
 	stages   []Stage
 	deferrer Deferrer
 	// now 提供当前时刻，测试可注入固定时钟。
 	now func() time.Time
+
+	// 以下为编排步骤（digest）复用的阶段与依赖，单独持有引用避免重复构造。
+	logger    *slog.Logger
+	registry  *ProviderRegistry
+	filter    *filterStage
+	transform *transformStage
+	renderer  *renderStage
+	digests   DigestStore
 }
 
 // New 创建默认管线（filter → transform → render → dispatch）。
@@ -56,16 +65,40 @@ func NewWithRegistry(logger *slog.Logger, registry *ProviderRegistry) *Pipeline 
 	if registry == nil {
 		registry = NewProviderRegistry()
 	}
+	filter := newFilterStage()
+	transform := newTransformStage()
+	renderer := newRenderStage()
 	return &Pipeline{
 		stages: []Stage{
-			NewFilterStage(),
+			filter,
 			NewBranchStage(),
-			NewTransformStage(),
-			NewRenderStage(),
+			transform,
+			renderer,
 			NewDispatchStage(logger, registry),
 		},
-		now: time.Now,
+		logger:    logger,
+		registry:  registry,
+		filter:    filter,
+		transform: transform,
+		renderer:  renderer,
+		digests:   NewMemoryDigestStore(),
+		now:       time.Now,
 	}
+}
+
+// WithDigestStore 注入聚合卡片存储（如多引擎实例共享的 Redis 实现），
+// 返回管线自身便于链式装配。传 nil 表示恢复默认内存存储。
+func (p *Pipeline) WithDigestStore(store DigestStore) *Pipeline {
+	if store == nil {
+		store = NewMemoryDigestStore()
+	}
+	p.digests = store
+	return p
+}
+
+// DigestStore 返回当前聚合卡片存储（供外部观测或测试读取卡片状态）。
+func (p *Pipeline) DigestStore() DigestStore {
+	return p.digests
 }
 
 // WithDeferrer 注入延迟续跑任务的提交出口，返回管线自身便于链式装配。
@@ -122,6 +155,18 @@ func (p *Pipeline) RunSteps(ctx *Context, steps []domain.Step) []StepResult {
 			// 成功：剩余步骤已交给调度器，本轮到此为止，避免「以为延迟生效、
 			// 实际立刻发送」。
 			break
+		}
+
+		// digest 步骤：把互动收敛进聚合卡片（窗口内原地累加计数），不进入
+		// filter→transform→render→dispatch 常规四阶段（那会导致同一卡片被
+		// 反复当成新消息投递）。
+		if step.Type == domain.ChannelDigest {
+			res := p.handleDigest(ctx, step)
+			out = append(out, res)
+			if res.Error != "" {
+				shortCircuit = &res
+			}
+			continue
 		}
 
 		if err := p.runStep(ctx, step); err != nil {

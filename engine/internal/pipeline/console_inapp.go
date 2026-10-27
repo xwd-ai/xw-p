@@ -37,6 +37,12 @@ func (p *inAppProvider) Channel() domain.Channel {
 	return domain.ChannelInApp
 }
 
+// InboxStore 暴露该 provider 使用的收件箱存储（实现 InboxStoreProvider），
+// 供 digest 步骤在同一份存储上原地改写聚合卡片。
+func (p *inAppProvider) InboxStore() InboxStore {
+	return p.store
+}
+
 // Send 把一条站内信写入订阅者收件箱。
 //
 // 订阅者 ID 缺失或正文为空时投递失败——站内信没有收件人就没有意义，

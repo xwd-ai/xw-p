@@ -26,6 +26,14 @@ type StepResult struct {
 	Deferred bool
 	// DeferredUntil 是 delay 步骤算出的到期时刻（非 delay 步骤为零值）。
 	DeferredUntil time.Time
+	// AggregateKey 是 digest 步骤命中的聚合键取值（非 digest 步骤为空）。
+	AggregateKey string
+	// AggregateCount 是 digest 卡片当前累计的互动条数。
+	AggregateCount int
+	// AggregateOpened 表示本次 digest 执行开了新卡（窗口内首次互动）。
+	AggregateOpened bool
+	// AggregateExpiresAt 是当前聚合窗口的到期时刻。
+	AggregateExpiresAt time.Time
 	// Error 表示该步骤执行失败的原因。
 	Error string
 }
