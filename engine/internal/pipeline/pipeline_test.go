@@ -35,6 +35,9 @@ func interactionWorkflow() domain.Workflow {
 				ID:   "s3",
 				Type: domain.ChannelDelay,
 				Name: "延迟一步",
+				Config: map[string]any{
+					"seconds": 30,
+				},
 			},
 		},
 	}
@@ -54,9 +57,9 @@ func TestPipelineRendersAndDispatches(t *testing.T) {
 
 	results := p.Run(ctx, interactionWorkflow())
 
-	// 编排步骤 delay 应被跳过，仅 2 个投递步骤
-	if len(results) != 2 {
-		t.Fatalf("投递结果数 = %d, 期望 2", len(results))
+	// 2 个投递步骤 + 1 个 delay 步骤结果（delay 在末尾，无需续跑任务）
+	if len(results) != 3 {
+		t.Fatalf("步骤结果数 = %d, 期望 3", len(results))
 	}
 
 	// email 步骤应渲染成功
@@ -76,6 +79,21 @@ func TestPipelineRendersAndDispatches(t *testing.T) {
 	}
 	if sms.Rendered != "你的帖子 P1001 有新评论" {
 		t.Errorf("sms 渲染 = %q", sms.Rendered)
+	}
+
+	// 末尾的 delay 步骤：时长合法，但没有后续步骤，不产生续跑任务
+	delay := results[2]
+	if delay.StepType != domain.StepTypeDelay {
+		t.Errorf("第三步类型 = %q, 期望 delay", delay.StepType)
+	}
+	if delay.Error != "" {
+		t.Errorf("delay 步骤出错: %s", delay.Error)
+	}
+	if delay.Deferred {
+		t.Errorf("末尾 delay 步骤不应产生续跑任务")
+	}
+	if delay.DeferredUntil.IsZero() {
+		t.Errorf("delay 步骤应算出到期时刻")
 	}
 }
 

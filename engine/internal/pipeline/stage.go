@@ -1,6 +1,10 @@
 package pipeline
 
-import "github.com/cdgjhg/xw-p/engine/internal/domain"
+import (
+	"time"
+
+	"github.com/cdgjhg/xw-p/engine/internal/domain"
+)
 
 // StepResult 记录单个步骤的执行结果。
 type StepResult struct {
@@ -17,6 +21,11 @@ type StepResult struct {
 	Rendered string
 	// Sent 表示该步骤经 provider 成功投递（仅注册了 provider 的渠道有意义）。
 	Sent bool
+	// Deferred 表示该步骤是 delay 步骤且已登记延迟续跑任务，
+	// 之后尚未执行的步骤会在 DeferredUntil 时刻由调度器续跑。
+	Deferred bool
+	// DeferredUntil 是 delay 步骤算出的到期时刻（非 delay 步骤为零值）。
+	DeferredUntil time.Time
 	// Error 表示该步骤执行失败的原因。
 	Error string
 }
