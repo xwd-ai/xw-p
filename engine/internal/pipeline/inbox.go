@@ -139,10 +139,17 @@ func (s *MemoryInboxStore) Len() int {
 //
 // 启动时回放文件把已有条目 ID 载入内存索引，从而在进程内实现幂等去重；
 // 追加写为串行加锁，避免同一引擎多 goroutine 并发投递时写坏行。
+//
+// 索引只记录本进程写入过的条目，但收件箱文件可能是多实例共享的卷：
+// 别的实例新开的聚合卡片在本进程索引里查不到，若直接按「索引未命中」处理，
+// 会在文件里追加出第二张同 ID 的卡片。因此索引未命中时先按文件大小判断
+// 是否被其它进程追加过，变了就重扫一遍再下结论。
 type JSONLInboxStore struct {
 	mu    sync.Mutex
 	path  string
 	index map[string]struct{}
+	// size 是当前索引对应的文件字节数，用于判断文件是否被其它进程改过。
+	size int64
 }
 
 // NewJSONLInboxStore 打开（或创建）JSONL 收件箱文件并载入去重索引。
@@ -159,7 +166,13 @@ func NewJSONLInboxStore(path string) (*JSONLInboxStore, error) {
 }
 
 // loadIndex 回放文件，收集已有条目 ID（跳过损坏行，保证坏数据不阻塞启动）。
+//
+// 重建索引而不是增量合并：Update 走整文件替换，调用方无法判断文件是否被
+// 其它进程重写过，增量合并会把已删除的条目留在索引里。同时记录文件大小，
+// 供 ensureFresh 判断「是否还需要重扫」。
 func (s *JSONLInboxStore) loadIndex() error {
+	s.index = make(map[string]struct{})
+	s.size = 0
 	data, err := os.ReadFile(s.path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -167,6 +180,7 @@ func (s *JSONLInboxStore) loadIndex() error {
 		}
 		return err
 	}
+	s.size = int64(len(data))
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -183,6 +197,25 @@ func (s *JSONLInboxStore) loadIndex() error {
 	return nil
 }
 
+// ensureFresh 在文件被其它进程追加/重写后重建索引；调用方需持有锁。
+func (s *JSONLInboxStore) ensureFresh() error {
+	info, err := os.Stat(s.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			if s.size != 0 {
+				s.index = make(map[string]struct{})
+				s.size = 0
+			}
+			return nil
+		}
+		return err
+	}
+	if info.Size() == s.size {
+		return nil
+	}
+	return s.loadIndex()
+}
+
 // Save 追加写入条目；同 ID 已存在时返回 false 且不落盘。
 func (s *JSONLInboxStore) Save(entry InboxEntry) (bool, error) {
 	if entry.ID == "" {
@@ -190,6 +223,9 @@ func (s *JSONLInboxStore) Save(entry InboxEntry) (bool, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.ensureFresh(); err != nil {
+		return false, err
+	}
 	if _, ok := s.index[entry.ID]; ok {
 		return false, nil
 	}
@@ -212,6 +248,7 @@ func (s *JSONLInboxStore) Save(entry InboxEntry) (bool, error) {
 		return false, err
 	}
 	s.index[entry.ID] = struct{}{}
+	s.size += int64(len(line)) + 1
 	return true, nil
 }
 
@@ -225,6 +262,9 @@ func (s *JSONLInboxStore) Update(entry InboxEntry) (bool, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.ensureFresh(); err != nil {
+		return false, err
+	}
 	if _, ok := s.index[entry.ID]; !ok {
 		return false, nil
 	}
@@ -272,6 +312,7 @@ func (s *JSONLInboxStore) Update(entry InboxEntry) (bool, error) {
 	if err := s.writeAtomic(buf.String()); err != nil {
 		return false, err
 	}
+	s.size = int64(buf.Len())
 	return true, nil
 }
 
