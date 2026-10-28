@@ -119,16 +119,39 @@ func (p *Pipeline) WithClock(now func() time.Time) *Pipeline {
 	return p
 }
 
-// Run 按工作流步骤顺序执行管线；遇到 delay 步骤时提交延迟续跑并返回，
-// 其后的步骤留到到期后由调度器通过 RunSteps 续跑。
+// validationStepID 是工作流校验失败时占位的结果步骤 id：
+// 校验问题属于整个工作流而非某个步骤（例如环），没有可归属的步骤。
+const validationStepID = "__workflow__"
+
+// Run 校验工作流步骤的依赖图，按依赖先后排序后执行管线。
 //
+// 步骤顺序由编排顺序与 depends_on 共同决定：声明了依赖的步骤排在其依赖之后，
+// 未声明依赖的步骤保持原有顺序。校验失败（重复 id、悬空依赖、依赖成环等）时
+// 不执行任何投递，直接返回一条带错误的结果，避免把畸形工作流发出去。
+//
+// 遇到 delay 步骤时提交延迟续跑并返回，其后的步骤留到到期后由调度器续跑。
 // 返回每个已执行步骤的结果，顺序与执行顺序一致。
 func (p *Pipeline) Run(ctx *Context, wf domain.Workflow) []StepResult {
-	return p.RunSteps(ctx, wf.Steps)
+	steps, err := domain.OrderSteps(wf.Steps)
+	if err != nil {
+		p.logger.Warn("[pipeline] 工作流校验失败，放弃本次执行",
+			"workflow", wf.Name,
+			"triggerId", ctx.Msg.TriggerID,
+			"error", err,
+		)
+		return []StepResult{{
+			StepID: validationStepID,
+			Error:  err.Error(),
+		}}
+	}
+	return p.RunSteps(ctx, steps)
 }
 
 // RunSteps 是 Run 的可续跑核心：对给定的步骤序列执行，遇到 delay 步骤即
 // 停止并把剩余步骤登记为延迟续跑任务。
+//
+// 传入的步骤需已通过 domain.ValidateSteps 校验并完成依赖排序（Run 会做这件事）；
+// 续跑路径沿用的是登记时已排好序的剩余步骤，因此这里不再重复校验。
 //
 // 失败短路（fail-fast）：某个投递步骤真实失败（非 filter/条件分支跳过）时，
 // 后续步骤不再执行，而是标记 ShortCircuited 并记录上游失败原因；
