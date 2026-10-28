@@ -26,13 +26,17 @@ type Consumer interface {
 }
 
 // Worker 从消息源消费通知并执行分发。
-// Phase 0：仅打印 mock 发送日志；真正的 provider 分发与落库在后续阶段接入。
 type Worker struct {
 	consumer Consumer
 	timeout  time.Duration
 	logger   *slog.Logger
+	// id 是消费者在池内的序号，仅用于日志区分并发消费者；单实例运行为 0。
+	id int
 	// handle 是单条消息的处理入口，默认指向 Handle；测试用它注入失败场景。
 	handle func([]byte) error
+	// onStart / onFinish 在开始与结束处理一条消息时回调，池子用它统计在途数量。
+	onStart  func()
+	onFinish func()
 }
 
 // New 创建 worker。
@@ -50,11 +54,11 @@ func New(consumer Consumer, timeout time.Duration, logger *slog.Logger) *Worker 
 
 // Run 持续消费直到 ctx 取消。
 func (w *Worker) Run(ctx context.Context) {
-	w.logger.Info("[engine] worker 已启动，开始消费队列")
+	w.logger.Info("[engine] worker 已启动，开始消费队列", "worker", w.id)
 	for {
 		select {
 		case <-ctx.Done():
-			w.logger.Info("[engine] worker 已停止")
+			w.logger.Info("[engine] worker 已停止", "worker", w.id)
 			return
 		default:
 		}
@@ -64,7 +68,7 @@ func (w *Worker) Run(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
-			w.logger.Warn("[engine] 领取消息失败，稍后重试", "error", err)
+			w.logger.Warn("[engine] 领取消息失败，稍后重试", "worker", w.id, "error", err)
 			// 退避，避免消息源不可用时忙循环空转、刷屏日志。
 			// 后续 Phase 会替换为带抖动的指数退避。
 			select {
@@ -82,17 +86,27 @@ func (w *Worker) Run(ctx context.Context) {
 }
 
 // process 处理一条已领取的消息，并在成功（或确认无法处理）后确认。
+//
+// 这里刻意不接收 ctx：消息一旦领取就要处理完，关闭信号只影响「是否继续领取」，
+// 不会把请求半路掐断留下写了一半的收件箱卡片。
 func (w *Worker) process(delivery *queue.Delivery) {
+	if w.onStart != nil {
+		w.onStart()
+	}
+	if w.onFinish != nil {
+		defer w.onFinish()
+	}
 	err := w.handle(delivery.Raw)
 	if err != nil && !errors.Is(err, ErrInvalidMessage) {
 		// 处理失败不确认：消息留在在途记录里，等回收流程重新投递，
 		// 而不是像弹出即删除那样直接消失。
 		w.logger.Warn("[engine] 处理消息失败，保留在途记录等待回收",
-			"deliveryId", delivery.ID, "error", err)
+			"worker", w.id, "deliveryId", delivery.ID, "error", err)
 		return
 	}
 	if err != nil {
-		w.logger.Warn("[engine] 丢弃无法解析的消息", "deliveryId", delivery.ID, "error", err)
+		w.logger.Warn("[engine] 丢弃无法解析的消息",
+			"worker", w.id, "deliveryId", delivery.ID, "error", err)
 	}
 
 	// 用独立上下文确认：关闭信号到达时，已经处理成功的消息不该被重新投递一次。
@@ -100,7 +114,7 @@ func (w *Worker) process(delivery *queue.Delivery) {
 	defer cancel()
 	if ackErr := w.consumer.Ack(ctx, delivery.ID); ackErr != nil {
 		w.logger.Warn("[engine] 确认消息失败，稍后会被重新投递",
-			"deliveryId", delivery.ID, "error", ackErr)
+			"worker", w.id, "deliveryId", delivery.ID, "error", ackErr)
 	}
 }
 

@@ -11,7 +11,7 @@ import (
 	"github.com/cdgjhg/xw-p/engine/internal/worker"
 )
 
-// Config 是引擎运行时配置，默认值与旧版 application.yml 保持一致。
+// Config 是引擎运行时配置，全部由环境变量注入，未配置时使用默认值。
 type Config struct {
 	RedisAddr     string
 	RedisPassword string
@@ -32,6 +32,9 @@ type Config struct {
 	ClaimLease time.Duration
 	// ReclaimInterval 是在途消息回收的扫描间隔，0 表示只做启动时的首轮扫描。
 	ReclaimInterval time.Duration
+	// Workers 是并发消费者数量；ShutdownGrace 是退出时等待在途消息的上限。
+	Workers       int
+	ShutdownGrace time.Duration
 }
 
 // Load 从环境变量读取配置。
@@ -54,7 +57,26 @@ func Load() Config {
 		WorkflowTimeout: envDuration("XW_WORKFLOW_TIMEOUT", 0),
 		ClaimLease:      envDuration("XW_CLAIM_LEASE", queue.DefaultClaimLease),
 		ReclaimInterval: envDuration("XW_RECLAIM_INTERVAL", worker.DefaultReclaimInterval),
+
+		Workers:       envInt("XW_WORKERS", worker.DefaultPoolSize),
+		ShutdownGrace: envDuration("XW_SHUTDOWN_GRACE", worker.DefaultShutdownGrace),
 	}
+}
+
+// WorkersOrDefault 返回生效的并发度：非法值回退默认，并收敛到上限以内。
+func (c Config) WorkersOrDefault() int {
+	if c.Workers <= 0 {
+		return worker.DefaultPoolSize
+	}
+	return worker.NormalizePoolSize(c.Workers)
+}
+
+// ShutdownGraceOrDefault 返回退出等待上限。
+func (c Config) ShutdownGraceOrDefault() time.Duration {
+	if c.ShutdownGrace <= 0 {
+		return worker.DefaultShutdownGrace
+	}
+	return c.ShutdownGrace
 }
 
 // ClaimLeaseOrDefault 返回在途租约；非法值回退默认，避免租约变成 0 导致
