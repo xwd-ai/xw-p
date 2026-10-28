@@ -1,7 +1,8 @@
 // Command engine 是 xw-notify 的通知执行引擎入口。
 //
 // 职责：消费消息队列、执行工作流求值、digest 聚合与 provider 分发。
-// 当前阶段：从 Redis 队列可靠消费（取出即登记在途、处理成功才确认），
+// 当前阶段：从 Redis 队列可靠消费（取出即登记在途、处理成功才确认，
+// 租约过期未确认的消息由回收流程重新入队），
 // 同时运行延迟调度器，按时唤醒 delay 步骤之后的续跑步骤。
 package main
 
@@ -45,6 +46,7 @@ func main() {
 		"queue", cfg.QueueKey,
 		"pollTimeout", cfg.PollTimeoutDuration(),
 		"claimLease", cfg.ClaimLeaseOrDefault(),
+		"reclaimInterval", cfg.ReclaimInterval,
 	)
 
 	// 聚合卡片存储：多实例共享走 Redis，Redis 不可用时回退进程内存
@@ -61,6 +63,19 @@ func main() {
 		defer wg.Done()
 		scheduler.Run(ctx)
 	}()
+
+	// 在途消息回收：启动即扫描一轮，捡回上次崩溃时未确认的消息，
+	// 之后周期扫描同集群其他实例异常退出留下的记录。
+	if cfg.ReclaimInterval > 0 {
+		wg.Add(1)
+		reclaimer := worker.NewReclaimer(consumer, cfg.ReclaimInterval, logger)
+		go func() {
+			defer wg.Done()
+			reclaimer.Run(ctx)
+		}()
+	} else {
+		logger.Info("[engine] 在途消息回收已关闭", "reason", "XW_RECLAIM_INTERVAL<=0")
+	}
 
 	w := worker.New(consumer, cfg.PollTimeoutDuration(), logger)
 	w.Run(ctx)

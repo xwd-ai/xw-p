@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/cdgjhg/xw-p/engine/internal/queue"
+	"github.com/cdgjhg/xw-p/engine/internal/worker"
 )
 
 // Config 是引擎运行时配置，默认值与旧版 application.yml 保持一致。
@@ -29,6 +30,8 @@ type Config struct {
 	// ClaimLease 是消息被取出后的在途租约：超过该时长仍未确认，
 	// 视为领取者已失效，消息会被重新投递。
 	ClaimLease time.Duration
+	// ReclaimInterval 是在途消息回收的扫描间隔，0 表示只做启动时的首轮扫描。
+	ReclaimInterval time.Duration
 }
 
 // Load 从环境变量读取配置。
@@ -50,6 +53,7 @@ func Load() Config {
 		StepTimeout:     envDuration("XW_STEP_TIMEOUT", 0),
 		WorkflowTimeout: envDuration("XW_WORKFLOW_TIMEOUT", 0),
 		ClaimLease:      envDuration("XW_CLAIM_LEASE", queue.DefaultClaimLease),
+		ReclaimInterval: envDuration("XW_RECLAIM_INTERVAL", worker.DefaultReclaimInterval),
 	}
 }
 

@@ -42,7 +42,10 @@ type ReliableConsumer struct {
 	client *redis.Client
 	keys   claimKeys
 	lease  time.Duration
-	now    func() time.Time
+	// grace 是租约到期后的额外宽限，回收阈值取「当前时间 - grace」，
+	// 让逼近租约上限的慢处理不被立刻判死。见 ReclaimExpired。
+	grace time.Duration
+	now   func() time.Time
 }
 
 type claimKeys struct {
@@ -99,6 +102,7 @@ func newReliableConsumer(client *redis.Client, key string, lease time.Duration) 
 		client: client,
 		keys:   claimKeysFor(key),
 		lease:  lease,
+		grace:  lease / 2,
 		now:    time.Now,
 	}
 }
