@@ -1,7 +1,7 @@
 // Command engine 是 xw-notify 的通知执行引擎入口。
 //
 // 职责：消费消息队列、执行工作流求值、digest 聚合与 provider 分发。
-// 当前阶段：从 Redis 队列（LPUSH/BRPOP）消费消息并 mock 发送，
+// 当前阶段：从 Redis 队列可靠消费（取出即登记在途、处理成功才确认），
 // 同时运行延迟调度器，按时唤醒 delay 步骤之后的续跑步骤。
 package main
 
@@ -30,7 +30,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	consumer := queue.NewRedisConsumer(cfg.RedisAddr, cfg.RedisPassword, cfg.RedisDB, cfg.QueueKey)
+	consumer := queue.NewReliableConsumer(cfg.RedisAddr, cfg.RedisPassword, cfg.RedisDB, cfg.QueueKey, cfg.ClaimLeaseOrDefault())
 	defer consumer.Close()
 
 	pingCtx, cancel := context.WithTimeout(ctx, cfg.PollTimeoutDuration())
@@ -44,6 +44,7 @@ func main() {
 		"redis", cfg.RedisAddr,
 		"queue", cfg.QueueKey,
 		"pollTimeout", cfg.PollTimeoutDuration(),
+		"claimLease", cfg.ClaimLeaseOrDefault(),
 	)
 
 	// 聚合卡片存储：多实例共享走 Redis，Redis 不可用时回退进程内存

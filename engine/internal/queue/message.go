@@ -1,7 +1,8 @@
 // Package queue 定义队列消息契约与 Redis 消费实现。
 //
 // 与 Python API 侧（api/app/bus.py）配对：
-// Python 用 LPUSH 入队，本包用 BRPOP 阻塞出队，消息体为 snake_case JSON。
+// Python 用 LPUSH 入队，本包从右侧取出，消息体为 snake_case JSON。
+// 消费走「取出 → 登记在途 → 确认后删除」的可靠语义，见 ReliableConsumer。
 package queue
 
 import (

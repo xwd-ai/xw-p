@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/cdgjhg/xw-p/engine/internal/queue"
 )
 
 // Config 是引擎运行时配置，默认值与旧版 application.yml 保持一致。
@@ -24,6 +26,9 @@ type Config struct {
 	// 为 0 表示沿用管线默认值（连字符串都写不出来时不该悄悄变成「不限时」）。
 	StepTimeout     time.Duration
 	WorkflowTimeout time.Duration
+	// ClaimLease 是消息被取出后的在途租约：超过该时长仍未确认，
+	// 视为领取者已失效，消息会被重新投递。
+	ClaimLease time.Duration
 }
 
 // Load 从环境变量读取配置。
@@ -44,7 +49,17 @@ func Load() Config {
 
 		StepTimeout:     envDuration("XW_STEP_TIMEOUT", 0),
 		WorkflowTimeout: envDuration("XW_WORKFLOW_TIMEOUT", 0),
+		ClaimLease:      envDuration("XW_CLAIM_LEASE", queue.DefaultClaimLease),
 	}
+}
+
+// ClaimLeaseOrDefault 返回在途租约；非法值回退默认，避免租约变成 0 导致
+// 消息刚取出就被判定为失效。
+func (c Config) ClaimLeaseOrDefault() time.Duration {
+	if c.ClaimLease <= 0 {
+		return queue.DefaultClaimLease
+	}
+	return c.ClaimLease
 }
 
 // PollTimeoutDuration 返回阻塞拉取的超时时间。
