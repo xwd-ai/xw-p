@@ -21,6 +21,9 @@ type StepResult struct {
 	TimedOut bool
 	// Rendered 表示 render 阶段产出的内容（如模板渲染后的文本）。
 	Rendered string
+	// RenderedSubject 表示渲染后的标题（email 的 subject / push 与 in_app 的 title）。
+	// 标题同样支持模板变量，否则「《{{ payload.post_title }}》有新评论」会被原样发出。
+	RenderedSubject string
 	// Sent 表示该步骤经 provider 成功投递（仅注册了 provider 的渠道有意义）。
 	Sent bool
 	// Deferred 表示该步骤是 delay 步骤且已登记延迟续跑任务，

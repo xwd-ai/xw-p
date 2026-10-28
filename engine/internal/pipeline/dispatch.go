@@ -89,8 +89,14 @@ func (d *dispatchStage) recipientFor(ctx *Context, step domain.Step, ch domain.C
 	return deliveryRecipient(ctx, step, ch)
 }
 
-// subjectFor 返回消息标题。
+// subjectFor 返回消息标题：优先用 render 阶段渲染好的标题（标题里可能有
+// 帖子名、互动者变量），没有则回退到步骤原始配置。
 func (d *dispatchStage) subjectFor(ctx *Context, step domain.Step) string {
+	if res, ok := ctx.Results[step.ID]; ok {
+		if s := strings.TrimSpace(res.RenderedSubject); s != "" {
+			return s
+		}
+	}
 	return deliverySubject(ctx, step)
 }
 

@@ -36,38 +36,53 @@ func newRenderStage() *renderStage {
 	}
 }
 
-// Apply 渲染当前步骤的模板并写回 Results。
+// Apply 渲染当前步骤的正文模板与标题模板并写回 Results。
+//
+// 标题（email 的 subject、push/in_app 的 title）与正文走同一套变量与内置函数：
+// 社区场景里标题几乎总要带上帖子名或互动者，只渲染正文会让收件箱里堆满
+// 「《{{ payload.post_title }}》有新评论」这种没被替换的占位符。
 func (r *renderStage) Apply(ctx *Context, step domain.Step) error {
+	res := StepResult{
+		StepID:   step.ID,
+		StepType: domain.StepType(step.Type),
+		Channel:  step.Type,
+	}
+
+	subject, err := r.Render(ctx, stepHeaderTemplate(step))
+	if err != nil {
+		res.Error = err.Error()
+		ctx.Results[step.ID] = res
+		return err
+	}
+	res.RenderedSubject = subject
+
 	tmpl, _ := step.Config["template"].(string)
 	if tmpl == "" {
-		// 无模板步骤（如 delay），渲染结果留空。
-		ctx.Results[step.ID] = StepResult{
-			StepID:   step.ID,
-			StepType: domain.StepType(step.Type),
-			Channel:  step.Type,
-		}
+		// 无正文模板的步骤（如 delay）只可能有标题，渲染结果留空。
+		ctx.Results[step.ID] = res
 		return nil
 	}
 
 	// 安全沙箱：渲染前校验模板大小，超大模板直接失败。
 	rendered, err := r.Render(ctx, tmpl)
 	if err != nil {
-		ctx.Results[step.ID] = StepResult{
-			StepID:   step.ID,
-			StepType: domain.StepType(step.Type),
-			Channel:  step.Type,
-			Error:    err.Error(),
-		}
+		res.Error = err.Error()
+		ctx.Results[step.ID] = res
 		return err
 	}
-
-	ctx.Results[step.ID] = StepResult{
-		StepID:   step.ID,
-		StepType: domain.StepType(step.Type),
-		Channel:  step.Type,
-		Rendered: rendered,
-	}
+	res.Rendered = rendered
+	ctx.Results[step.ID] = res
 	return nil
+}
+
+// stepHeaderTemplate 返回步骤声明的标题模板：email 用 subject、push/in_app 用 title。
+func stepHeaderTemplate(step domain.Step) string {
+	for _, key := range []string{"subject", "title"} {
+		if s, ok := step.Config[key].(string); ok && s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 // Render 渲染一段模板文本并返回结果。
