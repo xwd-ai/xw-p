@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cdgjhg/xw-p/engine/internal/domain"
+	"github.com/xwd-ai/xw-p/engine/internal/domain"
 )
 
 // 摘要聚合（digest）步骤：把一连串同类互动收敛成一张卡片。

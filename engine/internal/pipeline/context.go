@@ -20,8 +20,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/cdgjhg/xw-p/engine/internal/domain"
-	"github.com/cdgjhg/xw-p/engine/internal/queue"
+	"github.com/xwd-ai/xw-p/engine/internal/domain"
+	"github.com/xwd-ai/xw-p/engine/internal/queue"
 )
 
 // Context 是一条消息贯穿管线全程的上下文。

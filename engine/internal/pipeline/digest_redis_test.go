@@ -12,7 +12,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 
-	"github.com/cdgjhg/xw-p/engine/internal/domain"
+	"github.com/xwd-ai/xw-p/engine/internal/domain"
 )
 
 // Redis 聚合卡片存储测试：用进程内 Redis（miniredis）验证

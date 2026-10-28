@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/cdgjhg/xw-p/engine/internal/domain"
+	"github.com/xwd-ai/xw-p/engine/internal/domain"
 )
 
 // errSkipStep 是内部哨兵错误，表示该步骤被 filter 阶段或条件分支跳过。

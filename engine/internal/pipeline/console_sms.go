@@ -7,7 +7,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/cdgjhg/xw-p/engine/internal/domain"
+	"github.com/xwd-ai/xw-p/engine/internal/domain"
 )
 
 // SMS 计费分段参数。

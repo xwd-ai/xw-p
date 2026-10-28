@@ -4,7 +4,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/cdgjhg/xw-p/engine/internal/domain"
+	"github.com/xwd-ai/xw-p/engine/internal/domain"
 )
 
 // renderStage 是管线第三阶段：用变量渲染步骤模板。

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cdgjhg/xw-p/engine/internal/domain"
+	"github.com/xwd-ai/xw-p/engine/internal/domain"
 )
 
 // inAppProvider 是 in_app 渠道的站内信实现。

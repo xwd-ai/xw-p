@@ -8,7 +8,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/cdgjhg/xw-p/engine/internal/queue"
+	"github.com/xwd-ai/xw-p/engine/internal/queue"
 )
 
 // ackTimeout 是确认操作自身的超时。确认失败最多让消息被重新投递一次，

@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cdgjhg/xw-p/engine/internal/domain"
-	"github.com/cdgjhg/xw-p/engine/internal/queue"
+	"github.com/xwd-ai/xw-p/engine/internal/domain"
+	"github.com/xwd-ai/xw-p/engine/internal/queue"
 )
 
 // 超时测试：验证单步超时能中断等待、整体预算能拦住后续步骤、

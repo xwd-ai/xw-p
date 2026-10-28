@@ -6,7 +6,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/cdgjhg/xw-p/engine/internal/domain"
+	"github.com/xwd-ai/xw-p/engine/internal/domain"
 )
 
 // StaticSource 是进程内的工作流快照表。

@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/cdgjhg/xw-p/engine/internal/domain"
+	"github.com/xwd-ai/xw-p/engine/internal/domain"
 )
 
 // Delivery 是一条已完成渲染、准备投递的消息投递请求。

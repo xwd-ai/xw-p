@@ -15,9 +15,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/cdgjhg/xw-p/engine/internal/domain"
-	"github.com/cdgjhg/xw-p/engine/internal/pipeline"
-	"github.com/cdgjhg/xw-p/engine/internal/queue"
+	"github.com/xwd-ai/xw-p/engine/internal/domain"
+	"github.com/xwd-ai/xw-p/engine/internal/pipeline"
+	"github.com/xwd-ai/xw-p/engine/internal/queue"
 )
 
 // Source 按名称提供工作流定义，用于消息未携带步骤快照时的回退查找。

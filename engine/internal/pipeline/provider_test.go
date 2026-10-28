@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/cdgjhg/xw-p/engine/internal/domain"
-	"github.com/cdgjhg/xw-p/engine/internal/queue"
+	"github.com/xwd-ai/xw-p/engine/internal/domain"
+	"github.com/xwd-ai/xw-p/engine/internal/queue"
 )
 
 // emailWorkflow 构造一个仅含 email 投递步骤的评论通知工作流。

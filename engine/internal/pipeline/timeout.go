@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cdgjhg/xw-p/engine/internal/domain"
+	"github.com/xwd-ai/xw-p/engine/internal/domain"
 )
 
 // 超时预算是执行链路的兜底：投递渠道一旦卡住（连接不返回、webhook 不应答），

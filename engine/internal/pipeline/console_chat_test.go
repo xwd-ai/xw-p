@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cdgjhg/xw-p/engine/internal/domain"
-	"github.com/cdgjhg/xw-p/engine/internal/queue"
+	"github.com/xwd-ai/xw-p/engine/internal/domain"
+	"github.com/xwd-ai/xw-p/engine/internal/queue"
 )
 
 const testChatWebhook = "https://hooks.slack.com/services/T000/B000/XXXXSECRET"

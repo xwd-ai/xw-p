@@ -1,4 +1,4 @@
-module github.com/cdgjhg/xw-p/engine
+module github.com/xwd-ai/xw-p/engine
 
 go 1.22
 

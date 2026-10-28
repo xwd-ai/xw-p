@@ -3,8 +3,8 @@ package pipeline
 import (
 	"testing"
 
-	"github.com/cdgjhg/xw-p/engine/internal/domain"
-	"github.com/cdgjhg/xw-p/engine/internal/queue"
+	"github.com/xwd-ai/xw-p/engine/internal/domain"
+	"github.com/xwd-ai/xw-p/engine/internal/queue"
 )
 
 // 标题渲染（Phase 2 渲染阶段）：email 的 subject 与 push/in_app 的 title

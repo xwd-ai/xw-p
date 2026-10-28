@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cdgjhg/xw-p/engine/internal/domain"
-	"github.com/cdgjhg/xw-p/engine/internal/queue"
+	"github.com/xwd-ai/xw-p/engine/internal/domain"
+	"github.com/xwd-ai/xw-p/engine/internal/queue"
 )
 
 // 摘要聚合（digest）测试：验证「同一篇帖子的互动合并成一条卡片、窗口内原地

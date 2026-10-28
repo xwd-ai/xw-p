@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cdgjhg/xw-p/engine/internal/queue"
+	"github.com/xwd-ai/xw-p/engine/internal/queue"
 )
 
 // chanConsumer 是并发安全的测试消息源：从 channel 取消息，记录领取与确认情况。

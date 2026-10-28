@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cdgjhg/xw-p/engine/internal/queue"
+	"github.com/xwd-ai/xw-p/engine/internal/queue"
 )
 
 func discardLogger() *slog.Logger {

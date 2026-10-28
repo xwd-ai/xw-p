@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cdgjhg/xw-p/engine/internal/domain"
-	"github.com/cdgjhg/xw-p/engine/internal/queue"
+	"github.com/xwd-ai/xw-p/engine/internal/domain"
+	"github.com/xwd-ai/xw-p/engine/internal/queue"
 )
 
 // maxDelayDuration 是单个 delay 步骤允许的最大延迟时长（30 天）。

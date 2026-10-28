@@ -11,7 +11,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 
-	"github.com/cdgjhg/xw-p/engine/internal/queue"
+	"github.com/xwd-ai/xw-p/engine/internal/queue"
 )
 
 // 可靠性测试：模拟「领到消息 → 处理中途失败 → 进程没确认」的场景，

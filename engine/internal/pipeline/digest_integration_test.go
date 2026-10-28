@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cdgjhg/xw-p/engine/internal/domain"
-	"github.com/cdgjhg/xw-p/engine/internal/queue"
+	"github.com/xwd-ai/xw-p/engine/internal/domain"
+	"github.com/xwd-ai/xw-p/engine/internal/queue"
 )
 
 // 聚合卡片集成测试：从「队列里的原始 JSON」一路走到「收件箱文件里的卡片」。

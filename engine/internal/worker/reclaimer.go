@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/cdgjhg/xw-p/engine/internal/queue"
+	"github.com/xwd-ai/xw-p/engine/internal/queue"
 )
 
 // ReclaimerConsumer 是回收流程需要的最小消息源能力。

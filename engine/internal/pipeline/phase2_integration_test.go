@@ -22,7 +22,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/cdgjhg/xw-p/engine/internal/domain"
+	"github.com/xwd-ai/xw-p/engine/internal/domain"
 )
 
 // recordingProvider 记录收到的投递请求，可配置为固定失败。

@@ -3,7 +3,7 @@ package pipeline
 import (
 	"time"
 
-	"github.com/cdgjhg/xw-p/engine/internal/domain"
+	"github.com/xwd-ai/xw-p/engine/internal/domain"
 )
 
 // transformStage 是管线第二阶段：把 payload 展开为模板变量上下文。

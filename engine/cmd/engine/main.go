@@ -19,12 +19,12 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/cdgjhg/xw-p/engine/internal/config"
-	"github.com/cdgjhg/xw-p/engine/internal/pipeline"
-	"github.com/cdgjhg/xw-p/engine/internal/queue"
-	"github.com/cdgjhg/xw-p/engine/internal/runner"
-	"github.com/cdgjhg/xw-p/engine/internal/schedule"
-	"github.com/cdgjhg/xw-p/engine/internal/worker"
+	"github.com/xwd-ai/xw-p/engine/internal/config"
+	"github.com/xwd-ai/xw-p/engine/internal/pipeline"
+	"github.com/xwd-ai/xw-p/engine/internal/queue"
+	"github.com/xwd-ai/xw-p/engine/internal/runner"
+	"github.com/xwd-ai/xw-p/engine/internal/schedule"
+	"github.com/xwd-ai/xw-p/engine/internal/worker"
 )
 
 func main() {

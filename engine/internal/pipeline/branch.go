@@ -3,7 +3,7 @@ package pipeline
 import (
 	"fmt"
 
-	"github.com/cdgjhg/xw-p/engine/internal/domain"
+	"github.com/xwd-ai/xw-p/engine/internal/domain"
 )
 
 // 条件分支（Phase 2「条件分支与失败短路」）。

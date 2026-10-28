@@ -3,7 +3,7 @@ package pipeline
 import (
 	"time"
 
-	"github.com/cdgjhg/xw-p/engine/internal/domain"
+	"github.com/xwd-ai/xw-p/engine/internal/domain"
 )
 
 // StepResult 记录单个步骤的执行结果。

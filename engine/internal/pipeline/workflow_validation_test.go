@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cdgjhg/xw-p/engine/internal/domain"
-	"github.com/cdgjhg/xw-p/engine/internal/queue"
+	"github.com/xwd-ai/xw-p/engine/internal/domain"
+	"github.com/xwd-ai/xw-p/engine/internal/queue"
 )
 
 // countingPipeline 返回注册了 in_app / push / email 三个计数 provider 的管线，

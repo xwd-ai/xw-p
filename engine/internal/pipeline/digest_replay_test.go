@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cdgjhg/xw-p/engine/internal/domain"
+	"github.com/xwd-ai/xw-p/engine/internal/domain"
 )
 
 // 聚合事件重放测试：队列重投、崩溃续跑都会让同一个事件再走一遍 digest，

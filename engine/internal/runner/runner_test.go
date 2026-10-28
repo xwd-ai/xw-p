@@ -8,9 +8,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/cdgjhg/xw-p/engine/internal/domain"
-	"github.com/cdgjhg/xw-p/engine/internal/pipeline"
-	"github.com/cdgjhg/xw-p/engine/internal/queue"
+	"github.com/xwd-ai/xw-p/engine/internal/domain"
+	"github.com/xwd-ai/xw-p/engine/internal/pipeline"
+	"github.com/xwd-ai/xw-p/engine/internal/queue"
 )
 
 func testLogger() *slog.Logger {

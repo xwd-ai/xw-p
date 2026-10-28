@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cdgjhg/xw-p/engine/internal/queue"
-	"github.com/cdgjhg/xw-p/engine/internal/worker"
+	"github.com/xwd-ai/xw-p/engine/internal/queue"
+	"github.com/xwd-ai/xw-p/engine/internal/worker"
 )
 
 // Config 是引擎运行时配置，全部由环境变量注入，未配置时使用默认值。

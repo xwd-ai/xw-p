@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/cdgjhg/xw-p/engine/internal/domain"
+	"github.com/xwd-ai/xw-p/engine/internal/domain"
 )
 
 // dispatchStage 是管线第四阶段：按步骤绑定渠道分发。

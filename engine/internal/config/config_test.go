@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cdgjhg/xw-p/engine/internal/worker"
+	"github.com/xwd-ai/xw-p/engine/internal/worker"
 )
 
 // 并发度与退出等待的默认值：未配置或非法配置都要落到可用的默认值上，
