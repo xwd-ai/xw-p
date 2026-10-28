@@ -64,7 +64,7 @@ func TestRunRejectsCyclicWorkflow(t *testing.T) {
 		t.Fatalf("校验失败应只返回一条结果，实际 %d 条", len(results))
 	}
 	res := results[0]
-	if res.StepID != validationStepID {
+	if res.StepID != ValidationStepID {
 		t.Errorf("校验结果应挂在占位步骤上，实际 %q", res.StepID)
 	}
 	if !strings.Contains(res.Error, "环") {
@@ -159,7 +159,7 @@ func TestRunRejectsDanglingDependency(t *testing.T) {
 		Payload:      map[string]any{"post_id": "P2003"},
 	}), wf)
 
-	if len(results) != 1 || results[0].StepID != validationStepID {
+	if len(results) != 1 || results[0].StepID != ValidationStepID {
 		t.Fatalf("悬空依赖应整体拒绝执行，实际结果：%+v", results)
 	}
 	if providers[domain.ChannelInApp].Sends() != 0 {

@@ -66,6 +66,71 @@ func TestHandleRejectsInvalidJSON(t *testing.T) {
 	}
 }
 
+// stubExecutor 记录收到的消息，并按配置返回错误。
+type stubExecutor struct {
+	mu   sync.Mutex
+	msgs []queue.QueuedMessage
+	err  error
+}
+
+func (s *stubExecutor) Execute(msg queue.QueuedMessage) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.msgs = append(s.msgs, msg)
+	return s.err
+}
+
+func (s *stubExecutor) received() []queue.QueuedMessage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]queue.QueuedMessage(nil), s.msgs...)
+}
+
+// 注入执行器后，Handle 不再打印 mock 日志，而是把解析好的消息交给执行器。
+func TestHandleDelegatesToExecutor(t *testing.T) {
+	exec := &stubExecutor{}
+	w := New(nil, time.Second, discardLogger()).WithExecutor(exec)
+
+	raw := []byte(`{"trigger_id":"t-1","name":"post_liked","subscriber_id":"creator_1","workflow":{"name":"post_liked","version":2,"steps":[{"id":"step-1","type":"in_app"}]}}`)
+	if err := w.Handle(raw); err != nil {
+		t.Fatalf("Handle 失败: %v", err)
+	}
+	msgs := exec.received()
+	if len(msgs) != 1 {
+		t.Fatalf("执行器应收到 1 条消息，实际 %d", len(msgs))
+	}
+	if msgs[0].Workflow == nil || len(msgs[0].Workflow.Steps) != 1 {
+		t.Errorf("消息应携带步骤快照: %+v", msgs[0].Workflow)
+	}
+}
+
+// 执行器判定消息不可修复时，消费侧应确认丢弃，而不是留在在途记录里反复重投。
+func TestProcessAcksUndeliverableMessage(t *testing.T) {
+	consumer := &fakeConsumer{}
+	exec := &stubExecutor{err: fmt.Errorf("%w: 工作流不存在", queue.ErrUndeliverable)}
+	w := New(consumer, time.Second, discardLogger()).WithExecutor(exec)
+
+	w.process(&queue.Delivery{ID: "d-1", Raw: []byte(`{"trigger_id":"t-1","name":"gone"}`)})
+
+	got := consumer.ackedIDs()
+	if len(got) != 1 || got[0] != "d-1" {
+		t.Errorf("不可投递的消息应被确认，实际 %v", got)
+	}
+}
+
+// 暂时性失败仍然不确认，等待租约回收后重投。
+func TestProcessKeepsTransientFailureInFlight(t *testing.T) {
+	consumer := &fakeConsumer{}
+	exec := &stubExecutor{err: errors.New("Redis 连接超时")}
+	w := New(consumer, time.Second, discardLogger()).WithExecutor(exec)
+
+	w.process(&queue.Delivery{ID: "d-1", Raw: []byte(`{"trigger_id":"t-1"}`)})
+
+	if got := consumer.ackedIDs(); len(got) != 0 {
+		t.Errorf("暂时性失败不应确认，实际 %v", got)
+	}
+}
+
 func TestProcessAcksAfterSuccess(t *testing.T) {
 	consumer := &fakeConsumer{}
 	w := New(consumer, time.Second, discardLogger())

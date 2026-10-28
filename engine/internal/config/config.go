@@ -35,6 +35,9 @@ type Config struct {
 	// Workers 是并发消费者数量；ShutdownGrace 是退出时等待在途消息的上限。
 	Workers       int
 	ShutdownGrace time.Duration
+	// WorkflowsFile 是工作流定义快照文件（JSON 数组）的路径，
+	// 用于给没有携带步骤定义的消息提供按名称回退查找。为空表示不加载。
+	WorkflowsFile string
 }
 
 // Load 从环境变量读取配置。
@@ -60,6 +63,8 @@ func Load() Config {
 
 		Workers:       envInt("XW_WORKERS", worker.DefaultPoolSize),
 		ShutdownGrace: envDuration("XW_SHUTDOWN_GRACE", worker.DefaultShutdownGrace),
+
+		WorkflowsFile: strings.TrimSpace(os.Getenv("XW_WORKFLOWS_FILE")),
 	}
 }
 

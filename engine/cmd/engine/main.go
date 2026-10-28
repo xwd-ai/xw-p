@@ -3,7 +3,9 @@
 // 职责：消费消息队列、执行工作流求值、digest 聚合与 provider 分发。
 // 当前阶段：从 Redis 队列可靠消费（取出即登记在途、处理成功才确认，
 // 租约过期未确认的消息由回收流程重新入队），并发度由 XW_WORKERS 控制，
-// 退出时等待在途消息处理完毕；同时运行延迟调度器，按时唤醒 delay 步骤之后的续跑步骤。
+// 退出时等待在途消息处理完毕；消费到的消息按自带步骤快照执行整条工作流
+// （filter → transform → render → dispatch，delay 步骤交给调度器续跑），
+// 同时运行延迟调度器，按时唤醒 delay 步骤之后的续跑步骤。
 package main
 
 import (
@@ -20,6 +22,7 @@ import (
 	"github.com/cdgjhg/xw-p/engine/internal/config"
 	"github.com/cdgjhg/xw-p/engine/internal/pipeline"
 	"github.com/cdgjhg/xw-p/engine/internal/queue"
+	"github.com/cdgjhg/xw-p/engine/internal/runner"
 	"github.com/cdgjhg/xw-p/engine/internal/schedule"
 	"github.com/cdgjhg/xw-p/engine/internal/worker"
 )
@@ -59,6 +62,14 @@ func main() {
 	// 延迟调度器：到期任务 → 管线续跑。delay 步骤到期后把剩余步骤跑完。
 	scheduler := newDelayScheduler(logger, pipe)
 
+	// 把调度器接成管线的延迟出口：没有这一句，delay 步骤会以「未配置调度器」
+	// 失败——那正是「延迟看起来配了、实际直接失败」的隐蔽故障。
+	pipe.WithDeferrer(pipeline.NewEnqueueDeferrer(scheduler))
+
+	// 执行器：把队列消息还原成工作流并跑完步骤。工作流定义优先取消息自带
+	// 的快照，快照缺失时回退到启动时加载的定义表。
+	exec := runner.New(pipe, loadWorkflowSource(logger, cfg), logger)
+
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -81,7 +92,8 @@ func main() {
 
 	// 并发消费：XW_WORKERS 个消费者共享同一队列，关闭时等手里那条跑完。
 	pool := worker.NewPool(consumer, cfg.WorkersOrDefault(), cfg.PollTimeoutDuration(), logger).
-		WithShutdownGrace(cfg.ShutdownGraceOrDefault())
+		WithShutdownGrace(cfg.ShutdownGraceOrDefault()).
+		WithExecutor(exec)
 	pool.Run(ctx)
 
 	// 池子退出（ctx 取消）后等待调度器收尾，避免任务被中断在日志中途。
@@ -122,6 +134,33 @@ func newDelayScheduler(logger *slog.Logger, pipe *pipeline.Pipeline) *schedule.S
 		return nil
 	}
 	return schedule.New(schedule.NewMemoryStore(), handler, logger)
+}
+
+// loadWorkflowSource 加载工作流定义表，作为消息未携带步骤快照时的回退来源。
+//
+// 正常路径上消息自带快照，这个文件只影响历史消息能否执行：没配置就返回空表，
+// 配置了但读不动则记错误日志后继续启动——执行引擎不该因为一份可选的定义
+// 快照文件而整体起不来。
+func loadWorkflowSource(logger *slog.Logger, cfg config.Config) runner.Source {
+	if cfg.WorkflowsFile == "" {
+		logger.Info("[engine] 未配置工作流定义文件，仅执行消息自带的步骤快照")
+		return runner.NewStaticSource()
+	}
+
+	source, found, err := runner.LoadWorkflowsFile(cfg.WorkflowsFile)
+	if err != nil {
+		logger.Error("[engine] 工作流定义文件加载失败，仅执行消息自带的步骤快照",
+			"file", cfg.WorkflowsFile, "error", err)
+		return runner.NewStaticSource()
+	}
+	if !found {
+		logger.Warn("[engine] 工作流定义文件不存在，仅执行消息自带的步骤快照",
+			"file", cfg.WorkflowsFile)
+		return source
+	}
+	logger.Info("[engine] 工作流定义文件已加载",
+		"file", cfg.WorkflowsFile, "workflows", source.Len())
+	return source
 }
 
 // newPipeline 组装执行管线并选定聚合卡片存储，返回管线与资源释放函数。

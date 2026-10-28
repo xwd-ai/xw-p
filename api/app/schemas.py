@@ -6,6 +6,8 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
+from .models.entities import Workflow
+
 
 class SubscriberTarget(BaseModel):
     """触发目标订阅者。"""
@@ -95,6 +97,45 @@ class TriggerResponse(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class WorkflowStepSnapshot(BaseModel):
+    """步骤定义的传输形态，与 Go 侧 ``queue.StepSpec`` 字段一一对应。"""
+
+    id: str
+    type: str = Field(description="步骤类型：in_app / email / sms / push / chat / delay / digest")
+    name: Optional[str] = None
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkflowSnapshot(BaseModel):
+    """随消息下发的步骤定义快照。
+
+    触发时把工作流的步骤序列固化进消息，引擎消费时直接按快照执行，
+    不必回查工作流存储。这样已经入队的消息不会因为模板被后续编辑而
+    半路换了步骤，也不必为「取步骤」多一次跨进程查询。
+    """
+
+    name: str
+    version: int = 1
+    steps: list[WorkflowStepSnapshot] = Field(default_factory=list)
+
+    @classmethod
+    def from_workflow(cls, workflow: Workflow) -> "WorkflowSnapshot":
+        """按工作流实体生成快照（步骤配置原样携带，不做求值）。"""
+        return cls(
+            name=workflow.name,
+            version=workflow.version,
+            steps=[
+                WorkflowStepSnapshot(
+                    id=step.id,
+                    type=getattr(step.type, "value", str(step.type)),
+                    name=step.name,
+                    config=dict(step.config or {}),
+                )
+                for step in workflow.steps
+            ],
+        )
+
+
 class QueuedMessage(BaseModel):
     """入队后的内部消息。"""
     trigger_id: str
@@ -107,9 +148,13 @@ class QueuedMessage(BaseModel):
     channels: Optional[list[str]] = None
     payload: dict[str, Any] = Field(default_factory=dict)
     overrides: dict[str, Any] = Field(default_factory=dict)
+    workflow: Optional[WorkflowSnapshot] = Field(
+        default=None, description="触发时刻的步骤定义快照，引擎按它执行工作流"
+    )
 
 
-def new_queued_message(event: TriggerEvent) -> QueuedMessage:
+def new_queued_message(event: TriggerEvent, workflow: Optional[Workflow] = None) -> QueuedMessage:
+    """由触发请求构造入队消息；传入工作流时附带其步骤快照。"""
     return QueuedMessage(
         trigger_id=str(uuid.uuid4()),
         transaction_id=str(uuid.uuid4()),
@@ -121,4 +166,5 @@ def new_queued_message(event: TriggerEvent) -> QueuedMessage:
         channels=event.to.channels,
         payload=event.payload,
         overrides=event.overrides,
+        workflow=WorkflowSnapshot.from_workflow(workflow) if workflow is not None else None,
     )

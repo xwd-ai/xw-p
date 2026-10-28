@@ -86,6 +86,7 @@ API 侧：
 | `XW_REDIS_URL` | `redis://localhost:6379/0` | Redis 连接串（`XW_BUS=redis` 时生效） |
 | `XW_STORAGE` | `jsonl` | 持久化后端：`jsonl` / `postgres` |
 | `XW_DATABASE_URL` | `postgresql+psycopg://xwnotify:xwnotify@localhost:5432/xwnotify` | Postgres 连接串（`XW_STORAGE=postgres` 时生效） |
+| `XW_API_WORKER` | 按总线决定 | API 内置消费线程开关；`XW_BUS=memory` 时默认开，`redis` 时默认关（队列归引擎消费） |
 
 引擎侧：
 
@@ -98,8 +99,29 @@ API 侧：
 | `XW_RECLAIM_INTERVAL` | `30s` | 在途消息回收的扫描间隔，`0` 表示只在启动时扫一轮 |
 | `XW_WORKERS` | `4` | 并发消费者数量，取值 `1`–`256` |
 | `XW_SHUTDOWN_GRACE` | `30s` | 退出时等待在途消息处理完成的上限 |
+| `XW_WORKFLOWS_FILE` | 空 | 工作流定义快照文件（JSON 数组）；仅用于给没有携带步骤的消息按名称回退查找 |
 
 超时是链路兜底：渠道卡住时管线不再无限等待，超时的步骤与后续步骤都会被记为失败/短路并写进执行明细。超时值应大于下游的正常延迟（例如设为渠道 P99 的数倍），而不是贴着平均值设置。
+
+消息自带步骤定义：触发 API 在入队时把命中的工作流固化成快照放进消息（`workflow` 字段，步骤结构与工作流接口一致），引擎消费时按快照执行，不回查工作流存储。这样已经在队列里的消息不会因为模板被后续编辑而半路换了步骤序列；`name` 仍保留用于日志与活动流归属。没有快照的消息（历史消息、手工构造的消息）会按 `name` 到 `XW_WORKFLOWS_FILE` 指定的定义表里查找，两者都拿不到时视为不可投递——确认丢弃并告警，而不是留在队列里反复重投。
+
+```json
+{
+  "trigger_id": "…", "name": "post_liked", "subscriber_id": "creator_1",
+  "payload": {"post_id": "P-2026-1001", "actor": "小林"},
+  "workflow": {
+    "name": "post_liked", "version": 3,
+    "steps": [
+      {"id": "step-1", "type": "digest", "name": "点赞聚合", "config": {"key": "post_id", "window": "10m"}},
+      {"id": "step-2", "type": "in_app", "name": "站内信", "config": {"template": "{{ payload.actor }} 赞了你的帖子"}}
+    ]
+  }
+}
+```
+
+执行结果按消息汇总成一行日志：`steps` / `sent` / `failed` / `skipped` / `shortCircuited` / `deferred` 与耗时，配合 `trigger_id` 可以定位到具体是哪条互动、哪一个步骤出的问题。
+
+一条消息只应被一个消费者处理：`XW_BUS=redis` 时队列归引擎消费，API 进程的内置消费线程默认关闭（`XW_API_WORKER=1` 可强制打开）；memory 总线是单进程 demo，才由 API 自己的线程消费。
 
 队列按**至少一次**语义消费：引擎取出消息时同步写一份在途记录（`<queue>:processing` 保存原始 payload，`<queue>:processing:lease` 保存租约到期时间），处理成功后 `HDEL`/`ZREM` 才算消费完成；进程在处理中途退出时，消息仍在在途记录里，不会随进程消失。代价是极端情况下可能重复投递，因此下游写入需保持幂等（收件箱条目按 `trigger_id:step_id` 去重）。租约长度要大于单条消息的正常处理耗时，否则消息会在处理完成前被判定失效。
 

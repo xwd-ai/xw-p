@@ -10,7 +10,7 @@
 #   ./scripts/demo_e2e.sh
 #
 # 说明：脚本会依次启动 Redis（若未运行）、Python API（redis 模式）、
-#       触发一条互动通知，再启动 Go engine 消费队列并打印 mock 发送日志。
+#       触发一条互动通知，再启动 Go engine 消费队列、执行工作流步骤。
 
 set -euo pipefail
 
@@ -43,7 +43,7 @@ if [ ! -x "$ROOT/api/.venv/bin/uvicorn" ]; then
 fi
 (
   cd "$ROOT/api"
-  XW_BUS=redis XW_REDIS_URL="$REDIS_URL" \
+  XW_BUS=redis XW_REDIS_URL="$REDIS_URL" XW_API_WORKER=0 \
     .venv/bin/uvicorn app.main:app --port "$API_PORT" --log-level warning
 ) &
 API_PID=$!
@@ -73,8 +73,8 @@ TRIGGER_RESP="$(curl -s -X POST "http://127.0.0.1:${API_PORT}/v1/events/trigger"
   -d '{"name":"post_commented","to":{"subscriberId":"creator_1","email":"hi@example.com","channels":["in_app","push","email"]},"payload":{"post_id":"P-2026-1001","post_title":"我的第一支 Vlog","actor":"小林","comment":"拍得真好，求教程！"}}')"
 log "触发回执：$TRIGGER_RESP"
 
-# 5. 启动 Go engine 消费队列（打印 mock 发送日志后 5 秒退出）
-log "启动 Go engine 消费队列（观察下方 mock 发送日志）..."
+# 5. 启动 Go engine 消费队列（执行工作流步骤并写入收件箱，6 秒后退出）
+log "启动 Go engine 消费队列（观察 [runner] / [in_app] 日志）..."
 (
   cd "$ROOT/engine"
   REDIS_HOST=localhost XW_REDIS_QUEUE_KEY="$QUEUE_KEY" XW_POLL_TIMEOUT=1 "$ENGINE_BIN"
@@ -83,4 +83,5 @@ ENGINE_PID=$!
 
 # 给 engine 数秒消费并打印日志
 sleep 6
-log "demo 结束。若上方出现 [mock] 发送通知 日志，说明端到端链路已打通。"
+log "demo 结束。若上方出现 [runner] 工作流执行完成 日志，说明「触发 → 执行 → 收件箱」链路已打通；"
+log "站内信写入 api/data/inbox.jsonl（可用 XW_INBOX_FILE 改路径）。"

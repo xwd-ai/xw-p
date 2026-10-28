@@ -36,9 +36,15 @@ _worker = Worker()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    _worker.start()
+    # redis 总线由 Go 引擎消费；API 内置线程只在 memory 总线的单进程 demo 里起，
+    # 否则两个消费者会抢同一条消息。
+    if config.API_WORKER:
+        _worker.start()
+    else:
+        logger.info("总线后端为 %s，API 内置消费线程不启动（由引擎消费队列）", config.BUS_BACKEND)
     yield
-    _worker.stop()
+    if config.API_WORKER:
+        _worker.stop()
 
 
 app = FastAPI(
@@ -138,8 +144,8 @@ def trigger_event(
             logger.info("幂等命中：%s（返回缓存回执）", idempotency_key)
             return TriggerResponse(**cached)
 
-    # 3. 生成回执并入队
-    message = new_queued_message(event)
+    # 3. 生成回执并入队（消息携带工作流的步骤快照，引擎据此执行）
+    message = new_queued_message(event, workflow)
     response = TriggerResponse(
         trigger_id=message.trigger_id,
         transaction_id=message.transaction_id,

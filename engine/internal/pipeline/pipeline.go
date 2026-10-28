@@ -122,9 +122,10 @@ func (p *Pipeline) WithClock(now func() time.Time) *Pipeline {
 	return p
 }
 
-// validationStepID 是工作流校验失败时占位的结果步骤 id：
+// ValidationStepID 是工作流校验失败时占位的结果步骤 id：
 // 校验问题属于整个工作流而非某个步骤（例如环），没有可归属的步骤。
-const validationStepID = "__workflow__"
+// 调用方（如执行汇总）据此区分「某个步骤失败」与「整条工作流被拒绝」。
+const ValidationStepID = "__workflow__"
 
 // Run 校验工作流步骤的依赖图，按依赖先后排序后执行管线。
 //
@@ -143,7 +144,7 @@ func (p *Pipeline) Run(ctx *Context, wf domain.Workflow) []StepResult {
 			"error", err,
 		)
 		return []StepResult{{
-			StepID: validationStepID,
+			StepID: ValidationStepID,
 			Error:  err.Error(),
 		}}
 	}

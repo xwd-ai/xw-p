@@ -25,11 +25,22 @@ type Consumer interface {
 	Ack(ctx context.Context, id string) error
 }
 
+// Executor 把一条已解码的队列消息交给执行管线。
+//
+// 返回 error 表示消息需要重新投递（暂时性故障）；「消息本身不可修复」
+// 这类结论由执行方包装 queue.ErrUndeliverable 表达，消费侧会确认并丢弃它。
+// 未注入 Executor 时 worker 走 Dispatch 的 mock 日志，仅用于无管线的场景。
+type Executor interface {
+	Execute(msg queue.QueuedMessage) error
+}
+
 // Worker 从消息源消费通知并执行分发。
 type Worker struct {
 	consumer Consumer
 	timeout  time.Duration
 	logger   *slog.Logger
+	// executor 执行工作流的步骤定义；为空时退化为 Dispatch 的 mock 日志。
+	executor Executor
 	// id 是消费者在池内的序号，仅用于日志区分并发消费者；单实例运行为 0。
 	id int
 	// handle 是单条消息的处理入口，默认指向 Handle；测试用它注入失败场景。
@@ -49,6 +60,13 @@ func New(consumer Consumer, timeout time.Duration, logger *slog.Logger) *Worker 
 	}
 	w := &Worker{consumer: consumer, timeout: timeout, logger: logger}
 	w.handle = w.Handle
+	return w
+}
+
+// WithExecutor 注入工作流执行器，返回 worker 自身便于链式装配。
+// 传 nil 表示恢复 mock 分发。
+func (w *Worker) WithExecutor(ex Executor) *Worker {
+	w.executor = ex
 	return w
 }
 
@@ -97,15 +115,17 @@ func (w *Worker) process(delivery *queue.Delivery) {
 		defer w.onFinish()
 	}
 	err := w.handle(delivery.Raw)
-	if err != nil && !errors.Is(err, ErrInvalidMessage) {
-		// 处理失败不确认：消息留在在途记录里，等回收流程重新投递，
-		// 而不是像弹出即删除那样直接消失。
-		w.logger.Warn("[engine] 处理消息失败，保留在途记录等待回收",
-			"worker", w.id, "deliveryId", delivery.ID, "error", err)
-		return
-	}
 	if err != nil {
-		w.logger.Warn("[engine] 丢弃无法解析的消息",
+		// 处理失败不确认：消息留在在途记录里，等回收流程重新投递，
+		// 而不是像弹出即删除那样直接消失。但「消息本身不可修复」的情形
+		// （格式错误、工作流不存在、步骤校验不通过）重投也不会有变化，
+		// 反而会一直占着在途记录，这类消息确认后丢弃并告警。
+		if !errors.Is(err, ErrInvalidMessage) && !errors.Is(err, queue.ErrUndeliverable) {
+			w.logger.Warn("[engine] 处理消息失败，保留在途记录等待回收",
+				"worker", w.id, "deliveryId", delivery.ID, "error", err)
+			return
+		}
+		w.logger.Warn("[engine] 丢弃不可投递的消息",
 			"worker", w.id, "deliveryId", delivery.ID, "error", err)
 	}
 
@@ -118,17 +138,20 @@ func (w *Worker) process(delivery *queue.Delivery) {
 	}
 }
 
-// Handle 解析并分发一条原始消息（供测试直接调用）。
+// Handle 解析一条原始消息并交给执行器（供测试直接调用）。
 func (w *Worker) Handle(raw []byte) error {
 	msg, err := queue.Decode(raw)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidMessage, err)
 	}
+	if w.executor != nil {
+		return w.executor.Execute(msg)
+	}
 	w.Dispatch(msg)
 	return nil
 }
 
-// Dispatch 执行 mock 投递。
+// Dispatch 在未注入执行器时打印投递意图，不产生任何真实投递。
 func (w *Worker) Dispatch(msg queue.QueuedMessage) {
 	w.logger.Info("[mock] 发送通知",
 		"triggerId", msg.TriggerID,

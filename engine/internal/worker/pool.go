@@ -35,6 +35,9 @@ type Pool struct {
 	timeout  time.Duration
 	grace    time.Duration
 	logger   *slog.Logger
+	// executor 是各消费者共用的工作流执行器；为空时退化为 mock 日志。
+	// 执行器本身要求并发安全（管线与 provider 注册表都是无状态的）。
+	executor Executor
 	// handle 用于测试注入处理逻辑；为空时各消费者使用默认的 Handle。
 	handle func([]byte) error
 }
@@ -58,6 +61,15 @@ func (p *Pool) WithShutdownGrace(grace time.Duration) *Pool {
 	if grace > 0 {
 		p.grace = grace
 	}
+	return p
+}
+
+// WithExecutor 给池内每个消费者装上同一个工作流执行器，返回池自身。
+//
+// 执行器被并发调用，实现必须无共享可变状态（或自行加锁）；
+// 管线与 provider 的调用路径只读共享配置，可直接复用。
+func (p *Pool) WithExecutor(ex Executor) *Pool {
+	p.executor = ex
 	return p
 }
 
@@ -90,6 +102,9 @@ func (p *Pool) Run(ctx context.Context) int {
 	for i := 0; i < p.size; i++ {
 		w := New(p.consumer, p.timeout, p.logger)
 		w.id = i + 1
+		if p.executor != nil {
+			w.executor = p.executor
+		}
 		if p.handle != nil {
 			w.handle = p.handle
 		}

@@ -19,6 +19,23 @@ BUS_BACKEND = _env("XW_BUS", "memory")
 REDIS_URL = _env("XW_REDIS_URL", "redis://localhost:6379/0")
 REDIS_QUEUE_KEY = _env("XW_REDIS_QUEUE_KEY", "xw:queue:events")
 
+
+def api_worker_enabled(bus_backend: str, raw: str | None = None) -> bool:
+    """判断 API 进程是否启动内置消费线程。
+
+    内置线程只服务 memory 总线的单进程 demo：redis 模式下队列由 Go 引擎消费，
+    API 若再起一个消费者就会和引擎抢同一条消息（谁先抢到算谁的）。
+    显式设置 ``XW_API_WORKER`` 可覆盖默认值（1/true/on 与 0/false/off）。
+    """
+    if raw is not None:
+        text = raw.strip().lower()
+        if text:
+            return text not in {"0", "false", "off", "no"}
+    return bus_backend != "redis"
+
+
+API_WORKER = api_worker_enabled(BUS_BACKEND, os.getenv("XW_API_WORKER"))
+
 # 持久化后端：jsonl（默认）| postgres
 STORAGE_BACKEND = _env("XW_STORAGE", "jsonl")
 

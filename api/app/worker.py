@@ -1,7 +1,8 @@
 """后台 worker：消费队列，mock 发送并落库。
 
-后续（Phase 2 起）会由 Go engine 接管真正的工作流求值与 provider 分发，
-此处的 Python worker 仅作为 demo 阶段的端到端打通。
+只在 memory 总线的单进程 demo 里使用（启停条件见 ``config.api_worker_enabled``）：
+redis 模式下队列由 Go 引擎消费，由引擎执行工作流步骤与渠道分发。
+这里的实现保持最简：按请求声明的渠道记一条「已发送」并写执行明细。
 
 落库后端由 ``XW_STORAGE`` 决定（jsonl / postgres），见 ``storage.py``。
 逐渠道投递时同步写入执行明细（``execution_log``），供后台排查。
