@@ -64,7 +64,14 @@ func (d *dispatchStage) Apply(ctx *Context, step domain.Step) error {
 		SubscriberID: ctx.Msg.SubscriberID,
 	}
 
-	send := provider.Send(delivery)
+	// 支持感知取消的 provider 优先走 SendContext：步骤超时时它能立即中断等待，
+	// 而不是把请求留在后台继续跑。
+	var send SendResult
+	if cs, ok := provider.(ContextSender); ok {
+		send = cs.SendContext(ctx.Context(), delivery)
+	} else {
+		send = provider.Send(delivery)
+	}
 	if send.Sent {
 		res.Sent = true
 		ctx.Results[step.ID] = res

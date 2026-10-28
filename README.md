@@ -76,7 +76,9 @@ curl -X POST http://127.0.0.1:8000/v1/events/trigger \
   -d '{"name":"post_commented","to":{"subscriberId":"creator_1","email":"hi@example.com","channels":["in_app","push","email"]},"payload":{"post_id":"P-2026-1001","post_title":"我的第一支 Vlog","actor":"小林","comment":"拍得真好，求教程！"}}'
 ```
 
-### 后端切换（环境变量）
+### 环境变量
+
+API 侧：
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -84,6 +86,16 @@ curl -X POST http://127.0.0.1:8000/v1/events/trigger \
 | `XW_REDIS_URL` | `redis://localhost:6379/0` | Redis 连接串（`XW_BUS=redis` 时生效） |
 | `XW_STORAGE` | `jsonl` | 持久化后端：`jsonl` / `postgres` |
 | `XW_DATABASE_URL` | `postgresql+psycopg://xwnotify:xwnotify@localhost:5432/xwnotify` | Postgres 连接串（`XW_STORAGE=postgres` 时生效） |
+
+引擎侧：
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `XW_STEP_TIMEOUT` | `10s` | 单个步骤的执行预算，可被步骤自身的 `timeout` / `timeout_ms` 覆盖 |
+| `XW_WORKFLOW_TIMEOUT` | `60s` | 一条消息一次执行的总预算，耗尽后剩余步骤不再尝试 |
+| `XW_DIGEST_STORE` | `redis` | 聚合卡片存储：`redis`（跨实例共享）/ `memory`（单实例） |
+
+超时是链路兜底：渠道卡住时管线不再无限等待，超时的步骤与后续步骤都会被记为失败/短路并写进执行明细。超时值应大于下游的正常延迟（例如设为渠道 P99 的数倍），而不是贴着平均值设置。
 
 启用外部后端示例：
 
@@ -95,7 +107,7 @@ psql "$XW_DATABASE_URL" -f scripts/migrations/001_messages.sql
 
 ## 开发计划
 
-见 [ROADMAP.md](ROADMAP.md)。项目按 40 天逐步开发：先端到端 demo，再逐块扩展领域模型、工作流引擎、渠道层、订阅者/偏好、管理端与 SDK。
+见 [ROADMAP.md](ROADMAP.md)。开发顺序是：先打通端到端 demo，再逐块扩展领域模型、工作流引擎、渠道层、订阅者/偏好、管理端与 SDK。
 
 ## License
 

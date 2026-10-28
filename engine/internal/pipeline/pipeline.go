@@ -23,6 +23,8 @@ type Pipeline struct {
 	deferrer Deferrer
 	// now 提供当前时刻，测试可注入固定时钟。
 	now func() time.Time
+	// timeouts 是单步与整体执行的超时策略。
+	timeouts TimeoutPolicy
 
 	// 以下为编排步骤（digest）复用的阶段与依赖，单独持有引用避免重复构造。
 	logger    *slog.Logger
@@ -83,6 +85,7 @@ func NewWithRegistry(logger *slog.Logger, registry *ProviderRegistry) *Pipeline 
 		renderer:  renderer,
 		digests:   NewMemoryDigestStore(),
 		now:       time.Now,
+		timeouts:  DefaultTimeoutPolicy(),
 	}
 }
 
@@ -156,13 +159,26 @@ func (p *Pipeline) Run(ctx *Context, wf domain.Workflow) []StepResult {
 // 失败短路（fail-fast）：某个投递步骤真实失败（非 filter/条件分支跳过）时，
 // 后续步骤不再执行，而是标记 ShortCircuited 并记录上游失败原因；
 // delay 步骤自身失败（时长非法 / 调度器不可用）同样短路后续步骤。
+//
+// 超时：首次进入时按策略设定本次执行的整体预算，每个步骤在「自身超时」与
+// 「整体剩余预算」中较小的那个内执行；超时同失败一样短路后续步骤，后续步骤
+// 标记为短路而不是继续尝试——预算已经用完，再试只会拖长整条链路的占用时间。
 func (p *Pipeline) RunSteps(ctx *Context, steps []domain.Step) []StepResult {
+	ctx.StartBudget(p.timeouts.Workflow, p.now())
+
 	var out []StepResult
-	var shortCircuit *StepResult // 记录首个真实失败，用于短路后续步骤
+	var blockedReason string // 非空表示后续步骤不再执行：上游失败或整体预算耗尽
 	for i, step := range steps {
-		// 上游已失败：当前步骤直接标记短路，不再进入管线。
-		if shortCircuit != nil {
-			out = append(out, p.markShortCircuited(ctx, step, shortCircuit.Error))
+		if blockedReason != "" {
+			out = append(out, p.markShortCircuited(ctx, step, blockedReason))
+			continue
+		}
+
+		// 整体预算已耗尽：剩余步骤一律不再尝试，避免在超时之后继续投递。
+		if remaining, limited := ctx.RemainingBudget(p.now()); limited && remaining <= 0 {
+			blockedReason = fmt.Sprintf("%s：%s 的执行预算已耗尽，剩余步骤未执行",
+				ErrWorkflowTimeout.Error(), p.timeouts.Workflow)
+			out = append(out, p.markShortCircuited(ctx, step, blockedReason))
 			continue
 		}
 
@@ -172,7 +188,7 @@ func (p *Pipeline) RunSteps(ctx *Context, steps []domain.Step) []StepResult {
 			out = append(out, res)
 			if res.Error != "" {
 				// 调度失败：后续步骤由下一轮迭代标记为短路。
-				shortCircuit = &res
+				blockedReason = res.Error
 				continue
 			}
 			// 成功：剩余步骤已交给调度器，本轮到此为止，避免「以为延迟生效、
@@ -184,31 +200,77 @@ func (p *Pipeline) RunSteps(ctx *Context, steps []domain.Step) []StepResult {
 		// filter→transform→render→dispatch 常规四阶段（那会导致同一卡片被
 		// 反复当成新消息投递）。
 		if step.Type == domain.ChannelDigest {
-			res := p.handleDigest(ctx, step)
+			res, err := p.executeStep(ctx, step, p.digestExec)
 			out = append(out, res)
-			if res.Error != "" {
-				shortCircuit = &res
+			if err != nil {
+				blockedReason = res.Error
 			}
 			continue
 		}
 
-		if err := p.runStep(ctx, step); err != nil {
-			if errors.Is(err, errSkipStep) {
-				// 被 filter/分支跳过：结果已由对应阶段写入，不触发短路。
-			} else {
-				// 真实失败：记录失败结果并作为短路源。
-				res := ctx.Results[step.ID]
-				res.StepID = step.ID
-				res.StepType = domain.StepType(step.Type)
-				res.Channel = step.Type
-				res.Error = err.Error()
-				ctx.Results[step.ID] = res
-				shortCircuit = &res
-			}
+		res, err := p.executeStep(ctx, step, p.runStep)
+		out = append(out, res)
+		if err != nil && !errors.Is(err, errSkipStep) {
+			// 真实失败（含超时）：记录失败结果并作为短路源。
+			blockedReason = res.Error
 		}
-		out = append(out, ctx.Results[step.ID])
 	}
 	return out
+}
+
+// executeStep 在超时预算内执行一个投递步骤，并把失败/超时写进结果。
+//
+// fn 决定走常规四阶段还是 digest 编排；两路共用同一套预算、fork 与结果合并逻辑。
+// 返回的 error 用于调用方判断是否需要短路后续步骤（errSkipStep 不算失败）。
+func (p *Pipeline) executeStep(
+	ctx *Context,
+	step domain.Step,
+	fn func(*Context, domain.Step) error,
+) (StepResult, error) {
+	limit, overall, budgetErr := p.stepBudget(ctx, step)
+	if budgetErr != nil {
+		res := StepResult{
+			StepID:   step.ID,
+			StepType: domain.StepType(step.Type),
+			Channel:  step.Type,
+			Error:    budgetErr.Error(),
+			TimedOut: errors.Is(budgetErr, ErrWorkflowTimeout),
+		}
+		ctx.Results[step.ID] = res
+		return res, budgetErr
+	}
+
+	runErr := p.execStep(ctx, step, limit, overall, func(child *Context) error {
+		return fn(child, step)
+	})
+
+	res, ok := ctx.Results[step.ID]
+	if !ok {
+		// 阶段未留下结果（例如超时、panic）：补一条以步骤自身信息为准的结果。
+		res = StepResult{StepID: step.ID, StepType: domain.StepType(step.Type), Channel: step.Type}
+	}
+	res.StepID = step.ID
+	if res.StepType == "" {
+		res.StepType = domain.StepType(step.Type)
+	}
+	if res.Channel == "" {
+		res.Channel = step.Type
+	}
+
+	if runErr != nil && !errors.Is(runErr, errSkipStep) {
+		res.Error = runErr.Error()
+		res.TimedOut = errors.Is(runErr, ErrStepTimeout) || errors.Is(runErr, ErrWorkflowTimeout)
+	}
+	ctx.Results[step.ID] = res
+	return res, runErr
+}
+
+// digestExec 把 digest 编排的结果适配为 error：超时与失败都需要短路后续步骤。
+func (p *Pipeline) digestExec(ctx *Context, step domain.Step) error {
+	if res := p.handleDigest(ctx, step); res.Error != "" {
+		return errors.New(res.Error)
+	}
+	return nil
 }
 
 // Resume 从延迟续跑任务（编码后的 Deferral）还原上下文并执行剩余步骤。

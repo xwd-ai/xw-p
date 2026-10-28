@@ -17,6 +17,9 @@
 package pipeline
 
 import (
+	"context"
+	"time"
+
 	"github.com/cdgjhg/xw-p/engine/internal/domain"
 	"github.com/cdgjhg/xw-p/engine/internal/queue"
 )
@@ -24,6 +27,10 @@ import (
 // Context 是一条消息贯穿管线全程的上下文。
 // Variables 在 transform 阶段由 payload 填充，供 render 阶段使用。
 type Context struct {
+	// Ctx 是贯穿本次执行的 context：引擎退出时取消，单步超时时按步骤派生。
+	// 支持感知取消的 provider 通过它感知超时（见 ContextSender）。
+	Ctx context.Context
+
 	// Msg 是进入管线的原始队列消息。
 	Msg queue.QueuedMessage
 
@@ -39,14 +46,95 @@ type Context struct {
 
 	// Results 记录每个投递步骤的 dispatch 结果，按步骤 ID 索引。
 	Results map[string]StepResult
+
+	// budget 是整条消息的执行预算（0 表示不限），deadline 是据此算出的截止时刻。
+	// 由 RunSteps 在首次进入时设置，后续步骤共用一个截止时刻。
+	budget   time.Duration
+	deadline time.Time
 }
 
 // NewContext 由队列消息创建管线上下文，并初始化变量表与结果表。
 func NewContext(msg queue.QueuedMessage) *Context {
 	return &Context{
+		Ctx:       context.Background(),
 		Msg:       msg,
 		Variables: make(map[string]any),
 		Results:   make(map[string]StepResult),
+	}
+}
+
+// WithContext 绑定一个外部 context（用于引擎退出时取消在途步骤），返回自身。
+func (c *Context) WithContext(ctx context.Context) *Context {
+	if ctx != nil {
+		c.Ctx = ctx
+	}
+	return c
+}
+
+// Context 返回贯穿本次执行的 context；未设置时返回 background（避免调用方判空）。
+func (c *Context) Context() context.Context {
+	if c == nil || c.Ctx == nil {
+		return context.Background()
+	}
+	return c.Ctx
+}
+
+// StartBudget 为本次执行设置整体预算，截止时刻只设置一次。
+//
+// 续跑（delay 到期）会新建上下文，因此每次续跑都重新获得一份完整预算——
+// 预算约束的是「一次执行」而不是「一条消息的一生」，否则被延迟数小时的消息
+// 会在续跑时立刻超时。
+func (c *Context) StartBudget(total time.Duration, now time.Time) {
+	if c.budget != 0 || !c.deadline.IsZero() {
+		return
+	}
+	if total <= 0 {
+		return
+	}
+	c.budget = total
+	c.deadline = now.Add(total)
+}
+
+// RemainingBudget 返回整体预算的剩余时间；第二个返回值表示是否启用了整体预算。
+// 返回值可能为负，调用方据此判断预算是否已耗尽。
+func (c *Context) RemainingBudget(now time.Time) (time.Duration, bool) {
+	if c == nil || c.deadline.IsZero() {
+		return 0, false
+	}
+	return c.deadline.Sub(now), true
+}
+
+// Fork 派生一个用于单步执行的子上下文：替换 context，复制消息视图与当前结果。
+//
+// 复制是超时隔离的前提：步骤在子上下文里写入的结果只有在按时返回时才合并回
+// 父上下文，超时后被放弃的子 goroutine 也就不会与父上下文产生数据竞争。
+func (c *Context) Fork(runCtx context.Context) *Context {
+	child := &Context{
+		Ctx:        runCtx,
+		Msg:        c.Msg,
+		Subscriber: c.Subscriber,
+		Workflow:   c.Workflow,
+		Variables:  make(map[string]any, len(c.Variables)),
+		Results:    make(map[string]StepResult, len(c.Results)),
+		budget:     c.budget,
+		deadline:   c.deadline,
+	}
+	for k, v := range c.Variables {
+		child.Variables[k] = v
+	}
+	for k, v := range c.Results {
+		child.Results[k] = v
+	}
+	return child
+}
+
+// MergeResult 把子上下文中指定步骤的结果合并回父上下文。
+func (c *Context) MergeResult(child *Context, stepID string) {
+	if child == nil {
+		return
+	}
+	if res, ok := child.Results[stepID]; ok {
+		c.Results[stepID] = res
 	}
 }
 

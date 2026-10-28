@@ -17,6 +17,8 @@ type StepResult struct {
 	SkipReason string
 	// ShortCircuited 表示该步骤因上游步骤失败而未执行（失败短路）。
 	ShortCircuited bool
+	// TimedOut 表示该步骤因超时未完成：单步超时或整体执行预算耗尽。
+	TimedOut bool
 	// Rendered 表示 render 阶段产出的内容（如模板渲染后的文本）。
 	Rendered string
 	// Sent 表示该步骤经 provider 成功投递（仅注册了 provider 的渠道有意义）。

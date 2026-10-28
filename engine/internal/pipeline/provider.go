@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/cdgjhg/xw-p/engine/internal/domain"
@@ -46,6 +47,15 @@ type Provider interface {
 	Channel() domain.Channel
 	// Send 投递一条已渲染的消息，返回投递结果。
 	Send(d Delivery) SendResult
+}
+
+// ContextSender 是 Provider 的可选扩展：能够感知取消与超时的实现可实现它。
+//
+// dispatch 阶段优先调用 SendContext，ctx 在步骤超时或引擎退出时被取消，
+// provider 据此中断 HTTP 请求等阻塞操作——这比「超时后放弃等待、请求仍在
+// 后台跑」更干净。不实现本接口的 provider 回退到 Send，行为不变。
+type ContextSender interface {
+	SendContext(ctx context.Context, d Delivery) SendResult
 }
 
 // ProviderRegistry 按渠道索引 Provider，供 dispatch 阶段查找并投递。

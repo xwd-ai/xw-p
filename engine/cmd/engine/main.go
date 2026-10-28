@@ -110,7 +110,11 @@ func newDelayScheduler(logger *slog.Logger, pipe *pipeline.Pipeline) *schedule.S
 // 窗口靠键的 TTL 收敛。显式配置 XW_DIGEST_STORE=memory 或 Redis 不可用时
 // 回退进程内存储——那意味着多实例会各开一张卡，只在单实例部署下成立。
 func newPipeline(logger *slog.Logger, cfg config.Config) (*pipeline.Pipeline, func()) {
-	pipe := pipeline.New(logger)
+	pipe := pipeline.New(logger).WithTimeouts(timeoutPolicy(cfg))
+	logger.Info("[engine] 执行超时预算",
+		"step", pipe.Timeouts().Step,
+		"workflow", pipe.Timeouts().Workflow,
+	)
 
 	if strings.EqualFold(strings.TrimSpace(cfg.DigestStore), "memory") {
 		logger.Info("[engine] 聚合卡片存储：进程内存（单实例语义）")
@@ -135,4 +139,16 @@ func newPipeline(logger *slog.Logger, cfg config.Config) (*pipeline.Pipeline, fu
 	pipe.WithDigestStore(store)
 	logger.Info("[engine] 聚合卡片存储：Redis", "redis", cfg.RedisAddr, "prefix", store.Prefix())
 	return pipe, func() { _ = client.Close() }
+}
+
+// timeoutPolicy 组装超时策略：环境变量未配置时沿用管线默认值。
+func timeoutPolicy(cfg config.Config) pipeline.TimeoutPolicy {
+	policy := pipeline.DefaultTimeoutPolicy()
+	if cfg.StepTimeout > 0 {
+		policy.Step = cfg.StepTimeout
+	}
+	if cfg.WorkflowTimeout > 0 {
+		policy.Workflow = cfg.WorkflowTimeout
+	}
+	return policy
 }
