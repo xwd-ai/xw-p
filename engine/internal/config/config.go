@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/xwd-ai/xw-p/engine/internal/queue"
+	"github.com/xwd-ai/xw-p/engine/internal/schedule"
 	"github.com/xwd-ai/xw-p/engine/internal/worker"
 )
 
@@ -24,6 +25,10 @@ type Config struct {
 	DigestStore string
 	// DigestPrefix 是聚合卡片在 Redis 里的键前缀，用于环境隔离。
 	DigestPrefix string
+	// DelayStore 选择延迟任务存储：redis（跨实例共享、重启不丢，默认）或
+	// memory（进程内）。DelayPrefix 是其键前缀。
+	DelayStore  string
+	DelayPrefix string
 	// StepTimeout 是单步执行预算，WorkflowTimeout 是一条消息一次执行的总预算。
 	// 为 0 表示沿用管线默认值（连字符串都写不出来时不该悄悄变成「不限时」）。
 	StepTimeout     time.Duration
@@ -67,6 +72,8 @@ func Load() Config {
 		EnginePort:    envInt("ENGINE_PORT", 8081),
 		DigestStore:   envOr("XW_DIGEST_STORE", "redis"),
 		DigestPrefix:  envOr("XW_DIGEST_PREFIX", "xw:digest"),
+		DelayStore:    envOr("XW_DELAY_STORE", "redis"),
+		DelayPrefix:   envOr("XW_DELAY_PREFIX", schedule.DefaultRedisPrefix),
 
 		StepTimeout:     envDuration("XW_STEP_TIMEOUT", 0),
 		WorkflowTimeout: envDuration("XW_WORKFLOW_TIMEOUT", 0),

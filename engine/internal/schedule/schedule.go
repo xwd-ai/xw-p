@@ -6,8 +6,9 @@
 //	Submit/EnqueueDelay → Store（按 DueAt 排序）→ Tick 取出到期项 → Handler
 //
 // 设计取舍：
-//   - Store 是接口，默认提供内存实现（单机 demo / 测试）；生产可替换为
-//     Redis ZSET（ZADD score=unix 毫秒 + ZRANGEBYSCORE）而不改上层。
+//   - Store 是接口，两种实现：RedisStore（ZADD score=unix 毫秒 + ZRANGEBYSCORE，
+//     跨进程共享、重启不丢，引擎默认走它）与 MemoryStore（进程内，用于测试
+//     与显式关闭 Redis 的单实例场景）。上层只依赖接口，不关心具体存储。
 //   - Tick 先「认领（Remove）再执行」，多实例并发 Tick 时同一任务只会被
 //     一个实例处理，配合 At-least-once 语义已足够通知场景。
 //   - Handler 失败按指数退避重新排期，超过重试上限后丢弃并记录日志（死信）。
@@ -53,8 +54,8 @@ type Store interface {
 
 // MemoryStore 是进程内延迟任务存储（按到期时刻排序的切片 + 互斥锁）。
 //
-// 进程重启会丢失未到期任务，因此仅用于单机 demo 与测试；生产请替换为
-// Redis ZSET 实现（Store 接口不变）。
+// 进程重启会丢失未到期任务，因此只用于测试或显式选择单实例内存存储
+// （XW_DELAY_STORE=memory）；默认部署使用 RedisStore。
 type MemoryStore struct {
 	mu    sync.Mutex
 	items map[string]Item
@@ -173,6 +174,15 @@ func WithTick(d time.Duration) Option {
 	return func(c *Config) {
 		if d > 0 {
 			c.Tick = d
+		}
+	}
+}
+
+// WithBatch 设置单次 Tick 取出的任务上限。
+func WithBatch(n int) Option {
+	return func(c *Config) {
+		if n > 0 {
+			c.Batch = n
 		}
 	}
 }

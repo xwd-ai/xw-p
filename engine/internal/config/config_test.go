@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/xwd-ai/xw-p/engine/internal/queue"
+	"github.com/xwd-ai/xw-p/engine/internal/schedule"
 	"github.com/xwd-ai/xw-p/engine/internal/worker"
 )
 
@@ -119,5 +120,26 @@ func TestAdminListenAddrFallsBackToEnginePort(t *testing.T) {
 	t.Setenv("ENGINE_PORT", "9181")
 	if got := Load().AdminAddr; got != "127.0.0.1:9181" {
 		t.Errorf("未配置时应沿用 ENGINE_PORT 并只绑回环，实际 %q", got)
+	}
+}
+
+// 延迟任务存储：默认走 Redis（重启不丢），显式 memory 才退回进程内，
+// 前缀可单独配置用于环境隔离。
+func TestDelayStoreConfig(t *testing.T) {
+	t.Setenv("XW_DELAY_STORE", "")
+	t.Setenv("XW_DELAY_PREFIX", "")
+	cfg := Load()
+	if cfg.DelayStore != "redis" {
+		t.Errorf("默认延迟存储应为 redis，实际 %q", cfg.DelayStore)
+	}
+	if cfg.DelayPrefix != schedule.DefaultRedisPrefix {
+		t.Errorf("默认前缀应为 %q，实际 %q", schedule.DefaultRedisPrefix, cfg.DelayPrefix)
+	}
+
+	t.Setenv("XW_DELAY_STORE", "memory")
+	t.Setenv("XW_DELAY_PREFIX", "xw:delay:staging")
+	cfg = Load()
+	if cfg.DelayStore != "memory" || cfg.DelayPrefix != "xw:delay:staging" {
+		t.Errorf("显式配置未生效：store=%q prefix=%q", cfg.DelayStore, cfg.DelayPrefix)
 	}
 }

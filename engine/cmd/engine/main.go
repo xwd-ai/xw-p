@@ -5,7 +5,8 @@
 // 租约过期未确认的消息由回收流程重新入队），并发度由 XW_WORKERS 控制，
 // 退出时等待在途消息处理完毕；消费到的消息按自带步骤快照执行整条工作流
 // （filter → transform → render → dispatch，delay 步骤交给调度器续跑），
-// 同时运行延迟调度器，按时唤醒 delay 步骤之后的续跑步骤；
+// 同时运行延迟调度器，按时唤醒 delay 步骤之后的续跑步骤，未到期任务
+// 存放在 Redis 里，重启或换实例都能接上；
 // 另起一个本地管理接口，供运维查询、重放与丢弃死信。
 package main
 
@@ -54,6 +55,8 @@ func main() {
 		"reclaimInterval", cfg.ReclaimInterval,
 		"workers", cfg.WorkersOrDefault(),
 		"shutdownGrace", cfg.ShutdownGraceOrDefault(),
+		"delayStore", cfg.DelayStore,
+		"delayPrefix", cfg.DelayPrefix,
 		"adminAddr", cfg.AdminAddr,
 	)
 
@@ -63,7 +66,9 @@ func main() {
 	defer closeDigest()
 
 	// 延迟调度器：到期任务 → 管线续跑。delay 步骤到期后把剩余步骤跑完。
-	scheduler := newDelayScheduler(logger, pipe)
+	// 未到期任务存在 Redis，重启或换实例都不会丢。
+	scheduler, closeDelayStore := newDelayScheduler(logger, pipe, cfg)
+	defer closeDelayStore()
 
 	// 把调度器接成管线的延迟出口：没有这一句，delay 步骤会以「未配置调度器」
 	// 失败——那正是「延迟看起来配了、实际直接失败」的隐蔽故障。
@@ -150,8 +155,8 @@ func main() {
 // newDelayScheduler 组装延迟调度器：到期任务 → 解码续跑任务 → 执行剩余步骤。
 //
 // in_app 渠道写入默认收件箱存储，其余渠道走 console mock，
-// 与本进程的投递语义保持一致。
-func newDelayScheduler(logger *slog.Logger, pipe *pipeline.Pipeline) *schedule.Scheduler {
+// 与本进程的投递语义保持一致。返回值里的函数用于释放存储连接。
+func newDelayScheduler(logger *slog.Logger, pipe *pipeline.Pipeline, cfg config.Config) (*schedule.Scheduler, func()) {
 	handler := func(ctx context.Context, item schedule.Item) error {
 		deferral, results, err := pipe.Resume(item.Payload)
 		if err != nil {
@@ -180,7 +185,44 @@ func newDelayScheduler(logger *slog.Logger, pipe *pipeline.Pipeline) *schedule.S
 		)
 		return nil
 	}
-	return schedule.New(schedule.NewMemoryStore(), handler, logger)
+	store, closeStore := newDelayStore(logger, cfg)
+	return schedule.New(store, handler, logger), closeStore
+}
+
+// newDelayStore 选定延迟任务存储：默认 Redis ZSET（重启与多实例都不丢），
+// 显式配置 XW_DELAY_STORE=memory 或 Redis 不可用时回退进程内存储。
+//
+// 回退会丢未到期任务，所以这里必须把选择结果打进启动日志：运维能一眼看出
+// 当前实例的 delay 任务是「活得比进程久」还是「跟着进程一起走」。
+func newDelayStore(logger *slog.Logger, cfg config.Config) (schedule.Store, func()) {
+	if strings.EqualFold(strings.TrimSpace(cfg.DelayStore), "memory") {
+		logger.Info("[engine] 延迟任务存储：进程内存（重启后未到期任务丢失）",
+			"reason", "XW_DELAY_STORE=memory")
+		return schedule.NewMemoryStore(), func() {}
+	}
+
+	client := redis.NewClient(&redis.Options{
+		Addr:     cfg.RedisAddr,
+		Password: cfg.RedisPassword,
+		DB:       cfg.RedisDB,
+	})
+	store := schedule.NewRedisStoreWithPrefix(client, cfg.DelayPrefix).WithLogger(logger)
+
+	pingCtx, cancel := context.WithTimeout(context.Background(), cfg.PollTimeoutDuration())
+	defer cancel()
+	if err := store.Ping(pingCtx); err != nil {
+		logger.Warn("[engine] 延迟任务存储连接 Redis 失败，本次回退进程内存；重启后未到期任务会丢失",
+			"redis", cfg.RedisAddr, "error", err)
+		_ = client.Close()
+		return schedule.NewMemoryStore(), func() {}
+	}
+
+	logger.Info("[engine] 延迟任务存储：Redis ZSET",
+		"redis", cfg.RedisAddr,
+		"dueKey", store.DueKey(),
+		"itemsKey", store.ItemsKey(),
+	)
+	return store, func() { _ = client.Close() }
 }
 
 // loadWorkflowSource 加载工作流定义表，作为消息未携带步骤快照时的回退来源。
