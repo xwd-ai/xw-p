@@ -2,6 +2,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -46,6 +47,9 @@ type Config struct {
 	// WorkflowsFile 是工作流定义快照文件（JSON 数组）的路径，
 	// 用于给没有携带步骤定义的消息提供按名称回退查找。为空表示不加载。
 	WorkflowsFile string
+	// AdminAddr 是运维接口（死信查询/重放）的监听地址。
+	// 空字符串表示不启动；未配置 XW_ADMIN_ADDR 时沿用 ENGINE_PORT。
+	AdminAddr string
 }
 
 // Load 从环境变量读取配置。
@@ -79,7 +83,25 @@ func Load() Config {
 		RetryInterval:    envDuration("XW_RETRY_INTERVAL", worker.DefaultRetryInterval),
 
 		WorkflowsFile: strings.TrimSpace(os.Getenv("XW_WORKFLOWS_FILE")),
+		AdminAddr:     adminListenAddr(),
 	}
+}
+
+// adminListenAddr 解析运维接口的监听地址。
+//
+// XW_ADMIN_ADDR 显式配置优先：留空或写 off/disabled 表示关闭，
+// 其余写法按原样监听（如 127.0.0.1:8081，只对本机开放）。
+// 未配置时沿用 ENGINE_PORT，让运维接口有址可寻，又不必默认对外暴露。
+func adminListenAddr() string {
+	if raw, ok := os.LookupEnv("XW_ADMIN_ADDR"); ok {
+		raw = strings.TrimSpace(raw)
+		switch strings.ToLower(raw) {
+		case "off", "disabled", "none", "-":
+			return ""
+		}
+		return raw
+	}
+	return fmt.Sprintf("127.0.0.1:%d", envInt("ENGINE_PORT", 8081))
 }
 
 // WorkersOrDefault 返回生效的并发度：非法值回退默认，并收敛到上限以内。

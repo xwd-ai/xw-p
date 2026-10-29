@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"testing"
 	"time"
 
@@ -87,5 +88,36 @@ func TestLoadReadsRetryEnv(t *testing.T) {
 	}
 	if cfg.RetryInterval != 3*time.Second {
 		t.Errorf("XW_RETRY_INTERVAL 应解析为 3s，实际 %v", cfg.RetryInterval)
+	}
+}
+
+// 管理接口监听地址：未配置时落在本机 ENGINE_PORT，显式配置优先，
+// off/空串关闭。运维接口不该默认对外暴露，所以默认只绑回环地址。
+func TestAdminListenAddr(t *testing.T) {
+	t.Setenv("XW_ADMIN_ADDR", "")
+	if got := Load().AdminAddr; got != "" {
+		t.Errorf("XW_ADMIN_ADDR 留空应关闭管理接口，实际 %q", got)
+	}
+
+	t.Setenv("XW_ADMIN_ADDR", "off")
+	if got := Load().AdminAddr; got != "" {
+		t.Errorf("XW_ADMIN_ADDR=off 应关闭管理接口，实际 %q", got)
+	}
+
+	t.Setenv("XW_ADMIN_ADDR", "0.0.0.0:9090")
+	if got := Load().AdminAddr; got != "0.0.0.0:9090" {
+		t.Errorf("显式地址应原样生效，实际 %q", got)
+	}
+}
+
+func TestAdminListenAddrFallsBackToEnginePort(t *testing.T) {
+	// 用 Unsetenv 区分「没有这个变量」与「变量为空」。
+	t.Setenv("XW_ADMIN_ADDR", "placeholder")
+	if err := os.Unsetenv("XW_ADMIN_ADDR"); err != nil {
+		t.Fatalf("清除环境变量失败: %v", err)
+	}
+	t.Setenv("ENGINE_PORT", "9181")
+	if got := Load().AdminAddr; got != "127.0.0.1:9181" {
+		t.Errorf("未配置时应沿用 ENGINE_PORT 并只绑回环，实际 %q", got)
 	}
 }

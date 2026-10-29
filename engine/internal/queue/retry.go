@@ -380,22 +380,18 @@ func (c *ReliableConsumer) PromoteDueRetries(ctx context.Context, batch int) ([]
 	return out, nil
 }
 
-// DeadLetters 读取死信列表（按写入顺序，最多 limit 条）。
+// DeadLetters 读取死信列表，按写入顺序返回最早的最多 limit 条。
+//
+// 运维排查走 ListDeadLetters（最新在前、可翻页）；这里保留按写入顺序的
+// 简单读法，供日志与测试按「先失败先看到」的顺序核对。
 func (c *ReliableConsumer) DeadLetters(ctx context.Context, limit int64) ([]DeadLetter, error) {
-	if limit <= 0 {
-		limit = DefaultRetryBatch
-	}
-	items, err := c.client.LRange(ctx, c.retryKeys().dead, 0, limit-1).Result()
+	page, err := c.ListDeadLetters(ctx, DeadLetterQuery{Limit: int(limit)})
 	if err != nil {
 		return nil, err
 	}
-	out := make([]DeadLetter, 0, len(items))
-	for _, item := range items {
-		var rec DeadLetter
-		if err := json.Unmarshal([]byte(item), &rec); err != nil {
-			continue
-		}
-		out = append(out, rec)
+	out := make([]DeadLetter, 0, len(page.Items))
+	for i := len(page.Items) - 1; i >= 0; i-- {
+		out = append(out, page.Items[i].DeadLetter)
 	}
 	return out, nil
 }

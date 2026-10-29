@@ -5,7 +5,8 @@
 // 租约过期未确认的消息由回收流程重新入队），并发度由 XW_WORKERS 控制，
 // 退出时等待在途消息处理完毕；消费到的消息按自带步骤快照执行整条工作流
 // （filter → transform → render → dispatch，delay 步骤交给调度器续跑），
-// 同时运行延迟调度器，按时唤醒 delay 步骤之后的续跑步骤。
+// 同时运行延迟调度器，按时唤醒 delay 步骤之后的续跑步骤；
+// 另起一个本地管理接口，供运维查询、重放与丢弃死信。
 package main
 
 import (
@@ -19,6 +20,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	"github.com/xwd-ai/xw-p/engine/internal/admin"
 	"github.com/xwd-ai/xw-p/engine/internal/config"
 	"github.com/xwd-ai/xw-p/engine/internal/pipeline"
 	"github.com/xwd-ai/xw-p/engine/internal/queue"
@@ -52,6 +54,7 @@ func main() {
 		"reclaimInterval", cfg.ReclaimInterval,
 		"workers", cfg.WorkersOrDefault(),
 		"shutdownGrace", cfg.ShutdownGraceOrDefault(),
+		"adminAddr", cfg.AdminAddr,
 	)
 
 	// 聚合卡片存储：多实例共享走 Redis，Redis 不可用时回退进程内存
@@ -114,6 +117,21 @@ func main() {
 			"reason", "XW_RETRY_MAX_ATTEMPTS<=0",
 			"fallback", "保留在途记录等待租约回收",
 		)
+	}
+
+	// 运维接口：死信查询、重放与丢弃。死信的键布局与记录格式由队列包定义，
+	// 这里只把队列方法挂到 HTTP 上，避免出现第二份「键名拼装」的实现。
+	if cfg.AdminAddr != "" {
+		wg.Add(1)
+		adminServer := admin.New(consumer, logger)
+		go func() {
+			defer wg.Done()
+			if err := adminServer.Run(ctx, cfg.AdminAddr); err != nil {
+				logger.Error("[engine] 管理接口退出", "addr", cfg.AdminAddr, "error", err)
+			}
+		}()
+	} else {
+		logger.Info("[engine] 管理接口已关闭", "reason", "XW_ADMIN_ADDR=off")
 	}
 
 	// 并发消费：XW_WORKERS 个消费者共享同一队列，关闭时等手里那条跑完。
