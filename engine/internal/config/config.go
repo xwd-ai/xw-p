@@ -35,6 +35,14 @@ type Config struct {
 	// Workers 是并发消费者数量；ShutdownGrace 是退出时等待在途消息的上限。
 	Workers       int
 	ShutdownGrace time.Duration
+	// 失败重试：处理失败的消息按指数退避（带抖动）重新投递，
+	// 次数耗尽后转死信。MaxAttempts <= 0 表示关闭重试。
+	RetryMaxAttempts int
+	RetryBaseDelay   time.Duration
+	RetryMaxDelay    time.Duration
+	RetryJitter      float64
+	// RetryInterval 是把到期重试写回主队列的扫描间隔。
+	RetryInterval time.Duration
 	// WorkflowsFile 是工作流定义快照文件（JSON 数组）的路径，
 	// 用于给没有携带步骤定义的消息提供按名称回退查找。为空表示不加载。
 	WorkflowsFile string
@@ -63,6 +71,12 @@ func Load() Config {
 
 		Workers:       envInt("XW_WORKERS", worker.DefaultPoolSize),
 		ShutdownGrace: envDuration("XW_SHUTDOWN_GRACE", worker.DefaultShutdownGrace),
+
+		RetryMaxAttempts: envInt("XW_RETRY_MAX_ATTEMPTS", queue.DefaultMaxAttempts),
+		RetryBaseDelay:   envDuration("XW_RETRY_BASE_DELAY", queue.DefaultRetryBase),
+		RetryMaxDelay:    envDuration("XW_RETRY_MAX_DELAY", queue.DefaultRetryMax),
+		RetryJitter:      envFloat("XW_RETRY_JITTER", queue.DefaultRetryJitter),
+		RetryInterval:    envDuration("XW_RETRY_INTERVAL", worker.DefaultRetryInterval),
 
 		WorkflowsFile: strings.TrimSpace(os.Getenv("XW_WORKFLOWS_FILE")),
 	}
@@ -93,6 +107,23 @@ func (c Config) ClaimLeaseOrDefault() time.Duration {
 	return c.ClaimLease
 }
 
+// RetryPolicyOrDefault 返回生效的重试策略。
+//
+// MaxAttempts 为负按「关闭重试」处理；其余字段为 0 时补默认值——
+// 配错一个延迟不该把重试退化成毫秒级忙循环。
+func (c Config) RetryPolicyOrDefault() queue.RetryPolicy {
+	policy := queue.RetryPolicy{
+		MaxAttempts: c.RetryMaxAttempts,
+		Base:        c.RetryBaseDelay,
+		Max:         c.RetryMaxDelay,
+		Jitter:      c.RetryJitter,
+	}
+	if policy.MaxAttempts < 0 {
+		policy.MaxAttempts = 0
+	}
+	return policy.Normalize()
+}
+
 // PollTimeoutDuration 返回阻塞拉取的超时时间。
 func (c Config) PollTimeoutDuration() time.Duration {
 	if c.PollTimeout <= 0 {
@@ -113,6 +144,18 @@ func envInt(key string, fallback int) int {
 		if n, err := strconv.Atoi(v); err == nil {
 			return n
 		}
+	}
+	return fallback
+}
+
+// envFloat 读取浮点配置（如抖动比例），无法解析时回退默认值。
+func envFloat(key string, fallback float64) float64 {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	if v, err := strconv.ParseFloat(raw, 64); err == nil {
+		return v
 	}
 	return fallback
 }

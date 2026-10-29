@@ -90,10 +90,39 @@ func main() {
 		logger.Info("[engine] 在途消息回收已关闭", "reason", "XW_RECLAIM_INTERVAL<=0")
 	}
 
+	// 失败重试：处理失败的消息按指数退避重新投递，次数耗尽转死信。
+	// 关闭时（XW_RETRY_MAX_ATTEMPTS<=0）退化为「留在在途记录等租约回收」。
+	policy := cfg.RetryPolicyOrDefault()
+	var retrier *queue.Retrier
+	if policy.Enabled() {
+		retrier = consumer.Retrier(policy)
+		wg.Add(1)
+		pumper := worker.NewRetryPumper(consumer, cfg.RetryInterval, logger)
+		go func() {
+			defer wg.Done()
+			pumper.Run(ctx)
+		}()
+		logger.Info("[engine] 失败重试已启用",
+			"maxAttempts", policy.MaxAttempts,
+			"base", policy.Base,
+			"max", policy.Max,
+			"jitter", policy.Jitter,
+			"stateTTL", policy.StateTTL(),
+		)
+	} else {
+		logger.Info("[engine] 失败重试已关闭",
+			"reason", "XW_RETRY_MAX_ATTEMPTS<=0",
+			"fallback", "保留在途记录等待租约回收",
+		)
+	}
+
 	// 并发消费：XW_WORKERS 个消费者共享同一队列，关闭时等手里那条跑完。
 	pool := worker.NewPool(consumer, cfg.WorkersOrDefault(), cfg.PollTimeoutDuration(), logger).
 		WithShutdownGrace(cfg.ShutdownGraceOrDefault()).
 		WithExecutor(exec)
+	if retrier != nil {
+		pool.WithRetrier(retrier)
+	}
 	pool.Run(ctx)
 
 	// 池子退出（ctx 取消）后等待调度器收尾，避免任务被中断在日志中途。

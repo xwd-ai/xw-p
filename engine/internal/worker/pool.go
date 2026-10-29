@@ -38,6 +38,8 @@ type Pool struct {
 	// executor 是各消费者共用的工作流执行器；为空时退化为 mock 日志。
 	// 执行器本身要求并发安全（管线与 provider 注册表都是无状态的）。
 	executor Executor
+	// retrier 是各消费者共用的失败重试处理器；为空时失败消息等租约回收。
+	retrier Retrier
 	// handle 用于测试注入处理逻辑；为空时各消费者使用默认的 Handle。
 	handle func([]byte) error
 }
@@ -73,6 +75,13 @@ func (p *Pool) WithExecutor(ex Executor) *Pool {
 	return p
 }
 
+// WithRetrier 给池内每个消费者装上同一个失败重试处理器，返回池自身。
+// 处理器只做 Redis 状态迁移，并发调用安全。
+func (p *Pool) WithRetrier(r Retrier) *Pool {
+	p.retrier = r
+	return p
+}
+
 // NormalizePoolSize 把并发度收敛到 [1, MaxPoolSize]。
 func NormalizePoolSize(size int) int {
 	if size < 1 {
@@ -104,6 +113,9 @@ func (p *Pool) Run(ctx context.Context) int {
 		w.id = i + 1
 		if p.executor != nil {
 			w.executor = p.executor
+		}
+		if p.retrier != nil {
+			w.retrier = p.retrier
 		}
 		if p.handle != nil {
 			w.handle = p.handle

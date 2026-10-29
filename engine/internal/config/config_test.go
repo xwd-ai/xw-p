@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xwd-ai/xw-p/engine/internal/queue"
 	"github.com/xwd-ai/xw-p/engine/internal/worker"
 )
 
@@ -37,5 +38,54 @@ func TestLoadReadsWorkerEnv(t *testing.T) {
 	}
 	if cfg.ShutdownGraceOrDefault() != 7*time.Second {
 		t.Errorf("XW_SHUTDOWN_GRACE 应解析为 7s，实际 %v", cfg.ShutdownGraceOrDefault())
+	}
+}
+
+// 重试策略：默认值可直接启用，环境变量能改，显式关闭则回到「等租约回收」。
+func TestRetryPolicyDefaults(t *testing.T) {
+	t.Setenv("XW_RETRY_MAX_ATTEMPTS", "")
+	policy := Load().RetryPolicyOrDefault()
+	if !policy.Enabled() {
+		t.Fatal("未配置时应启用默认重试策略")
+	}
+	if policy.MaxAttempts != queue.DefaultMaxAttempts {
+		t.Errorf("默认最大次数应为 %d，实际 %d", queue.DefaultMaxAttempts, policy.MaxAttempts)
+	}
+	if policy.Base != queue.DefaultRetryBase || policy.Max != queue.DefaultRetryMax {
+		t.Errorf("默认退避参数不符: %+v", policy)
+	}
+	if policy.Jitter != queue.DefaultRetryJitter {
+		t.Errorf("默认抖动比例应为 %v，实际 %v", queue.DefaultRetryJitter, policy.Jitter)
+	}
+
+	t.Setenv("XW_RETRY_MAX_ATTEMPTS", "0")
+	if Load().RetryPolicyOrDefault().Enabled() {
+		t.Error("XW_RETRY_MAX_ATTEMPTS=0 应关闭重试")
+	}
+}
+
+func TestLoadReadsRetryEnv(t *testing.T) {
+	t.Setenv("XW_RETRY_MAX_ATTEMPTS", "7")
+	t.Setenv("XW_RETRY_BASE_DELAY", "500ms")
+	t.Setenv("XW_RETRY_MAX_DELAY", "30s")
+	t.Setenv("XW_RETRY_JITTER", "0.15")
+	t.Setenv("XW_RETRY_INTERVAL", "3s")
+
+	cfg := Load()
+	policy := cfg.RetryPolicyOrDefault()
+	if policy.MaxAttempts != 7 {
+		t.Errorf("XW_RETRY_MAX_ATTEMPTS 应解析为 7，实际 %d", policy.MaxAttempts)
+	}
+	if policy.Base != 500*time.Millisecond {
+		t.Errorf("XW_RETRY_BASE_DELAY 应解析为 500ms，实际 %v", policy.Base)
+	}
+	if policy.Max != 30*time.Second {
+		t.Errorf("XW_RETRY_MAX_DELAY 应解析为 30s，实际 %v", policy.Max)
+	}
+	if policy.Jitter != 0.15 {
+		t.Errorf("XW_RETRY_JITTER 应解析为 0.15，实际 %v", policy.Jitter)
+	}
+	if cfg.RetryInterval != 3*time.Second {
+		t.Errorf("XW_RETRY_INTERVAL 应解析为 3s，实际 %v", cfg.RetryInterval)
 	}
 }
