@@ -81,8 +81,9 @@ def test_compute_stats_trend_ignores_old_or_missing_ts():
 
 @pytest.fixture
 def client(monkeypatch):
-    """隔离存储单例，注入返回固定记录的内存存储。"""
+    """隔离存储单例，注入在内存里完成聚合的固定记录存储。"""
     import app.storage as storage_mod
+    from app.stats import compute_stats
 
     class _FakeStorage:
         def __init__(self):
@@ -98,6 +99,9 @@ def client(monkeypatch):
         def read_all(self):
             return list(self.records)
 
+        def stats(self, trend_days=7):
+            return compute_stats(self.records, trend_days)
+
     monkeypatch.setattr(storage_mod, "_storage", _FakeStorage())
     return TestClient(app)
 
@@ -110,3 +114,43 @@ def test_dashboard_stats_endpoint(client):
     assert data["success_rate"] == round(2 / 3 * 100, 1)
     assert data["channel_distribution"] == {"email": 1, "in_app": 1, "push": 1, "sms": 1}
     assert len(data["trend"]) == 7
+
+
+def test_jsonl_storage_stats_matches_compute_stats(tmp_path):
+    """流式累加的结果与小数据量下的整体聚合一致。"""
+    from app.storage import JSONLStorage
+
+    path = tmp_path / "messages.jsonl"
+    store = JSONLStorage(path=path)
+    records = [
+        _record(status="sent", channels=["in_app", "push"], days_ago=0),
+        _record(status="failed", channels=["email"], days_ago=0),
+        _record(status="sent", channels=["sms"], days_ago=2),
+        _record(status="sent", channels=["in_app"], days_ago=30),
+    ]
+    for r in records:
+        store.save(r)
+
+    assert store.stats() == _compute_stats(records)
+
+
+def test_jsonl_storage_stats_handles_missing_file(tmp_path):
+    from app.storage import JSONLStorage
+
+    stats = JSONLStorage(path=tmp_path / "nope.jsonl").stats()
+    assert stats["total"] == 0
+    assert stats["success_rate"] == 100.0
+    assert sum(d["count"] for d in stats["trend"]) == 0
+
+
+def test_jsonl_storage_stats_skips_corrupt_lines(tmp_path):
+    from app.storage import JSONLStorage
+
+    path = tmp_path / "messages.jsonl"
+    store = JSONLStorage(path=path)
+    store.save(_record(status="sent"))
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write("{broken\n")
+    stats = store.stats()
+    assert stats["total"] == 1
+    assert stats["success_rate"] == 100.0

@@ -16,22 +16,13 @@ def client(monkeypatch):
     import app.activity_log as al_mod
     import app.bus as bus_mod
     import app.idempotency as idem_mod
-
-    class _FakeActivityStore:
-        def __init__(self):
-            self.records = []
-
-        def append(self, record):
-            self.records.append(record)
-
-        def read_all(self):
-            return list(self.records)
+    from app.activity_log import MemoryActivityStore
 
     bus = MemoryMessageBus()
     idem = MemoryIdempotencyStore()
     monkeypatch.setattr(bus_mod, "_bus", bus)
     monkeypatch.setattr(idem_mod, "_store", idem)
-    monkeypatch.setattr(al_mod, "_activity_store", _FakeActivityStore())
+    monkeypatch.setattr(al_mod, "_activity_store", MemoryActivityStore())
     monkeypatch.setattr(config, "IDEMPOTENCY_BACKEND", "memory")
     monkeypatch.setattr(config, "IDEMPOTENCY_TTL", 86400)
     # 默认不配置任何 Key，保证鉴权开放（与 demo 行为一致）

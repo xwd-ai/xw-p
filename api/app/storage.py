@@ -4,17 +4,22 @@
 - postgres：写入 ``messages`` 表，连接与建表由脚本 / 迁移负责。
 
 通过 ``XW_STORAGE`` 环境变量选择，``get_storage()`` 返回全局单例。
+
+统计（``stats``）不保留原始记录：JSONL 后端逐行流式累加，Postgres 后端交给
+聚合查询，两者都只把计数拿回来。
 """
 from __future__ import annotations
 
 import json
 import logging
 import threading
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional, Protocol
 
 from . import config
 from .schemas import QueuedMessage
+from .stats import TREND_DAYS, StatsAccumulator, build_stats
 
 logger = logging.getLogger("xw.storage")
 
@@ -28,6 +33,8 @@ class Storage(Protocol):
     def save(self, record: dict[str, Any]) -> None: ...
 
     def read_all(self) -> list[dict[str, Any]]: ...
+
+    def stats(self, trend_days: int = TREND_DAYS) -> dict[str, Any]: ...
 
 
 class JSONLStorage:
@@ -44,7 +51,7 @@ class JSONLStorage:
                 fh.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     def read_all(self) -> list[dict[str, Any]]:
-        """读取全部已落库记录（统计/活动流用）。文件不存在返回空列表。"""
+        """读取全部已落库记录（导出/排查用，统计接口不再走这条路径）。"""
         with self._lock:
             if not self._path.exists():
                 return []
@@ -59,6 +66,23 @@ class JSONLStorage:
                     except json.JSONDecodeError:
                         logger.warning("跳过损坏的 JSONL 行：%s", line[:80])
             return records
+
+    def stats(self, trend_days: int = TREND_DAYS) -> dict[str, Any]:
+        """流式逐行累加统计量，内存占用与记录条数无关。"""
+        acc = StatsAccumulator(trend_days=trend_days)
+        with self._lock:
+            if not self._path.exists():
+                return acc.result()
+            with self._path.open("r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        acc.add(json.loads(line))
+                    except json.JSONDecodeError:
+                        logger.warning("跳过损坏的 JSONL 行：%s", line[:80])
+        return acc.result()
 
 
 class PostgresStorage:
@@ -103,7 +127,7 @@ class PostgresStorage:
             )
 
     def read_all(self) -> list[dict[str, Any]]:
-        """读取全部消息记录（统计/活动流用）。"""
+        """读取全部消息记录（导出/排查用，统计接口不再走这条路径）。"""
         from sqlalchemy import text
 
         engine = self._get_engine()
@@ -133,6 +157,47 @@ class PostgresStorage:
                 }
             )
         return records
+
+    def stats(self, trend_days: int = TREND_DAYS) -> dict[str, Any]:
+        """由 SQL 聚合出统计量，只回传计数行，不搬运原始记录。"""
+        from sqlalchemy import text
+
+        since = datetime.now(timezone.utc) - timedelta(days=trend_days)
+        engine = self._get_engine()
+        with engine.connect() as conn:
+            totals = conn.execute(
+                text(
+                    "SELECT count(*) AS total, "
+                    "count(*) FILTER (WHERE status = 'sent') AS sent FROM messages"
+                )
+            ).mappings().one()
+            channel_rows = conn.execute(
+                text(
+                    "SELECT t.channel AS channel, count(*) AS n "
+                    "FROM messages CROSS JOIN LATERAL jsonb_array_elements_text(channels) AS t(channel) "
+                    "GROUP BY t.channel"
+                )
+            ).mappings().all()
+            day_rows = conn.execute(
+                text(
+                    "SELECT (created_at AT TIME ZONE 'UTC')::date AS day, count(*) AS n "
+                    "FROM messages WHERE created_at >= :since GROUP BY 1"
+                ),
+                {"since": since},
+            ).mappings().all()
+
+        per_day: dict[str, int] = {}
+        for row in day_rows:
+            day = row["day"]
+            per_day[day.isoformat() if hasattr(day, "isoformat") else str(day)] = int(row["n"])
+
+        return build_stats(
+            total=int(totals["total"]),
+            sent=int(totals["sent"]),
+            channel_counts={str(r["channel"]): int(r["n"]) for r in channel_rows},
+            per_day=per_day,
+            trend_days=trend_days,
+        )
 
 
 def create_storage() -> Storage:

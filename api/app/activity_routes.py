@@ -1,4 +1,4 @@
-"""活动流查询 API（ROADMAP Phase S / Phase 1）。
+"""活动流查询 API。
 
 提供 ``GET /v1/activity``，从活动日志存储（``activity_log``）读取触发事件，
 返回按时间倒序的活动列表，供前端「活动流」消费。
@@ -9,6 +9,12 @@
 - ``trigger_id``：按触发唯一标识精确查询。
 - ``status``：按活动状态过滤（``triggered`` / ``sent`` / ``failed``）。
 - ``since`` / ``until``：按创建时间范围过滤（ISO 8601，含边界）。
+- ``environment``：按隔离环境过滤。
+
+分页用游标而不是 offset：响应里的 ``nextCursor`` 原样回传即可取下一页。
+游标是上一页最后一条记录的 ``(created_at, trigger_id)``，翻页期间有新记录写入
+也不会导致漏读或重复。过滤与排序由存储后端完成（JSONL 从文件尾部倒序读、
+Postgres 走 INDEX + LIMIT），接口层不再把整表读进内存筛选。
 
 数据来源为独立的活动日志（见 ``activity_log.py``），在触发 API 返回回执前
 同步写入，因此活动流能即时反映「已触发」状态。
@@ -24,36 +30,19 @@
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
-from .activity_log import get_activity_store
+from .activity_log import ActivityQuery, get_activity_store
+from .timeutil import Cursor, decode_cursor, encode_cursor, parse_dt as _parse_dt
 
 router = APIRouter(prefix="/v1", tags=["activity"])
 
 # 默认返回条数上限（活动流一次展示的量级）
 _DEFAULT_LIMIT = 50
 _MAX_LIMIT = 200
-
-
-def _parse_dt(value: object) -> Optional[datetime]:
-    """把记录里的时间戳解析为带时区的 datetime；失败返回 None。"""
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        dt = value
-    elif isinstance(value, str):
-        try:
-            dt = datetime.fromisoformat(value)
-        except ValueError:
-            return None
-    else:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
 
 
 def _to_activity(record: dict) -> dict:
@@ -67,8 +56,8 @@ def _to_activity(record: dict) -> dict:
         payload = {}
 
     workflow = record.get("workflow") or record.get("name") or "unknown"
-    # 展示标题：优先 payload 里的 title，其次工作流名
-    title = payload.get("title") or workflow
+    # 展示标题：优先已落库的 title（写入时取自 payload.title），其次 payload，最后工作流名
+    title = record.get("title") or payload.get("title") or workflow
 
     return {
         "trigger_id": record.get("trigger_id"),
@@ -82,53 +71,14 @@ def _to_activity(record: dict) -> dict:
     }
 
 
-def _filter_and_sort(
-    records: list[dict],
-    subscriber_id: Optional[str],
-    workflow: Optional[str],
-    limit: int,
-    trigger_id: Optional[str] = None,
-    status: Optional[str] = None,
-    since: Optional[datetime] = None,
-    until: Optional[datetime] = None,
-    environment: Optional[str] = None,
-) -> list[dict]:
-    """按条件过滤并返回按时间倒序的活动列表。"""
-    activities = []
-    for r in records:
-        # 环境过滤（隔离环境打标，未打标的旧记录视为 development）
-        if environment:
-            rec_env = r.get("environment") or "development"
-            if rec_env != environment:
-                continue
-        # 订阅者过滤
-        if subscriber_id and r.get("subscriber_id") != subscriber_id:
-            continue
-        # 工作流过滤
-        wf = r.get("workflow") or r.get("name")
-        if workflow and wf != workflow:
-            continue
-        # 触发标识精确过滤
-        if trigger_id and r.get("trigger_id") != trigger_id:
-            continue
-        # 状态过滤
-        if status and r.get("status") != status:
-            continue
-        # 时间范围过滤（含边界）
-        dt = _parse_dt(r.get("created_at"))
-        if since is not None and (dt is None or dt < since):
-            continue
-        if until is not None and (dt is None or dt > until):
-            continue
-        activities.append(_to_activity(r))
-
-    # 按 created_at 倒序（最新在前）；时间缺失的排在最后
-    def _sort_key(a: dict):
-        dt = _parse_dt(a.get("created_at"))
-        return dt.timestamp() if dt else float("-inf")
-
-    activities.sort(key=_sort_key, reverse=True)
-    return activities[:limit]
+def _cursor_of(item: dict) -> Optional[str]:
+    """由条目构造下一页游标；时间戳不可解析时返回 None（提前结束翻页）。"""
+    created_at = _parse_dt(item.get("created_at"))
+    if created_at is None:
+        return None
+    return encode_cursor(
+        Cursor(created_at=created_at, trigger_id=str(item.get("trigger_id") or ""))
+    )
 
 
 @router.get("/activity")
@@ -140,22 +90,40 @@ def list_activity(
     since: Optional[datetime] = Query(default=None, description="起始时间（ISO 8601，含）"),
     until: Optional[datetime] = Query(default=None, description="截止时间（ISO 8601，含）"),
     environment: Optional[str] = Query(default=None, description="按隔离环境过滤（development/production）"),
-    limit: int = Query(default=_DEFAULT_LIMIT, ge=1, le=_MAX_LIMIT, description="返回条数上限"),
+    limit: int = Query(default=_DEFAULT_LIMIT, ge=1, le=_MAX_LIMIT, description="单页条数上限"),
+    cursor: Optional[str] = Query(default=None, description="上一页返回的 nextCursor"),
 ) -> dict:
-    """返回最近的活动（触发事件），最新在前。"""
-    records = get_activity_store().read_all()
-    items = _filter_and_sort(
-        records,
-        subscriber_id,
-        workflow,
-        limit,
-        trigger_id=trigger_id,
-        status=status,
-        since=since,
-        until=until,
-        environment=environment,
+    """返回一页活动（触发事件），最新在前；``nextCursor`` 为空表示没有更多。"""
+    after: Optional[Cursor] = None
+    if cursor:
+        try:
+            after = decode_cursor(cursor)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="cursor 无效")
+
+    # 多取一条用于判断是否还有下一页
+    rows = get_activity_store().query(
+        ActivityQuery(
+            subscriber_id=subscriber_id,
+            workflow=workflow,
+            trigger_id=trigger_id,
+            status=status,
+            environment=environment,
+            since=since,
+            until=until,
+            limit=limit + 1,
+            after=after,
+        )
     )
-    return {"items": items, "total": len(items)}
+    has_more = len(rows) > limit
+    items = [_to_activity(r) for r in rows[:limit]]
+    next_cursor = _cursor_of(items[-1]) if has_more and items else None
+    return {
+        "items": items,
+        "total": len(items),
+        "hasMore": bool(next_cursor),
+        "nextCursor": next_cursor,
+    }
 
 
-__all__ = ["router", "_to_activity", "_filter_and_sort", "_parse_dt"]
+__all__ = ["router", "_to_activity", "_parse_dt"]

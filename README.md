@@ -176,7 +176,20 @@ curl -X POST 127.0.0.1:8081/admin/dead-letters/replay \
 XW_BUS=redis XW_STORAGE=postgres .venv/bin/uvicorn app.main:app --reload
 # 首次启用 Postgres 需先建表：
 psql "$XW_DATABASE_URL" -f scripts/migrations/001_messages.sql
+psql "$XW_DATABASE_URL" -f scripts/migrations/003_activity_log.sql
+# 活动流/统计的复合索引
+psql "$XW_DATABASE_URL" -f scripts/migrations/005_query_indexes.sql
 ```
+
+### 活动流与统计的查询路径
+
+活动流（`GET /v1/activity`）不再把整张表读进内存再筛选：过滤条件下推到存储，排序由存储保证，接口层只拿一页。
+
+- **翻页用游标**：`limit` 给单页条数（默认 50，上限 200），响应里的 `nextCursor` 原样回传取下一页，`hasMore` 表示还有没有更多。游标是上一页最后一条记录的 `(created_at, trigger_id)`，翻页期间有新触发写入也不会漏读或重复；非法游标返回 400。用游标而不是 `offset`，是因为活动流一直在追加，`offset` 在数据变动时会跳行。
+- **Postgres**：`WHERE` + `ORDER BY created_at DESC, trigger_id DESC LIMIT`，配套 `005_query_indexes.sql` 的复合索引（索引列顺序与排序键一致，过滤条件直接走索引前缀，不需要额外排序）。
+- **JSONL**：从文件尾部倒着按块读，取满一页即停，读取量取决于页大小而不是文件大小。这个后端定位是 demo——过滤条件太稀疏时仍会退到顺序扫描。
+
+仪表盘统计（`GET /v1/dashboard/stats`）同样不保留原始记录：Postgres 侧用 `count(*) FILTER` / `jsonb_array_elements_text` / `date_trunc` 三条聚合查询直接出结果，JSONL 后端逐行流式累加，内存占用与记录条数无关。
 
 ## 压测
 

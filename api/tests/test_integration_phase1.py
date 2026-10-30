@@ -18,6 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import config
+from app.activity_log import MemoryActivityStore
 from app.bus import MemoryMessageBus
 from app.idempotency import MemoryIdempotencyStore
 from app.main import app
@@ -41,6 +42,12 @@ class _InMemoryListStore:
     def read_all(self) -> list[dict]:
         with self._lock:
             return list(self._records)
+
+    def stats(self, trend_days: int = 7) -> dict:
+        """与真实后端同口径的统计聚合（仪表盘接口用）。"""
+        from app.stats import compute_stats
+
+        return compute_stats(self.read_all(), trend_days)
 
 
 class _InMemoryReadState:
@@ -87,7 +94,7 @@ def client(monkeypatch):
 
     bus = MemoryMessageBus()
     storage = _InMemoryListStore()
-    activity = _InMemoryListStore()
+    activity = MemoryActivityStore()
     execution = _InMemoryListStore()
     read_state = _InMemoryReadState()
     idem = MemoryIdempotencyStore()
