@@ -30,6 +30,11 @@ func (c *consoleEmailProvider) Channel() domain.Channel {
 	return domain.ChannelEmail
 }
 
+// ID 返回该实现的稳定标识，供注册表寻址与日志溯源。
+func (c *consoleEmailProvider) ID() string {
+	return "console-email"
+}
+
 // Send 把邮件内容打印到控制台，模拟发送成功。
 //
 // 收件地址为空时视为无收件人，投递失败——这样能真实反映「订阅者未绑定邮箱」

@@ -37,6 +37,11 @@ func (p *inAppProvider) Channel() domain.Channel {
 	return domain.ChannelInApp
 }
 
+// ID 返回该实现的稳定标识，供注册表寻址与日志溯源。
+func (p *inAppProvider) ID() string {
+	return "console-in-app"
+}
+
 // InboxStore 暴露该 provider 使用的收件箱存储（实现 InboxStoreProvider），
 // 供 digest 步骤在同一份存储上原地改写聚合卡片。
 func (p *inAppProvider) InboxStore() InboxStore {

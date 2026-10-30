@@ -44,6 +44,11 @@ func (c *consoleSMSProvider) Channel() domain.Channel {
 	return domain.ChannelSMS
 }
 
+// ID 返回该实现的稳定标识，供注册表寻址与日志溯源。
+func (c *consoleSMSProvider) ID() string {
+	return "console-sms"
+}
+
 // Send 校验手机号并打印短信内容，模拟提交成功。
 //
 // 号码为空或格式非法时投递失败——真实反映「创作者未绑定手机号」的边界，

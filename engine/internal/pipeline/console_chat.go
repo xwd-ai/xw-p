@@ -41,6 +41,11 @@ func (c *consoleChatProvider) Channel() domain.Channel {
 	return domain.ChannelChat
 }
 
+// ID 返回该实现的稳定标识，供注册表寻址与日志溯源。
+func (c *consoleChatProvider) ID() string {
+	return "console-chat"
+}
+
 // Send 校验 webhook 地址与消息体后打印推送内容，模拟提交成功。
 //
 // 地址为空 / 非 http(s) / 缺少 host 时失败——真实 webhook 也会直接拒收，

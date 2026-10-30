@@ -36,6 +36,11 @@ func (c *consolePushProvider) Channel() domain.Channel {
 	return domain.ChannelPush
 }
 
+// ID 返回该实现的稳定标识，供注册表寻址与日志溯源。
+func (c *consolePushProvider) ID() string {
+	return "console-push"
+}
+
 // Send 校验 device token 与 payload 体积后打印推送内容，模拟提交成功。
 //
 // 创作者未在设备上登录（无 device token）时投递失败，而不是静默成功；

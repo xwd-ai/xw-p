@@ -117,6 +117,40 @@ func TestProviderRegistryLookup(t *testing.T) {
 	}
 }
 
+// TestDefaultProviderRegistryEntries 校验默认装配：五个投递渠道各有一个
+// console 实现，且各自带稳定标识，便于日志溯源与运行期启停。
+func TestDefaultProviderRegistryEntries(t *testing.T) {
+	reg := DefaultProviderRegistry(discardLogger())
+	want := map[string]domain.Channel{
+		"console-in-app": domain.ChannelInApp,
+		"console-email":  domain.ChannelEmail,
+		"console-sms":    domain.ChannelSMS,
+		"console-push":   domain.ChannelPush,
+		"console-chat":   domain.ChannelChat,
+	}
+	if reg.Len() != len(want) {
+		t.Fatalf("默认注册条目数 = %d, 期望 %d", reg.Len(), len(want))
+	}
+	for id, ch := range want {
+		entry, ok := reg.LookupByID(id)
+		if !ok {
+			t.Errorf("默认注册表缺少 %q", id)
+			continue
+		}
+		if entry.Channel != ch {
+			t.Errorf("%q 渠道 = %s, 期望 %s", id, entry.Channel, ch)
+		}
+		if entry.Sender.Channel() != ch {
+			t.Errorf("%q 的实现声明渠道 = %s, 期望 %s", id, entry.Sender.Channel(), ch)
+		}
+	}
+	for _, ch := range domain.DeliveryChannels() {
+		if !reg.Has(ch) {
+			t.Errorf("渠道 %s 缺少默认实现", ch)
+		}
+	}
+}
+
 func TestDispatchEmailViaProvider(t *testing.T) {
 	registry := NewProviderRegistry()
 	registry.Register(NewConsoleEmailProvider(discardLogger()))

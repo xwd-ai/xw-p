@@ -38,9 +38,9 @@ func (d *dispatchStage) Apply(ctx *Context, step domain.Step) error {
 	res.Channel = step.Type
 
 	ch := domain.Channel(step.Type)
-	provider, ok := d.registry.Lookup(ch)
+	entry, ok := d.registry.Select(ch)
 	if !ok {
-		// 未注册 provider：保持原有 mock 打印，视为投递成功（不阻断后续步骤）。
+		// 未注册可用 provider：保持原有 mock 打印，视为投递成功（不阻断后续步骤）。
 		d.logger.Info("[mock] 分发步骤（未注册 provider）",
 			"stepId", step.ID,
 			"channel", string(step.Type),
@@ -51,6 +51,7 @@ func (d *dispatchStage) Apply(ctx *Context, step domain.Step) error {
 		ctx.Results[step.ID] = res
 		return nil
 	}
+	sender := entry.Sender
 
 	// 构造投递请求：收件人按渠道从消息契约取值，内容取渲染结果。
 	delivery := Delivery{
@@ -67,14 +68,19 @@ func (d *dispatchStage) Apply(ctx *Context, step domain.Step) error {
 	// 支持感知取消的 provider 优先走 SendContext：步骤超时时它能立即中断等待，
 	// 而不是把请求留在后台继续跑。
 	var send SendResult
-	if cs, ok := provider.(ContextSender); ok {
+	if cs, ok := sender.(ContextSender); ok {
 		send = cs.SendContext(ctx.Context(), delivery)
 	} else {
-		send = provider.Send(delivery)
+		send = sender.Send(delivery)
 	}
 	if send.Sent {
 		res.Sent = true
 		ctx.Results[step.ID] = res
+		d.logger.Debug("[dispatch] 投递成功",
+			"stepId", step.ID,
+			"channel", string(ch),
+			"provider", entry.ID,
+		)
 		return nil
 	}
 

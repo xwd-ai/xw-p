@@ -104,6 +104,14 @@ func (p *Pipeline) DigestStore() DigestStore {
 	return p.digests
 }
 
+// Registry 返回管线使用的渠道实现注册表。
+//
+// 启动装配处据此打印「哪些渠道用了哪个实现」，运行期也可以通过它对单个
+// 实现启停——投递阶段每次取用都读注册表，切换无需重建管线。
+func (p *Pipeline) Registry() *ProviderRegistry {
+	return p.registry
+}
+
 // WithDeferrer 注入延迟续跑任务的提交出口，返回管线自身便于链式装配。
 //
 // 未注入时，工作流中的 delay 步骤会被判为失败（配置缺失而非静默跳过），

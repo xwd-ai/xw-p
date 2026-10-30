@@ -264,6 +264,16 @@ func loadWorkflowSource(logger *slog.Logger, cfg config.Config) runner.Source {
 // 回退进程内存储——那意味着多实例会各开一张卡，只在单实例部署下成立。
 func newPipeline(logger *slog.Logger, cfg config.Config) (*pipeline.Pipeline, func()) {
 	pipe := pipeline.New(logger).WithTimeouts(timeoutPolicy(cfg))
+	registry := pipe.Registry()
+	ids := make([]string, 0, registry.Len())
+	for _, entry := range registry.Entries() {
+		ids = append(ids, entry.ID)
+	}
+	logger.Info("[engine] 渠道实现注册表",
+		"entries", len(ids),
+		"providers", ids,
+		"channels", registry.Channels(),
+	)
 	logger.Info("[engine] 执行超时预算",
 		"step", pipe.Timeouts().Step,
 		"workflow", pipe.Timeouts().Workflow,
