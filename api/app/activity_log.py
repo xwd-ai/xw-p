@@ -24,24 +24,21 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, Optional, Protocol
+from typing import Any, Optional, Protocol
 
 from . import config
+from .jsonl_reader import READ_CHUNK, ReverseLineReader
 from .timeutil import Cursor, parse_dt
 
 logger = logging.getLogger("xw.activity_log")
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 JSONL_FILE = _DATA_DIR / "activity.jsonl"
-
-# 倒序读文件时每次拉取的字节块（64 KiB 约等于数百条活动记录）
-READ_CHUNK = 64 * 1024
 
 
 @dataclass(frozen=True)
@@ -118,39 +115,6 @@ def matches(record: dict[str, Any], q: ActivityQuery) -> bool:
         if q.until is not None and dt > q.until:
             return False
     return True
-
-
-class ReverseLineReader:
-    """从文件尾部倒着逐行读取（JSONL 活动日志按追加顺序即时间顺序落盘）。
-
-    ``bytes_read`` 记录实际读取的字节数，供调用方判断一次查询扫描了多少数据，
-    也便于测试断言「取一页不会把整个文件读一遍」。
-    """
-
-    def __init__(self, path: Path, chunk_size: int = READ_CHUNK) -> None:
-        self._path = path
-        self._chunk = max(1, chunk_size)
-        self.bytes_read = 0
-
-    def lines(self) -> Iterator[bytes]:
-        with self._path.open("rb") as fh:
-            fh.seek(0, os.SEEK_END)
-            pos = fh.tell()
-            tail = b""
-            while pos > 0:
-                size = min(self._chunk, pos)
-                pos -= size
-                fh.seek(pos)
-                chunk = fh.read(size)
-                self.bytes_read += len(chunk)
-                parts = (chunk + tail).split(b"\n")
-                # 第一段可能是不完整的行，留给下一轮拼接
-                tail = parts[0]
-                for line in reversed(parts[1:]):
-                    if line.strip():
-                        yield line
-            if tail.strip():
-                yield tail
 
 
 class JSONLActivityStore:

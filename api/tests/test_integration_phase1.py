@@ -43,6 +43,12 @@ class _InMemoryListStore:
         with self._lock:
             return list(self._records)
 
+    def query(self, q):
+        """执行明细查询接口（与真实后端同一套过滤/游标语义）。"""
+        from app.execution_log import MemoryExecutionStore
+
+        return MemoryExecutionStore(self.read_all()).query(q)
+
     def stats(self, trend_days: int = 7) -> dict:
         """与真实后端同口径的统计聚合（仪表盘接口用）。"""
         from app.stats import compute_stats
