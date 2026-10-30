@@ -57,6 +57,7 @@ func main() {
 		"shutdownGrace", cfg.ShutdownGraceOrDefault(),
 		"delayStore", cfg.DelayStore,
 		"delayPrefix", cfg.DelayPrefix,
+		"delayLease", cfg.DelayLeaseOrDefault(),
 		"adminAddr", cfg.AdminAddr,
 	)
 
@@ -186,7 +187,8 @@ func newDelayScheduler(logger *slog.Logger, pipe *pipeline.Pipeline, cfg config.
 		return nil
 	}
 	store, closeStore := newDelayStore(logger, cfg)
-	return schedule.New(store, handler, logger), closeStore
+	return schedule.New(store, handler, logger,
+		schedule.WithClaimLease(cfg.DelayLeaseOrDefault())), closeStore
 }
 
 // newDelayStore 选定延迟任务存储：默认 Redis ZSET（重启与多实例都不丢），
@@ -221,6 +223,7 @@ func newDelayStore(logger *slog.Logger, cfg config.Config) (schedule.Store, func
 		"redis", cfg.RedisAddr,
 		"dueKey", store.DueKey(),
 		"itemsKey", store.ItemsKey(),
+		"inflightKey", store.InflightKey(),
 	)
 	return store, func() { _ = client.Close() }
 }

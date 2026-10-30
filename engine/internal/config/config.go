@@ -26,9 +26,11 @@ type Config struct {
 	// DigestPrefix 是聚合卡片在 Redis 里的键前缀，用于环境隔离。
 	DigestPrefix string
 	// DelayStore 选择延迟任务存储：redis（跨实例共享、重启不丢，默认）或
-	// memory（进程内）。DelayPrefix 是其键前缀。
+	// memory（进程内）。DelayPrefix 是其键前缀，DelayLease 是认领后的
+	// 可见性超时（超过该时长未确认的任务会被回收重投）。
 	DelayStore  string
 	DelayPrefix string
+	DelayLease  time.Duration
 	// StepTimeout 是单步执行预算，WorkflowTimeout 是一条消息一次执行的总预算。
 	// 为 0 表示沿用管线默认值（连字符串都写不出来时不该悄悄变成「不限时」）。
 	StepTimeout     time.Duration
@@ -74,6 +76,7 @@ func Load() Config {
 		DigestPrefix:  envOr("XW_DIGEST_PREFIX", "xw:digest"),
 		DelayStore:    envOr("XW_DELAY_STORE", "redis"),
 		DelayPrefix:   envOr("XW_DELAY_PREFIX", schedule.DefaultRedisPrefix),
+		DelayLease:    envDuration("XW_DELAY_LEASE", schedule.DefaultClaimLease),
 
 		StepTimeout:     envDuration("XW_STEP_TIMEOUT", 0),
 		WorkflowTimeout: envDuration("XW_WORKFLOW_TIMEOUT", 0),
@@ -134,6 +137,15 @@ func (c Config) ClaimLeaseOrDefault() time.Duration {
 		return queue.DefaultClaimLease
 	}
 	return c.ClaimLease
+}
+
+// DelayLeaseOrDefault 返回延迟任务的认领租约；非法值回退默认，
+// 避免延迟任务刚认领就被判为过期、同一份通知被反复重投。
+func (c Config) DelayLeaseOrDefault() time.Duration {
+	if c.DelayLease <= 0 {
+		return schedule.DefaultClaimLease
+	}
+	return c.DelayLease
 }
 
 // RetryPolicyOrDefault 返回生效的重试策略。

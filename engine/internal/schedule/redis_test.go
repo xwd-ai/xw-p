@@ -108,26 +108,40 @@ func TestRedisStoreDueOrderLimitAndFuture(t *testing.T) {
 	_ = late
 }
 
-func TestRedisStoreRemoveClaimsOnce(t *testing.T) {
-	store, _, _ := newRedisStoreFixture(t)
+// 认领互斥 + 彻底删除：认领只清时间轴、保留任务体；Remove 才把三个键清干净。
+func TestRedisStoreClaimThenRemove(t *testing.T) {
+	store, client, _ := newRedisStoreFixture(t)
 	now := fixedTime()
 
 	id, err := store.Add(Item{DueAt: now, Payload: []byte("resume")})
 	if err != nil {
 		t.Fatalf("登记失败：%v", err)
 	}
+	if ok, err := store.Claim(id, now, time.Minute); err != nil || !ok {
+		t.Fatalf("首个认领应成功：ok=%v err=%v", ok, err)
+	}
+	if ok, err := store.Claim(id, now, time.Minute); err != nil || ok {
+		t.Errorf("重复认领应失败：ok=%v err=%v", ok, err)
+	}
+	// 认领把 id 从时间轴挪到在途集合，任务体必须留着，否则回收时就丢了载荷。
+	if store.Len() != 0 {
+		t.Errorf("认领后时间轴上的任务数 = %d, 期望 0", store.Len())
+	}
+	if n, _ := client.HLen(context.Background(), store.ItemsKey()).Result(); n != 1 {
+		t.Errorf("认领后任务体数 = %d, 期望 1", n)
+	}
+
 	if err := store.Remove(id); err != nil {
-		t.Fatalf("首个认领应成功：%v", err)
+		t.Fatalf("删除在途任务失败：%v", err)
 	}
 	if err := store.Remove(id); !errors.Is(err, ErrNotFound) {
-		t.Errorf("重复认领应返回 ErrNotFound，实际 %v", err)
+		t.Errorf("重复删除应返回 ErrNotFound，实际 %v", err)
 	}
-	// 认领后时间轴与任务体都要清干净，不能留垃圾键。
-	if store.Len() != 0 {
-		t.Errorf("认领后待执行数 = %d, 期望 0", store.Len())
+	if n, _ := client.HLen(context.Background(), store.ItemsKey()).Result(); n != 0 {
+		t.Errorf("删除后残留任务体 %d 条", n)
 	}
-	if n, _ := store.client.HLen(context.Background(), store.ItemsKey()).Result(); n != 0 {
-		t.Errorf("认领后残留任务体 %d 条", n)
+	if keys := client.Keys(context.Background(), store.Prefix()+"*").Val(); len(keys) != 0 {
+		t.Errorf("删除后残留键：%v", keys)
 	}
 }
 
