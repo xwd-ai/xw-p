@@ -34,6 +34,8 @@ class Storage(Protocol):
 
     def read_all(self) -> list[dict[str, Any]]: ...
 
+    def revision(self) -> str: ...
+
     def stats(self, trend_days: int = TREND_DAYS) -> dict[str, Any]: ...
 
 
@@ -67,6 +69,17 @@ class JSONLStorage:
                         logger.warning("跳过损坏的 JSONL 行：%s", line[:80])
             return records
 
+    def revision(self) -> str:
+        """内容版本：文件大小 + 修改时刻，用于让派生的缓存（如未读计数）失效。
+
+        只取 ``stat``，不读文件内容；文件不存在时给固定标记。
+        """
+        try:
+            st = self._path.stat()
+        except OSError:
+            return "absent"
+        return f"{st.st_size}:{st.st_mtime_ns}"
+
     def stats(self, trend_days: int = TREND_DAYS) -> dict[str, Any]:
         """流式逐行累加统计量，内存占用与记录条数无关。"""
         acc = StatsAccumulator(trend_days=trend_days)
@@ -91,6 +104,7 @@ class PostgresStorage:
     def __init__(self, database_url: str) -> None:
         self._url = database_url
         self._engine = None
+        self._writes = 0
 
     def _get_engine(self):
         if self._engine is None:
@@ -125,6 +139,32 @@ class PostgresStorage:
                     "status": record.get("status", "sent"),
                 },
             )
+        self._writes += 1
+
+    def revision(self) -> str:
+        """表写入计数作为版本，用于让派生的缓存（如未读计数）失效。
+
+        ``pg_stat_user_tables`` 的计数由统计收集器刷新，有秒级延迟，因此再叠加
+        进程内写入计数，补齐刚提交、尚未反映到统计视图的那部分。查不到统计行
+        （表尚未建立或视图不可用）时只用进程内计数。
+        """
+        from sqlalchemy import text
+
+        try:
+            engine = self._get_engine()
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text(
+                        "SELECT n_tup_ins, n_tup_upd, n_tup_del FROM pg_stat_user_tables "
+                        "WHERE schemaname = current_schema() AND relname = 'messages'"
+                    )
+                ).first()
+        except Exception:  # noqa: BLE001 - 版本探测不应让读取失败
+            logger.warning("读取 messages 表写入计数失败，仅用进程内计数", exc_info=True)
+            row = None
+        if row is None:
+            return f"pg:{self._writes}"
+        return f"pg:{row[0]}:{row[1]}:{row[2]}:{self._writes}"
 
     def read_all(self) -> list[dict[str, Any]]:
         """读取全部消息记录（导出/排查用，统计接口不再走这条路径）。"""

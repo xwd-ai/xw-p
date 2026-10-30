@@ -59,6 +59,7 @@ class _InMemoryReadState:
 
     def __init__(self):
         self._read: dict[str, dict[str, datetime]] = {}
+        self._versions: dict[str, int] = {}
 
     def is_read(self, subscriber_id: str, message_id: str, updated_at=None) -> bool:
         read_at = (self._read.get(subscriber_id) or {}).get(message_id)
@@ -72,7 +73,11 @@ class _InMemoryReadState:
         if read_at is not None and (updated_at is None or read_at >= updated_at):
             return False
         bucket[message_id] = datetime.now(timezone.utc)
+        self._versions[subscriber_id] = self._versions.get(subscriber_id, 0) + 1
         return True
+
+    def revision(self, subscriber_id: str) -> int:
+        return self._versions.get(subscriber_id, 0)
 
     def is_legacy_read(self, subscriber_id: str, trigger_id: str) -> bool:
         return False

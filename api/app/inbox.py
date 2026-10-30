@@ -17,16 +17,24 @@
   未读计数也就自然按「消息条数」而不是「互动次数」计算。
 已读状态由 ``ReadStateStore`` 维护，JSONL 持久化到 ``api/data/read_state.jsonl``，
 与消息存储的 JSONL 风格保持一致（进程内缓存 + 追加落盘）。
+
+未读计数走缓存：``InboxCache`` 以「收件箱来源版本 + 该订阅者已读版本」为键保存
+最近一次算好的快照（消息列表 / 未读条数 / 消息总数）。版本没变时直接复用，
+既不读收件箱文件、也不把投递记录读进内存；任一来源有新写入或该订阅者标记了
+已读，版本变化即重算。版本探测本身是廉价操作：收件箱文件取 ``stat``，
+JSONL 投递存储取文件 ``stat``，Postgres 取表的写入计数。
 """
 from __future__ import annotations
 
+import itertools
 import json
 import logging
 import os
 import threading
+from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import NamedTuple, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -86,6 +94,8 @@ class ReadStateStore:
         self._read: dict[str, dict[str, datetime]] = {}
         # subscriber_id -> {trigger_id}（历史记录，仅作兼容）
         self._legacy: dict[str, set[str]] = {}
+        # subscriber_id -> 已读版本号（每次真正写入自增，供未读缓存失效）
+        self._versions: dict[str, int] = {}
         self._lock = threading.Lock()
         self._load()
 
@@ -153,8 +163,14 @@ class ReadStateStore:
                 return False
             now = datetime.now(timezone.utc)
             bucket[message_id] = now
+            self._versions[subscriber_id] = self._versions.get(subscriber_id, 0) + 1
             self._append(subscriber_id, message_id, now)
             return True
+
+    def revision(self, subscriber_id: str) -> int:
+        """该订阅者的已读版本号：每次标记已读自增，用于让未读缓存失效。"""
+        with self._lock:
+            return self._versions.get(subscriber_id, 0)
 
     def is_read(
         self, subscriber_id: str, message_id: str, updated_at: Optional[datetime] = None
@@ -182,6 +198,167 @@ def get_read_store() -> ReadStateStore:
         if _read_store is None:
             _read_store = ReadStateStore()
         return _read_store
+
+
+# ---------------------------------------------------------------------------
+# 未读计数缓存
+# ---------------------------------------------------------------------------
+
+# 缓存保留的订阅者数量与单个订阅者的消息条数上限。
+# 上限取接口允许的最大 limit（200），更早的消息只计入 total / unread。
+CACHE_MAX_SUBSCRIBERS = 256
+CACHE_MAX_ITEMS = 200
+
+# 存储后端未提供 revision 时使用的兜底序号：每次都视为已变化，
+# 即退化为不缓存——正确性优先于命中率。
+_NO_REVISION_SEQ = itertools.count(1)
+
+
+class InboxSnapshot(NamedTuple):
+    """一次收件箱读取的结果：按时间倒序的消息、未读条数、消息总数。"""
+
+    items: list[dict]
+    unread: int
+    total: int
+
+
+class InboxCache:
+    """按版本号缓存每个订阅者的收件箱快照（LRU，容量有限）。
+
+    快照的键是「来源版本 + 已读版本」，命中时整个读取路径不产生 I/O；
+    未命中时重算并回填。缓存只保存最新的 ``max_items`` 条消息，
+    未读条数与消息总数仍按全部消息统计。
+    """
+
+    def __init__(
+        self,
+        max_subscribers: int = CACHE_MAX_SUBSCRIBERS,
+        max_items: int = CACHE_MAX_ITEMS,
+    ) -> None:
+        self._max_subscribers = max(1, max_subscribers)
+        self._max_items = max(1, max_items)
+        self._entries: "OrderedDict[str, tuple[object, InboxSnapshot]]" = OrderedDict()
+        self._lock = threading.Lock()
+        self._hits = 0
+        self._misses = 0
+
+    def get(self, subscriber_id: str, revision: object) -> Optional[InboxSnapshot]:
+        """命中则返回快照；版本不符或不存在返回 None。"""
+        with self._lock:
+            entry = self._entries.get(subscriber_id)
+            if entry is not None and entry[0] == revision:
+                self._entries.move_to_end(subscriber_id)
+                self._hits += 1
+                return entry[1]
+            self._misses += 1
+            return None
+
+    def put(self, subscriber_id: str, revision: object, snapshot: InboxSnapshot) -> InboxSnapshot:
+        """写入快照（只保留最新的 ``max_items`` 条），返回实际缓存的内容。"""
+        trimmed = InboxSnapshot(
+            snapshot.items[: self._max_items], snapshot.unread, snapshot.total
+        )
+        with self._lock:
+            self._entries[subscriber_id] = (revision, trimmed)
+            self._entries.move_to_end(subscriber_id)
+            while len(self._entries) > self._max_subscribers:
+                self._entries.popitem(last=False)
+        return trimmed
+
+    def invalidate(self, subscriber_id: Optional[str] = None) -> None:
+        """丢弃某个订阅者（缺省为全部）的缓存。"""
+        with self._lock:
+            if subscriber_id is None:
+                self._entries.clear()
+            else:
+                self._entries.pop(subscriber_id, None)
+
+    def stats(self) -> dict:
+        """缓存命中情况，便于排查「一直未命中」这类退化。"""
+        with self._lock:
+            return {
+                "subscribers": len(self._entries),
+                "hits": self._hits,
+                "misses": self._misses,
+            }
+
+
+_inbox_cache: Optional[InboxCache] = None
+_inbox_cache_lock = threading.Lock()
+
+
+def get_inbox_cache() -> InboxCache:
+    """获取全局收件箱缓存单例（惰性初始化）。"""
+    global _inbox_cache
+    with _inbox_cache_lock:
+        if _inbox_cache is None:
+            _inbox_cache = InboxCache()
+        return _inbox_cache
+
+
+def _engine_inbox_revision() -> tuple:
+    """引擎收件箱文件的版本：取文件元数据，不读内容。"""
+    path = _INBOX_FILE
+    try:
+        st = path.stat()
+    except OSError:
+        return ("absent", str(path))
+    return ("file", str(path), st.st_dev, st.st_ino, st.st_size, str(st.st_mtime_ns))
+
+
+def _storage_revision() -> object:
+    """投递存储的版本号；后端未实现 ``revision`` 时退化为每次都变。"""
+    store = get_storage()
+    fn = getattr(store, "revision", None)
+    if callable(fn):
+        try:
+            return ("rev", fn())
+        except Exception:  # noqa: BLE001 - 版本探测失败不能影响读取
+            logger.warning("读取投递存储版本失败，本轮不缓存", exc_info=True)
+    return ("norev", next(_NO_REVISION_SEQ))
+
+
+def _read_revision(subscriber_id: str) -> object:
+    """该订阅者的已读版本；存储未实现 ``revision`` 时退化为每次都变。"""
+    store = get_read_store()
+    fn = getattr(store, "revision", None)
+    if callable(fn):
+        return ("read", fn(subscriber_id))
+    return ("noreadrev", next(_NO_REVISION_SEQ))
+
+
+def _revision(subscriber_id: str) -> tuple:
+    """合成快照版本：收件箱来源 + 投递存储 + 该订阅者的已读状态。"""
+    return (
+        _engine_inbox_revision(),
+        _storage_revision(),
+        _read_revision(subscriber_id),
+    )
+
+
+def _build_snapshot(subscriber_id: str) -> InboxSnapshot:
+    """扫描全部来源，算出该订阅者的收件箱快照。"""
+    items = _collect_inbox(subscriber_id)
+    unread = sum(1 for i in items if not i["read"])
+    return InboxSnapshot(items, unread, len(items))
+
+
+def _snapshot(subscriber_id: str) -> InboxSnapshot:
+    """取收件箱快照：版本未变直接复用缓存，否则重算并回填。"""
+    cache = get_inbox_cache()
+    revision = _revision(subscriber_id)
+    cached = cache.get(subscriber_id, revision)
+    if cached is not None:
+        return cached
+    return cache.put(subscriber_id, revision, _build_snapshot(subscriber_id))
+
+
+def _refresh_snapshot(subscriber_id: str) -> InboxSnapshot:
+    """强制重算并回填缓存（读状态刚被改写时用，避免多扫一遍旧数据）。"""
+    cache = get_inbox_cache()
+    revision = _revision(subscriber_id)
+    return cache.put(subscriber_id, revision, _build_snapshot(subscriber_id))
+
 
 
 def _is_inapp(record: dict) -> bool:
@@ -361,7 +538,7 @@ def _sort_ts(item: dict) -> datetime:
 
 def _list_inbox(subscriber_id: str, limit: int) -> list[dict]:
     """按时间倒序返回某订阅者的 In-app 消息列表（最多 limit 条）。"""
-    return _collect_inbox(subscriber_id)[:limit]
+    return _snapshot(subscriber_id).items[:limit]
 
 
 @router.get("")
@@ -372,16 +549,22 @@ def get_inbox(
     """返回某订阅者的 In-app 收件箱消息与未读计数。
 
     未读数按消息条数统计：同一张聚合卡片无论被多少次互动改写，都只算一条。
+    未读与总数覆盖该订阅者的全部消息，不受 ``limit`` 截断影响；内容没变化时
+    直接复用缓存快照，不重新扫描收件箱文件与投递记录。
     """
-    items = _list_inbox(subscriber_id, limit)
-    unread = sum(1 for i in items if not i["read"])
-    return {"items": items, "unread": unread, "total": len(items)}
+    snapshot = _snapshot(subscriber_id)
+    return {
+        "items": snapshot.items[:limit],
+        "unread": snapshot.unread,
+        "total": snapshot.total,
+    }
 
 
 @router.post("/read")
 def mark_read(req: ReadRequest) -> dict:
     """标记消息已读，返回本次操作影响的消息数与最新未读计数。"""
     store = get_read_store()
+    # 标记目标需要覆盖全部消息（含超过缓存条数上限的部分），这里取完整列表。
     items = _collect_inbox(req.subscriber_id)
     by_message = {i["message_id"]: i for i in items if i.get("message_id")}
     by_trigger = {i["trigger_id"]: i for i in items if i.get("trigger_id")}
@@ -403,17 +586,23 @@ def mark_read(req: ReadRequest) -> dict:
         if store.mark_read(req.subscriber_id, mid, _parse_dt(item.get("updated_at"))):
             changed += 1
 
-    unread = sum(1 for i in _collect_inbox(req.subscriber_id) if not i["read"])
-    return {"marked": changed, "unread": unread}
+    # 读状态变了：重算一次快照回填缓存，后续读取直接命中。
+    snapshot = _refresh_snapshot(req.subscriber_id) if changed else _snapshot(req.subscriber_id)
+    return {"marked": changed, "unread": snapshot.unread}
 
 
 __all__ = [
     "router",
     "ReadStateStore",
+    "InboxCache",
+    "InboxSnapshot",
     "get_read_store",
+    "get_inbox_cache",
     "_is_inapp",
     "_message_id",
     "_to_inbox_item",
     "_collect_inbox",
     "_list_inbox",
+    "_snapshot",
 ]
+

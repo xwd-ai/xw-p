@@ -25,3 +25,18 @@ def test_jsonl_storage_creates_parent_dir(tmp_path):
     storage = JSONLStorage(path=out)
     storage.save({"trigger_id": "a"})
     assert out.exists()
+
+
+def test_jsonl_storage_revision_tracks_appends(tmp_path):
+    """版本号只靠文件元数据得出，内容变化即变化，缺文件时给固定标记。"""
+    out = tmp_path / "messages.jsonl"
+    storage = JSONLStorage(path=out)
+
+    assert storage.revision() == "absent"
+
+    storage.save({"trigger_id": "a", "status": "sent", "payload": {}})
+    first = storage.revision()
+    assert storage.revision() == first, "没有写入时版本保持不变"
+
+    storage.save({"trigger_id": "b", "status": "sent", "payload": {}})
+    assert storage.revision() != first

@@ -191,6 +191,8 @@ psql "$XW_DATABASE_URL" -f scripts/migrations/005_query_indexes.sql
 
 仪表盘统计（`GET /v1/dashboard/stats`）同样不保留原始记录：Postgres 侧用 `count(*) FILTER` / `jsonb_array_elements_text` / `date_trunc` 三条聚合查询直接出结果，JSONL 后端逐行流式累加，内存占用与记录条数无关。
 
+收件箱（`GET /v1/inbox`）的未读计数不重复扫描：每个订阅者的快照（消息列表、未读条数、消息总数）按「收件箱来源版本 + 该订阅者已读版本」缓存，版本没变时直接返回缓存，既不读收件箱文件也不把投递记录读进内存。版本探测本身很廉价——收件箱文件取 `stat`，JSONL 投递存储取 `stat`（大小 + 修改时刻），Postgres 取 `pg_stat_user_tables` 的写入计数并叠加进程内写入计数补齐统计延迟；标记已读会让该订阅者的版本自增。缓存按最近使用淘汰，最多保留 256 个订阅者、每人 200 条消息（与接口 `limit` 上限一致），未读条数与消息总数仍按全部消息统计，不会被 `limit` 截断。自定义存储后端若没有实现 `revision()`，缓存退化为每次都重算——正确性优先于命中率。
+
 ## 压测
 
 `engine/cmd/xwbench` 压测队列链路：按指定并发与目标速率灌入消息，再由同进程内的消费者领取、处理、确认，输出吞吐、端到端延迟分位、错误率与进程内存。默认使用独立队列键 `xw:queue:bench`，不会干扰触发链路的消息。

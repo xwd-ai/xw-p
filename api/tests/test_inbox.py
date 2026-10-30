@@ -382,3 +382,145 @@ def test_inbox_unread_counts_messages_not_updates(client, monkeypatch, tmp_path)
         "digest-p2",
         "e1:s1",
     ]
+
+
+# ---------------------------------------------------------------------------
+# 未读计数缓存：来源未变时复用快照，任一来源或已读状态变化即失效
+# ---------------------------------------------------------------------------
+
+
+class _VersionedStorage:
+    """带版本号与读取次数的存储桩，用于验证缓存是否真的省掉了扫描。"""
+
+    def __init__(self, records=None):
+        self.records = list(records or [])
+        self.read_all_calls = 0
+        self._version = 0
+
+    def save(self, record):
+        self.records.append(record)
+        self._version += 1
+
+    def read_all(self):
+        self.read_all_calls += 1
+        return list(self.records)
+
+    def revision(self):
+        return f"v{self._version}"
+
+
+def test_unread_cache_reuses_snapshot_when_sources_unchanged(client, monkeypatch, tmp_path):
+    """连续两次读取：第二次直接命中缓存，不再扫描投递记录。"""
+    import app.inbox as inbox_mod
+
+    store = _VersionedStorage([_record(trigger_id="a", payload={"title": "有人赞了你的帖子"})])
+    monkeypatch.setattr(inbox_mod, "get_storage", lambda: store)
+    monkeypatch.setattr(inbox_mod, "_INBOX_FILE", tmp_path / "inbox.jsonl")
+
+    first = client.get("/v1/inbox", params={"subscriberId": "u1"}).json()
+    second = client.get("/v1/inbox", params={"subscriberId": "u1"}).json()
+
+    assert first["unread"] == second["unread"] == 1
+    assert first["total"] == second["total"] == 1
+    assert store.read_all_calls == 1, "第二次读取应命中缓存"
+
+
+def test_unread_cache_invalidated_by_storage_write(client, monkeypatch, tmp_path):
+    """投递记录新增后版本变化，未读计数随之更新。"""
+    import app.inbox as inbox_mod
+
+    store = _VersionedStorage([_record(trigger_id="a")])
+    monkeypatch.setattr(inbox_mod, "get_storage", lambda: store)
+    monkeypatch.setattr(inbox_mod, "_INBOX_FILE", tmp_path / "inbox.jsonl")
+
+    assert client.get("/v1/inbox", params={"subscriberId": "u1"}).json()["unread"] == 1
+
+    store.save(_record(trigger_id="b"))
+    data = client.get("/v1/inbox", params={"subscriberId": "u1"}).json()
+    assert data["total"] == 2
+    assert data["unread"] == 2
+    assert store.read_all_calls == 2
+
+
+def test_unread_cache_invalidated_by_engine_file_append(client, monkeypatch, tmp_path):
+    """引擎收件箱文件追加条目后版本变化，缓存不复用旧快照。"""
+    import app.inbox as inbox_mod
+
+    path = tmp_path / "inbox.jsonl"
+    _write_engine_inbox(path, [_engine_entry("e1")])
+    monkeypatch.setattr(inbox_mod, "_INBOX_FILE", path)
+    monkeypatch.setattr(inbox_mod, "get_storage", lambda: _VersionedStorage())
+
+    assert client.get("/v1/inbox", params={"subscriberId": "u1"}).json()["total"] == 1
+
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(_engine_entry("e2"), ensure_ascii=False) + "\n")
+
+    data = client.get("/v1/inbox", params={"subscriberId": "u1"}).json()
+    assert data["total"] == 2
+    assert [i["trigger_id"] for i in data["items"]] == ["e2", "e1"]
+
+
+def test_unread_cache_invalidated_by_mark_read(client, monkeypatch, tmp_path):
+    """标记已读后该订阅者的版本变化，未读归零且列表内容同步更新。"""
+    import app.inbox as inbox_mod
+
+    store = _VersionedStorage([_record(trigger_id="a"), _record(trigger_id="b")])
+    monkeypatch.setattr(inbox_mod, "get_storage", lambda: store)
+    monkeypatch.setattr(inbox_mod, "_INBOX_FILE", tmp_path / "inbox.jsonl")
+
+    assert client.get("/v1/inbox", params={"subscriberId": "u1"}).json()["unread"] == 2
+
+    marked = client.post(
+        "/v1/inbox/read", json={"subscriberId": "u1", "triggerIds": ["a"]}
+    ).json()
+    assert marked == {"marked": 1, "unread": 1}
+
+    data = client.get("/v1/inbox", params={"subscriberId": "u1"}).json()
+    assert data["unread"] == 1
+    assert {i["trigger_id"]: i["read"] for i in data["items"]} == {"a": True, "b": False}
+
+
+def test_unread_counts_cover_messages_beyond_page_limit(client, monkeypatch, tmp_path):
+    """未读与总数按全部消息统计，不受 limit 截断；列表只返回前 limit 条。"""
+    import app.inbox as inbox_mod
+
+    records = [_record(trigger_id=f"t{i}", days_ago=i) for i in range(3)]
+    monkeypatch.setattr(inbox_mod, "get_storage", lambda: _VersionedStorage(records))
+    monkeypatch.setattr(inbox_mod, "_INBOX_FILE", tmp_path / "inbox.jsonl")
+
+    data = client.get("/v1/inbox", params={"subscriberId": "u1", "limit": 1}).json()
+    assert len(data["items"]) == 1
+    assert data["total"] == 3
+    assert data["unread"] == 3
+
+
+def test_inbox_cache_evicts_least_recently_used():
+    """缓存容量有限：写入新订阅者时淘汰最久未访问的一个。"""
+    from app.inbox import InboxCache, InboxSnapshot
+
+    cache = InboxCache(max_subscribers=2, max_items=5)
+    snap = InboxSnapshot([], 0, 0)
+    cache.put("u1", "r1", snap)
+    cache.put("u2", "r1", snap)
+
+    assert cache.get("u1", "r1") is not None  # u1 变为最近使用
+    cache.put("u3", "r1", snap)
+
+    assert cache.get("u2", "r1") is None
+    assert cache.get("u1", "r1") is not None
+    assert cache.get("u3", "r1") is not None
+    assert cache.stats() == {"subscribers": 2, "hits": 3, "misses": 1}
+
+
+def test_inbox_cache_trims_items_but_keeps_counts():
+    """单订阅者只保留最新 N 条消息，未读与总数仍按全部消息记录。"""
+    from app.inbox import InboxCache, InboxSnapshot
+
+    cache = InboxCache(max_subscribers=4, max_items=2)
+    items = [{"message_id": f"m{i}"} for i in range(4)]
+    cached = cache.put("u1", "r1", InboxSnapshot(items, 3, 4))
+
+    assert [i["message_id"] for i in cached.items] == ["m0", "m1"]
+    assert (cached.unread, cached.total) == (3, 4)
+    assert cache.get("u1", "r1").total == 4
