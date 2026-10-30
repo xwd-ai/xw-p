@@ -177,9 +177,24 @@ XW_BUS=redis XW_STORAGE=postgres .venv/bin/uvicorn app.main:app --reload
 # 首次启用 Postgres 需先建表：
 psql "$XW_DATABASE_URL" -f scripts/migrations/001_messages.sql
 psql "$XW_DATABASE_URL" -f scripts/migrations/003_activity_log.sql
-# 活动流/统计的复合索引
+psql "$XW_DATABASE_URL" -f scripts/migrations/004_execution_details.sql
+# 查询索引：活动流/统计、执行明细的复合索引
 psql "$XW_DATABASE_URL" -f scripts/migrations/005_query_indexes.sql
+psql "$XW_DATABASE_URL" -f scripts/migrations/006_execution_indexes.sql
 ```
+
+### 存储后端
+
+`XW_STORAGE` 统一切换消息、活动日志、执行明细与工作流模板的落库方式，两个后端的定位不同：
+
+| 后端 | 定位 | 行为 |
+| --- | --- | --- |
+| `jsonl`（默认） | 本机开发与演示 | 追加写 `api/data/*.jsonl`，一行一条记录；查询从文件尾部倒序分块读，够一页就停。写入是「打开文件追加」而不是事务，多进程共享同一份文件没有写入协调，稀疏过滤条件仍会退到顺序扫描 |
+| `postgres` | 生产 | 写入走事务与索引；查询在数据库侧完成过滤、排序与聚合（`WHERE` + `ORDER BY … LIMIT`、`count(*) FILTER`），接口层只拿一页 |
+
+生产环境（`XW_ENV=production`）如果仍是 `jsonl`，API 会在启动日志里直接告警并提示改用 `postgres`——文件后端没有跨进程写入协调，多实例部署下会出现计数与列表对不上的情况。选择后端不影响链路语义：队列的至少一次投递、聚合去重、收件箱按 `trigger_id:step_id` 去重都在上层完成。
+
+收件箱本身由引擎写入文件卷、API 读取同一份文件（默认 `api/data/inbox.jsonl`，可用 `XW_INBOX_FILE` 指定），已读状态单独记在 `api/data/read_state.jsonl`，这两者的定位与 `XW_STORAGE` 无关；跨机部署时需把该目录挂成共享卷，或自行替换为数据库实现。
 
 ### 活动流与统计的查询路径
 
@@ -188,6 +203,8 @@ psql "$XW_DATABASE_URL" -f scripts/migrations/005_query_indexes.sql
 - **翻页用游标**：`limit` 给单页条数（默认 50，上限 200），响应里的 `nextCursor` 原样回传取下一页，`hasMore` 表示还有没有更多。游标是上一页最后一条记录的 `(created_at, trigger_id)`，翻页期间有新触发写入也不会漏读或重复；非法游标返回 400。用游标而不是 `offset`，是因为活动流一直在追加，`offset` 在数据变动时会跳行。
 - **Postgres**：`WHERE` + `ORDER BY created_at DESC, trigger_id DESC LIMIT`，配套 `005_query_indexes.sql` 的复合索引（索引列顺序与排序键一致，过滤条件直接走索引前缀，不需要额外排序）。
 - **JSONL**：从文件尾部倒着按块读，取满一页即停，读取量取决于页大小而不是文件大小。这个后端定位是 demo——过滤条件太稀疏时仍会退到顺序扫描。
+
+执行明细（`GET /v1/executions`）用同一套翻页约定：按触发标识 / 渠道 / 状态 / 时间范围过滤，`nextCursor` 取下一页。游标是上一页最后一条记录的 `(created_at, id)`——一次触发会写出多条渠道明细，触发标识不足以区分同一次触发的记录，因此次级键取记录自身的标识（JSONL 写入时生成，Postgres 用自增主键），配套 `006_execution_indexes.sql` 的复合索引。
 
 仪表盘统计（`GET /v1/dashboard/stats`）同样不保留原始记录：Postgres 侧用 `count(*) FILTER` / `jsonb_array_elements_text` / `date_trunc` 三条聚合查询直接出结果，JSONL 后端逐行流式累加，内存占用与记录条数无关。
 

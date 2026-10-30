@@ -36,6 +36,10 @@ _worker = Worker()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 生产环境误配文件后端时先指出来，避免带着非持久化语义上线。
+    storage_hint = config.storage_warning()
+    if storage_hint:
+        logger.warning(storage_hint)
     # redis 总线由 Go 引擎消费；API 内置线程只在 memory 总线的单进程 demo 里起，
     # 否则两个消费者会抢同一条消息。
     if config.API_WORKER:

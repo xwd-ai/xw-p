@@ -67,3 +67,21 @@ API_KEYS: dict[str, str] = {
 def api_key_for(env: str) -> str:
     """返回指定环境的 API Key（未配置则为空字符串）。"""
     return API_KEYS.get(env, "")
+
+
+def storage_warning(backend: str | None = None, env: str | None = None) -> str | None:
+    """生产环境仍使用文件后端时返回一条告警文案，否则返回 ``None``。
+
+    ``jsonl`` 后端的定位是本机开发与演示：写入是「打开文件追加」而不是事务，
+    多个进程或多实例共享同一份文件时没有写入协调，查询也依赖顺序扫描。
+    生产环境因此固定 ``postgres``，误配时在启动日志里直接指出来，
+    而不是等到数据对不上再排查。
+    """
+    backend = STORAGE_BACKEND if backend is None else backend
+    env = ENV if env is None else env
+    if backend != "jsonl" or env != "production":
+        return None
+    return (
+        "XW_STORAGE=jsonl 仅用于本机开发与演示（追加写文件、无跨进程写入协调），"
+        "生产环境请改为 XW_STORAGE=postgres"
+    )
