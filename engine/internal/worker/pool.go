@@ -42,6 +42,8 @@ type Pool struct {
 	retrier Retrier
 	// handle 用于测试注入处理逻辑；为空时各消费者使用默认的 Handle。
 	handle func([]byte) error
+	// prefetch 是每个消费者每次领取的条数；1 表示逐条领取。
+	prefetch int
 }
 
 // NewPool 创建并发池。size 非法时退化为 1，超过上限时截断到上限。
@@ -55,7 +57,17 @@ func NewPool(consumer Consumer, size int, timeout time.Duration, logger *slog.Lo
 		timeout:  timeout,
 		grace:    DefaultShutdownGrace,
 		logger:   logger,
+		prefetch: DefaultPrefetch,
 	}
+}
+
+// WithPrefetch 设置每个消费者每次领取的条数。
+//
+// 消息源不支持批量领取时该项无效（保持逐条）。批量越大，单位时间压给 Redis
+// 的往返越少，但一批消息在确认前一直占着在途记录，需要与租约长度一起权衡。
+func (p *Pool) WithPrefetch(n int) *Pool {
+	p.prefetch = NormalizePrefetch(n)
+	return p
 }
 
 // WithShutdownGrace 设置退出时等待在途消息的上限。
@@ -111,6 +123,7 @@ func (p *Pool) Run(ctx context.Context) int {
 	for i := 0; i < p.size; i++ {
 		w := New(p.consumer, p.timeout, p.logger)
 		w.id = i + 1
+		w.WithPrefetch(p.prefetch)
 		if p.executor != nil {
 			w.executor = p.executor
 		}

@@ -54,6 +54,7 @@ func main() {
 		"claimLease", cfg.ClaimLeaseOrDefault(),
 		"reclaimInterval", cfg.ReclaimInterval,
 		"workers", cfg.WorkersOrDefault(),
+		"prefetch", cfg.PrefetchOrDefault(),
 		"shutdownGrace", cfg.ShutdownGraceOrDefault(),
 		"delayStore", cfg.DelayStore,
 		"delayPrefix", cfg.DelayPrefix,
@@ -143,6 +144,7 @@ func main() {
 	// 并发消费：XW_WORKERS 个消费者共享同一队列，关闭时等手里那条跑完。
 	pool := worker.NewPool(consumer, cfg.WorkersOrDefault(), cfg.PollTimeoutDuration(), logger).
 		WithShutdownGrace(cfg.ShutdownGraceOrDefault()).
+		WithPrefetch(cfg.PrefetchOrDefault()).
 		WithExecutor(exec)
 	if retrier != nil {
 		pool.WithRetrier(retrier)

@@ -17,6 +17,8 @@ const (
 	MaxConcurrency = 1024
 	// DefaultWorkers 是未指定时的消费者数量。
 	DefaultWorkers = 8
+	// MaxPrefetch 是每次领取条数的上限，与队列的批量领取上限一致。
+	MaxPrefetch = 512
 	// DefaultDrainTimeout 是「灌完之后等待消息全部被确认」的上限。
 	DefaultDrainTimeout = 60 * time.Second
 	// MaxRate 是目标速率上限（条/秒）。再高也只是把 sleep 变成忙等，
@@ -34,6 +36,8 @@ type Plan struct {
 	Rate float64
 	// Workers 是消费侧并发消费者数量。
 	Workers int
+	// Prefetch 是每个消费者每次领取的条数；1 表示逐条领取。
+	Prefetch int
 	// Work 是每条消息的模拟处理耗时，用于给消费侧一个可解释的耗时基线。
 	Work time.Duration
 	// DrainTimeout 是灌完之后等待全部确认的上限。
@@ -59,6 +63,12 @@ func (p Plan) Normalize() Plan {
 	}
 	if p.Workers > MaxConcurrency {
 		p.Workers = MaxConcurrency
+	}
+	if p.Prefetch < 1 {
+		p.Prefetch = 1
+	}
+	if p.Prefetch > MaxPrefetch {
+		p.Prefetch = MaxPrefetch
 	}
 	if p.Rate < 0 {
 		p.Rate = 0

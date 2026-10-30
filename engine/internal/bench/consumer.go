@@ -22,6 +22,14 @@ type Claimer interface {
 	Ack(ctx context.Context, id string) error
 }
 
+// BatchClaimer 是支持批量领取的读取端。压测根据它是否被实现、
+// 以及 Plan.Prefetch 是否大于 1 决定走单条还是批量领取。
+type BatchClaimer interface {
+	Claimer
+	ClaimBatch(ctx context.Context, max int) ([]*queue.Delivery, error)
+	AckBatch(ctx context.Context, ids []string) error
+}
+
 // Handler 处理一条消息体。返回 error 只用于计数，消息仍会被确认——
 // 压测关心链路吞吐，让失败消息按租约周期反复重投会把统计搅成噪音。
 type Handler func(ctx context.Context, raw []byte) error
@@ -52,6 +60,7 @@ type ConsumeStats struct {
 type Consumer struct {
 	source      Claimer
 	workers     int
+	prefetch    int
 	handler     Handler
 	sentAt      func([]byte) (time.Time, bool)
 	pollTimeout time.Duration
@@ -68,6 +77,10 @@ type Consumer struct {
 	stats ConsumeStats
 	// local 是各消费者自己的延迟样本，收尾时统一合并，避免每条消息抢锁。
 	local []*Samples
+	// lastAck 是最后一次确认完成的时刻。窗口的终点取它而不是 Stop 的返回时刻：
+	// 收尾时可能有消费者正阻塞在「队列已空」的等待里，等它退出要花掉一个
+	// pollTimeout，把那段时间算进窗口会把吞吐压低一截。
+	lastAck time.Time
 }
 
 // NewConsumer 创建压测消费者。
@@ -78,11 +91,22 @@ func NewConsumer(source Claimer, workers int, handler Handler) *Consumer {
 	return &Consumer{
 		source:      source,
 		workers:     workers,
+		prefetch:    1,
 		handler:     handler,
 		pollTimeout: time.Second,
 		now:         time.Now,
 		local:       make([]*Samples, workers),
 	}
+}
+
+// WithPrefetch 设置每个消费者每次领取的条数；1 表示逐条领取。
+// 读取端未实现 BatchClaimer 时该项无效。
+func (c *Consumer) WithPrefetch(n int) *Consumer {
+	if n < 1 {
+		n = 1
+	}
+	c.prefetch = n
+	return c
 }
 
 // WithSentAt 指定如何从消息体读出端到端起点；不设置时只统计处理耗时。
@@ -126,6 +150,9 @@ func (c *Consumer) Stop() ConsumeStats {
 			}
 		}
 		c.stats.Finished = c.now()
+		if !c.lastAck.IsZero() && c.lastAck.Before(c.stats.Finished) {
+			c.stats.Finished = c.lastAck
+		}
 	})
 
 	c.mu.Lock()
@@ -152,7 +179,7 @@ func (c *Consumer) loop(ctx context.Context, worker int) {
 	samples := c.local[worker]
 
 	for ctx.Err() == nil {
-		d, err := c.source.Claim(ctx, c.pollTimeout)
+		batch, err := c.claim(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -163,7 +190,7 @@ func (c *Consumer) loop(ctx context.Context, worker int) {
 			c.mu.Unlock()
 			continue
 		}
-		if d == nil {
+		if len(batch) == 0 {
 			c.mu.Lock()
 			c.stats.Empty++
 			c.mu.Unlock()
@@ -175,6 +202,81 @@ func (c *Consumer) loop(ctx context.Context, worker int) {
 			continue
 		}
 
+		handled, failed, failures, ids := c.runBatch(ctx, samples, batch)
+
+		// 用独立上下文确认：处理期间 ctx 可能刚到取消信号，
+		// 但已经把消息处理完了，此时不确认会让它被重投一次。
+		ackErr := c.ack(ids)
+
+		c.mu.Lock()
+		if ackErr != nil {
+			// 没确认上的消息不算处理完成：它会被重新投递一次，
+			// 算进成功会把吞吐虚报出来。
+			c.stats.ClaimErrors++
+			recordErr(&c.stats.Errors, ackErr)
+		} else {
+			c.stats.Handled += handled
+			c.stats.Failed += failed
+			for _, ferr := range failures {
+				recordErr(&c.stats.Errors, ferr)
+			}
+		}
+		c.mu.Unlock()
+
+		if ackErr == nil {
+			c.done.Add(int64(len(ids)))
+			now := c.now()
+			c.mu.Lock()
+			if now.After(c.lastAck) {
+				c.lastAck = now
+			}
+			c.mu.Unlock()
+		}
+	}
+}
+
+// batcher 返回批量接口，并说明本次是否真的走批量。
+func (c *Consumer) batcher() (BatchClaimer, bool) {
+	if c.prefetch <= 1 {
+		return nil, false
+	}
+	bc, ok := c.source.(BatchClaimer)
+	if !ok {
+		return nil, false
+	}
+	return bc, true
+}
+
+// claim 领取下一批消息；无法批量时退化为单条领取，队列为空时借它的阻塞等待。
+func (c *Consumer) claim(ctx context.Context) ([]*queue.Delivery, error) {
+	if bc, ok := c.batcher(); ok {
+		batch, err := bc.ClaimBatch(ctx, c.prefetch)
+		if err != nil {
+			return nil, err
+		}
+		if len(batch) > 0 {
+			return batch, nil
+		}
+	}
+	d, err := c.source.Claim(ctx, c.pollTimeout)
+	if err != nil {
+		return nil, err
+	}
+	if d == nil {
+		return nil, nil
+	}
+	return []*queue.Delivery{d}, nil
+}
+
+// runBatch 处理一批消息，返回成功条数、失败条数、失败原因与待确认凭据。
+func (c *Consumer) runBatch(ctx context.Context, samples *Samples, batch []*queue.Delivery) (int, int, []error, []string) {
+	var (
+		handled  int
+		failed   int
+		failures []error
+		ids      = make([]string, 0, len(batch))
+	)
+	for _, d := range batch {
 		start := c.now()
 		sent, stamped := time.Time{}, false
 		if c.sentAt != nil {
@@ -183,33 +285,38 @@ func (c *Consumer) loop(ctx context.Context, worker int) {
 		herr := c.handler(ctx, d.Raw)
 		finished := c.now()
 
-		// 用独立上下文确认：处理期间 ctx 可能刚到取消信号，
-		// 但已经把消息处理完了，此时不确认会让它被重投一次。
-		ackCtx, cancel := context.WithTimeout(context.Background(), ackTimeout)
-		ackErr := c.source.Ack(ackCtx, d.ID)
-		cancel()
-
 		if stamped && !sent.IsZero() {
 			samples.Add(finished.Sub(sent))
 		} else {
 			samples.Add(finished.Sub(start))
 		}
-
-		c.mu.Lock()
-		switch {
-		case ackErr != nil:
-			c.stats.ClaimErrors++
-			recordErr(&c.stats.Errors, ackErr)
-		case herr != nil:
-			c.stats.Failed++
-			recordErr(&c.stats.Errors, herr)
-		default:
-			c.stats.Handled++
+		if herr != nil {
+			failed++
+			failures = append(failures, herr)
+		} else {
+			handled++
 		}
-		c.mu.Unlock()
+		ids = append(ids, d.ID)
+	}
+	return handled, failed, failures, ids
+}
 
-		if ackErr == nil {
-			c.done.Add(1)
+// ack 确认一批消息：批量模式下走一次脚本，否则逐条确认。
+func (c *Consumer) ack(ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), ackTimeout)
+	defer cancel()
+
+	if bc, ok := c.batcher(); ok {
+		return bc.AckBatch(ctx, ids)
+	}
+	var firstErr error
+	for _, id := range ids {
+		if err := c.source.Ack(ctx, id); err != nil && firstErr == nil {
+			firstErr = err
 		}
 	}
+	return firstErr
 }

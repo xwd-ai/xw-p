@@ -99,3 +99,84 @@ func TestPoolAgainstReliableConsumer(t *testing.T) {
 		t.Errorf("在途记录应清空，实际 %d（err=%v）", n, err)
 	}
 }
+
+// 批量领取下的并发消费：一次脚本取回一批、处理完统一确认。
+// 语义与逐条一致——每条消息恰好处理一次，队列、staging、在途记录都要清空。
+func TestPoolWithPrefetchAgainstReliableConsumer(t *testing.T) {
+	const (
+		total    = 500
+		workers  = 6
+		prefetch = 16
+	)
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+
+	const key = "xw:queue:events"
+	ctx := context.Background()
+	pipe := client.Pipeline()
+	for i := 0; i < total; i++ {
+		pipe.LPush(ctx, key, fmt.Sprintf(`{"trigger_id":"t-%d"}`, i))
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		t.Fatalf("入队失败: %v", err)
+	}
+
+	consumer := queue.NewReliableConsumer(mr.Addr(), "", 0, key, time.Minute)
+	t.Cleanup(func() { _ = consumer.Close() })
+
+	var (
+		mu   sync.Mutex
+		seen = make(map[string]int, total)
+	)
+	pool := NewPool(consumer, workers, time.Second, discardLogger()).WithPrefetch(prefetch)
+	pool.handle = func(raw []byte) error {
+		mu.Lock()
+		seen[string(raw)]++
+		mu.Unlock()
+		return nil
+	}
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan int, 1)
+	go func() { done <- pool.Run(runCtx) }()
+
+	waitFor(t, 10*time.Second, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(seen) >= total
+	})
+	waitFor(t, 10*time.Second, func() bool {
+		n, err := client.HLen(ctx, key+":processing").Result()
+		return err == nil && n == 0
+	})
+	cancel()
+
+	select {
+	case left := <-done:
+		if left != 0 {
+			t.Errorf("正常退出不应遗留未完成消息，实际 %d", left)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("消费者池未在 ctx 取消后退出")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != total {
+		t.Fatalf("应处理 %d 条不同消息，实际 %d 条", total, len(seen))
+	}
+	for raw, n := range seen {
+		if n != 1 {
+			t.Errorf("消息 %s 被处理 %d 次", raw, n)
+		}
+	}
+	for _, k := range []string{key, key + ":staging"} {
+		if n, err := client.LLen(ctx, k).Result(); err != nil || n != 0 {
+			t.Errorf("列表 %s 应清空，实际 %d（err=%v）", k, n, err)
+		}
+	}
+	if n, err := client.ZCard(ctx, key+":processing:lease").Result(); err != nil || n != 0 {
+		t.Errorf("租约应清空，实际 %d（err=%v）", n, err)
+	}
+}

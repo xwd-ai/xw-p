@@ -52,7 +52,7 @@ func TestWorkerSchedulesRetryInsteadOfAck(t *testing.T) {
 	if err != nil || d == nil {
 		t.Fatalf("领取失败: %v", err)
 	}
-	w.process(d)
+	w.process(d, nil)
 
 	calls := retrier.called()
 	if len(calls) != 1 {
@@ -74,7 +74,7 @@ func TestWorkerAcksUndeliverableMessage(t *testing.T) {
 	w.handle = func([]byte) error { return fmt.Errorf("%w: 工作流不存在", queue.ErrUndeliverable) }
 
 	d, _ := consumer.Claim(context.Background(), time.Second)
-	w.process(d)
+	w.process(d, nil)
 
 	if len(retrier.called()) != 0 {
 		t.Error("不可投递的消息不该进入重试")
@@ -91,7 +91,7 @@ func TestWorkerKeepsInflightWhenRetrierFails(t *testing.T) {
 	w.handle = func([]byte) error { return errors.New("渠道超时") }
 
 	d, _ := consumer.Claim(context.Background(), time.Second)
-	w.process(d)
+	w.process(d, nil)
 
 	// 登记重试失败时不能确认：消息要留在在途记录里，等租约回收兜底。
 	if acked := consumer.ackedIDs(); len(acked) != 0 {
@@ -105,7 +105,7 @@ func TestWorkerWithoutRetrierKeepsInflight(t *testing.T) {
 	w.handle = func([]byte) error { return errors.New("渠道超时") }
 
 	d, _ := consumer.Claim(context.Background(), time.Second)
-	w.process(d)
+	w.process(d, nil)
 
 	if acked := consumer.ackedIDs(); len(acked) != 0 {
 		t.Fatalf("未配置重试时不应确认，实际确认 %v", acked)

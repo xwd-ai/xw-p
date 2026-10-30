@@ -43,6 +43,9 @@ type Config struct {
 	// Workers 是并发消费者数量；ShutdownGrace 是退出时等待在途消息的上限。
 	Workers       int
 	ShutdownGrace time.Duration
+	// Prefetch 是每个消费者每次领取的条数：1 表示逐条领取，
+	// 大于 1 时改走批量领取，把多次脚本往返摊成一次。
+	Prefetch int
 	// 失败重试：处理失败的消息按指数退避（带抖动）重新投递，
 	// 次数耗尽后转死信。MaxAttempts <= 0 表示关闭重试。
 	RetryMaxAttempts int
@@ -85,6 +88,7 @@ func Load() Config {
 
 		Workers:       envInt("XW_WORKERS", worker.DefaultPoolSize),
 		ShutdownGrace: envDuration("XW_SHUTDOWN_GRACE", worker.DefaultShutdownGrace),
+		Prefetch:      envInt("XW_PREFETCH", worker.DefaultPrefetch),
 
 		RetryMaxAttempts: envInt("XW_RETRY_MAX_ATTEMPTS", queue.DefaultMaxAttempts),
 		RetryBaseDelay:   envDuration("XW_RETRY_BASE_DELAY", queue.DefaultRetryBase),
@@ -128,6 +132,11 @@ func (c Config) ShutdownGraceOrDefault() time.Duration {
 		return worker.DefaultShutdownGrace
 	}
 	return c.ShutdownGrace
+}
+
+// PrefetchOrDefault 返回生效的预取条数：非法值回退逐条领取。
+func (c Config) PrefetchOrDefault() int {
+	return worker.NormalizePrefetch(c.Prefetch)
 }
 
 // ClaimLeaseOrDefault 返回在途租约；非法值回退默认，避免租约变成 0 导致

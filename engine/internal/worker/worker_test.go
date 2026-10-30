@@ -110,7 +110,7 @@ func TestProcessAcksUndeliverableMessage(t *testing.T) {
 	exec := &stubExecutor{err: fmt.Errorf("%w: 工作流不存在", queue.ErrUndeliverable)}
 	w := New(consumer, time.Second, discardLogger()).WithExecutor(exec)
 
-	w.process(&queue.Delivery{ID: "d-1", Raw: []byte(`{"trigger_id":"t-1","name":"gone"}`)})
+	w.process(&queue.Delivery{ID: "d-1", Raw: []byte(`{"trigger_id":"t-1","name":"gone"}`)}, nil)
 
 	got := consumer.ackedIDs()
 	if len(got) != 1 || got[0] != "d-1" {
@@ -124,7 +124,7 @@ func TestProcessKeepsTransientFailureInFlight(t *testing.T) {
 	exec := &stubExecutor{err: errors.New("Redis 连接超时")}
 	w := New(consumer, time.Second, discardLogger()).WithExecutor(exec)
 
-	w.process(&queue.Delivery{ID: "d-1", Raw: []byte(`{"trigger_id":"t-1"}`)})
+	w.process(&queue.Delivery{ID: "d-1", Raw: []byte(`{"trigger_id":"t-1"}`)}, nil)
 
 	if got := consumer.ackedIDs(); len(got) != 0 {
 		t.Errorf("暂时性失败不应确认，实际 %v", got)
@@ -135,7 +135,7 @@ func TestProcessAcksAfterSuccess(t *testing.T) {
 	consumer := &fakeConsumer{}
 	w := New(consumer, time.Second, discardLogger())
 
-	w.process(&queue.Delivery{ID: "d-1", Raw: []byte(`{"trigger_id":"t-1","name":"post_liked","subscriber_id":"creator_1"}`)})
+	w.process(&queue.Delivery{ID: "d-1", Raw: []byte(`{"trigger_id":"t-1","name":"post_liked","subscriber_id":"creator_1"}`)}, nil)
 
 	got := consumer.ackedIDs()
 	if len(got) != 1 || got[0] != "d-1" {
@@ -148,7 +148,7 @@ func TestProcessDoesNotAckOnFailure(t *testing.T) {
 	w := New(consumer, time.Second, discardLogger())
 	w.handle = func([]byte) error { return errors.New("邮件渠道超时") }
 
-	w.process(&queue.Delivery{ID: "d-1", Raw: []byte(`{"trigger_id":"t-1"}`)})
+	w.process(&queue.Delivery{ID: "d-1", Raw: []byte(`{"trigger_id":"t-1"}`)}, nil)
 
 	if got := consumer.ackedIDs(); len(got) != 0 {
 		t.Errorf("处理失败不应确认，实际确认 %v", got)
@@ -160,7 +160,7 @@ func TestProcessAcksInvalidMessage(t *testing.T) {
 	consumer := &fakeConsumer{}
 	w := New(consumer, time.Second, discardLogger())
 
-	w.process(&queue.Delivery{ID: "d-1", Raw: []byte("{not-json")})
+	w.process(&queue.Delivery{ID: "d-1", Raw: []byte("{not-json")}, nil)
 
 	got := consumer.ackedIDs()
 	if len(got) != 1 || got[0] != "d-1" {

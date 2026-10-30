@@ -88,6 +88,49 @@ redis.call('ZREM', KEYS[2], ARGV[1])
 return 1
 `)
 
+// MaxBatchClaim 是一次批量领取的条数上限。
+//
+// 批量领取把「一条消息一次脚本往返」摊成「一次往返取一批」，代价是这批消息
+// 在登记后到确认前都占着在途记录，条数越多，单条消息的租约余量越少。
+// 上限取 512：按 1 分钟租约算，单条消息至少有 100ms 级的余量，够一次渠道调用。
+const MaxBatchClaim = 512
+
+// claimBatchScript 一次领取最多 ARGV[3] 条消息，并逐条登记在途记录。
+//
+// 领取凭据由调用方给的前缀 + 序号拼成：序号只在这一次脚本内递增，
+// 前缀自带纳秒与随机串，因此并发消费者之间不会撞号。
+var claimBatchScript = redis.NewScript(`
+local prefix = ARGV[1]
+local deadline = ARGV[2]
+local limit = tonumber(ARGV[3])
+local out = {}
+for i = 1, limit do
+  local raw = redis.call('LPOP', KEYS[2])
+  if not raw then
+    raw = redis.call('RPOP', KEYS[1])
+  end
+  if not raw then
+    break
+  end
+  local id = prefix .. '-' .. i
+  redis.call('HSET', KEYS[3], id, raw)
+  redis.call('ZADD', KEYS[4], deadline, id)
+  out[#out + 1] = id
+  out[#out + 1] = raw
+end
+return out
+`)
+
+// ackBatchScript 一次确认多条消息：逐条删除在途记录与租约。
+var ackBatchScript = redis.NewScript(`
+local removed = 0
+for i = 1, #ARGV do
+  removed = removed + redis.call('HDEL', KEYS[1], ARGV[i])
+  removed = removed + redis.call('ZREM', KEYS[2], ARGV[i])
+end
+return removed
+`)
+
 // NewReliableConsumer 创建可靠消费者。
 func NewReliableConsumer(addr, password string, db int, key string, lease time.Duration) *ReliableConsumer {
 	client := redis.NewClient(&redis.Options{Addr: addr, Password: password, DB: db})
@@ -155,6 +198,57 @@ func (c *ReliableConsumer) Ack(ctx context.Context, id string) error {
 		return nil
 	}
 	return ackScript.Run(ctx, c.client, []string{c.keys.processing, c.keys.leases}, id).Err()
+}
+
+// ClaimBatch 一次领取最多 max 条消息，返回空切片表示队列当前为空。
+//
+// 与 Claim 的区别只在往返次数：两者都是「取出即登记在途」，确认语义完全一致。
+// 队列为空时它不做阻塞等待（阻塞命令没法与脚本合并），需要等消息时由调用方
+// 退到 Claim。
+func (c *ReliableConsumer) ClaimBatch(ctx context.Context, max int) ([]*Delivery, error) {
+	if max <= 0 {
+		max = 1
+	}
+	if max > MaxBatchClaim {
+		max = MaxBatchClaim
+	}
+	now := c.now()
+	prefix := newDeliveryID(now)
+	raw, err := claimBatchScript.Run(ctx, c.client,
+		[]string{c.keys.queue, c.keys.staging, c.keys.processing, c.keys.leases},
+		prefix, now.Add(c.lease).UnixMilli(), max,
+	).Result()
+	if err != nil {
+		return nil, err
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("queue: 批量领取返回值类型异常 %T", raw)
+	}
+	out := make([]*Delivery, 0, len(items)/2)
+	for i := 0; i+1 < len(items); i += 2 {
+		id, okID := items[i].(string)
+		body, okBody := items[i+1].(string)
+		if !okID || !okBody {
+			return nil, fmt.Errorf("queue: 批量领取返回值内容异常")
+		}
+		out = append(out, &Delivery{ID: id, Raw: []byte(body), ClaimedAt: now})
+	}
+	return out, nil
+}
+
+// AckBatch 确认一批消息。与 Ack 一样是幂等的：
+// 已经确认过的凭据再确认一次只是空操作。
+func (c *ReliableConsumer) AckBatch(ctx context.Context, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	return ackBatchScript.Run(ctx, c.client,
+		[]string{c.keys.processing, c.keys.leases}, args...).Err()
 }
 
 // Ping 检查 Redis 连通性。

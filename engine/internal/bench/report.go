@@ -20,9 +20,9 @@ func (r Result) Report() string {
 	}
 	b.WriteString("\n")
 
-	fmt.Fprintf(&b, "  负载      %s 条 · 生产者并发 %d · %s · 消费者 %d · 每条模拟处理 %s\n",
+	fmt.Fprintf(&b, "  负载      %s 条 · 生产者并发 %d · %s · 消费者 %d（每次领取 %d 条）· 每条模拟处理 %s\n",
 		thousands(r.Produced.Sent+r.Produced.Failed), r.Plan.Concurrency, rateText(r.Plan.Rate),
-		r.Plan.Workers, workText(r.Plan.Work))
+		r.Plan.Workers, r.Plan.Prefetch, workText(r.Plan.Work))
 
 	fmt.Fprintf(&b, "  写入      %s 成功 / %s 失败，用时 %s（%s 条/秒）\n",
 		thousands(r.Produced.Sent), thousands(r.Produced.Failed),
@@ -66,6 +66,7 @@ type jsonResult struct {
 	Rate      float64 `json:"rate"`
 	Producers int     `json:"producers"`
 	Workers   int     `json:"workers"`
+	Prefetch  int     `json:"prefetch"`
 
 	Sent       int     `json:"sent"`
 	SendFailed int     `json:"send_failed"`
@@ -90,7 +91,7 @@ func (r Result) JSON() ([]byte, error) {
 	lat := r.Consumed.Latency
 	out := jsonResult{
 		Queue: r.Queue, Total: r.Produced.Sent + r.Produced.Failed, Rate: r.Plan.Rate,
-		Producers: r.Plan.Concurrency, Workers: r.Plan.Workers,
+		Producers: r.Plan.Concurrency, Workers: r.Plan.Workers, Prefetch: r.Plan.Prefetch,
 		Sent: r.Produced.Sent, SendFailed: r.Produced.Failed, SentRate: r.ProduceRate,
 		Handled: r.Consumed.Handled, RecvFailed: r.Consumed.Failed,
 		Throughput: r.Throughput, ErrorRate: r.ErrorRate, DrainTimedOut: r.DrainTimedOut,

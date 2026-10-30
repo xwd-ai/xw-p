@@ -97,7 +97,9 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		handler = DecodeHandler(plan.Work)
 	}
 
-	consumer := NewConsumer(opts.Source, plan.Workers, handler).WithSentAt(StampOf)
+	consumer := NewConsumer(opts.Source, plan.Workers, handler).
+		WithSentAt(StampOf).
+		WithPrefetch(plan.Prefetch)
 	consumer.Start(ctx)
 
 	producer := NewProducer(opts.Sink, plan, func(seq int, now time.Time) ([]byte, error) {

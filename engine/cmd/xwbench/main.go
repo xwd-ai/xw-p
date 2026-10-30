@@ -47,6 +47,7 @@ func run(args []string, out *os.File) error {
 	concurrency := fs.Int("concurrency", bench.DefaultConcurrency, "生产者并发数")
 	rate := fs.Float64("rate", 0, "目标速率（条/秒），0 表示不限速")
 	workers := fs.Int("workers", bench.DefaultWorkers, "消费者数量")
+	prefetch := fs.Int("prefetch", 1, "每个消费者每次领取的条数，1 表示逐条领取")
 	work := fs.Duration("work", 0, "每条消息的模拟处理耗时（如 2ms）")
 	drain := fs.Duration("drain", bench.DefaultDrainTimeout, "灌完后等待排空的上限")
 	usePipeline := fs.Bool("pipeline", false, "让消费者执行真实管线（聚合 + 站内信 + 推送）")
@@ -78,6 +79,7 @@ func run(args []string, out *os.File) error {
 		Concurrency:  *concurrency,
 		Rate:         *rate,
 		Workers:      *workers,
+		Prefetch:     *prefetch,
 		Work:         *work,
 		DrainTimeout: *drain,
 	}.Normalize()

@@ -25,6 +25,23 @@ type Consumer interface {
 	Ack(ctx context.Context, id string) error
 }
 
+// BatchConsumer 是支持批量领取、批量确认的消息源。
+//
+// 单条领取时每条消息都要一次脚本往返（领取一次、确认一次），消费者越多，
+// 压给 Redis 的单线程执行队列越长。批量接口把 N 条消息的往返摊成一次，
+// 语义与单条完全一致：取出即登记在途，确认才删除。
+type BatchConsumer interface {
+	Consumer
+	ClaimBatch(ctx context.Context, max int) ([]*queue.Delivery, error)
+	AckBatch(ctx context.Context, ids []string) error
+}
+
+// DefaultPrefetch 是未配置时每次领取的条数：1 表示逐条领取，与批量能力无关。
+const DefaultPrefetch = 1
+
+// MaxPrefetch 是每次领取的条数上限。
+const MaxPrefetch = queue.MaxBatchClaim
+
 // Executor 把一条已解码的队列消息交给执行管线。
 //
 // 返回 error 表示消息需要重新投递（暂时性故障）；「消息本身不可修复」
@@ -55,6 +72,8 @@ type Worker struct {
 	id int
 	// handle 是单条消息的处理入口，默认指向 Handle；测试用它注入失败场景。
 	handle func([]byte) error
+	// prefetch 是每次向消息源领取的条数；<=1 表示逐条领取。
+	prefetch int
 	// onStart / onFinish 在开始与结束处理一条消息时回调，池子用它统计在途数量。
 	onStart  func()
 	onFinish func()
@@ -87,9 +106,38 @@ func (w *Worker) WithRetrier(r Retrier) *Worker {
 	return w
 }
 
+// WithPrefetch 设置每次领取的条数，返回 worker 自身便于链式装配。
+//
+// 只有消息源实现了 BatchConsumer 且条数大于 1 时才走批量领取；
+// 其余情况保持逐条领取，传 0 或负数同样回落到逐条。
+func (w *Worker) WithPrefetch(n int) *Worker {
+	w.prefetch = NormalizePrefetch(n)
+	return w
+}
+
+// NormalizePrefetch 把预取条数收敛到 [1, MaxPrefetch]。
+func NormalizePrefetch(n int) int {
+	if n < DefaultPrefetch {
+		return DefaultPrefetch
+	}
+	if n > MaxPrefetch {
+		return MaxPrefetch
+	}
+	return n
+}
+
 // Run 持续消费直到 ctx 取消。
 func (w *Worker) Run(ctx context.Context) {
 	w.logger.Info("[engine] worker 已启动，开始消费队列", "worker", w.id)
+	if bc, ok := w.consumer.(BatchConsumer); ok && w.prefetch > DefaultPrefetch {
+		w.runBatched(ctx, bc)
+		return
+	}
+	w.runSingle(ctx)
+}
+
+// runSingle 逐条领取：一条消息一次领取脚本、一次确认脚本。
+func (w *Worker) runSingle(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -116,7 +164,64 @@ func (w *Worker) Run(ctx context.Context) {
 		if delivery == nil {
 			continue // 等待超时，继续下一轮
 		}
-		w.process(delivery)
+		w.process(delivery, nil)
+	}
+}
+
+// runBatched 按批领取：一次脚本取回至多 prefetch 条，处理完再一次性确认。
+//
+// 队列空时退回逐条领取，借用它的阻塞等待，避免批量接口空转抢 CPU。
+// 已在手里的这批消息一定处理完才退出：它们已经登记在途，半路撒手只会让
+// 租约到期后再投一遍。
+func (w *Worker) runBatched(ctx context.Context, bc BatchConsumer) {
+	for {
+		if ctx.Err() != nil {
+			w.logger.Info("[engine] worker 已停止", "worker", w.id)
+			return
+		}
+
+		batch, err := bc.ClaimBatch(ctx, w.prefetch)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			w.logger.Warn("[engine] 批量领取失败，稍后重试", "worker", w.id, "error", err)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Second):
+			}
+			continue
+		}
+		if len(batch) == 0 {
+			delivery, err := w.consumer.Claim(ctx, w.timeout)
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				w.logger.Warn("[engine] 领取消息失败，稍后重试", "worker", w.id, "error", err)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(time.Second):
+				}
+				continue
+			}
+			if delivery == nil {
+				continue
+			}
+			w.process(delivery, nil)
+			continue
+		}
+
+		done := make([]string, 0, len(batch))
+		collect := func(d *queue.Delivery) { done = append(done, d.ID) }
+		for _, delivery := range batch {
+			w.process(delivery, collect)
+		}
+		if len(done) > 0 {
+			w.ackMany(bc, done)
+		}
 	}
 }
 
@@ -124,7 +229,10 @@ func (w *Worker) Run(ctx context.Context) {
 //
 // 这里刻意不接收 ctx：消息一旦领取就要处理完，关闭信号只影响「是否继续领取」，
 // 不会把请求半路掐断留下写了一半的收件箱卡片。
-func (w *Worker) process(delivery *queue.Delivery) {
+//
+// collect 非空时把「该确认的凭据」交给调用方（批量路径），由它凑齐后一次确认；
+// 为空时立即确认（逐条路径）。
+func (w *Worker) process(delivery *queue.Delivery, collect func(*queue.Delivery)) {
 	if w.onStart != nil {
 		w.onStart()
 	}
@@ -138,7 +246,7 @@ func (w *Worker) process(delivery *queue.Delivery) {
 		if errors.Is(err, ErrInvalidMessage) || errors.Is(err, queue.ErrUndeliverable) {
 			w.logger.Warn("[engine] 丢弃不可投递的消息",
 				"worker", w.id, "deliveryId", delivery.ID, "error", err)
-			w.ack(delivery)
+			w.confirm(delivery, collect)
 			return
 		}
 
@@ -155,7 +263,26 @@ func (w *Worker) process(delivery *queue.Delivery) {
 		return
 	}
 
+	w.confirm(delivery, collect)
+}
+
+// confirm 决定这次确认是立刻发出去还是攒到批次结束。
+func (w *Worker) confirm(delivery *queue.Delivery, collect func(*queue.Delivery)) {
+	if collect != nil {
+		collect(delivery)
+		return
+	}
 	w.ack(delivery)
+}
+
+// ackMany 一次确认一批消息，失败只告警：确认不上最多让它们被重新投递一次。
+func (w *Worker) ackMany(bc BatchConsumer, ids []string) {
+	ctx, cancel := context.WithTimeout(context.Background(), ackTimeout)
+	defer cancel()
+	if err := bc.AckBatch(ctx, ids); err != nil {
+		w.logger.Warn("[engine] 批量确认失败，稍后会被重新投递",
+			"worker", w.id, "count", len(ids), "error", err)
+	}
 }
 
 // scheduleRetry 把失败消息交给重试处理器，并按结果记录日志。

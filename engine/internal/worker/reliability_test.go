@@ -90,7 +90,7 @@ func TestMessageSurvivesProcessingFailure(t *testing.T) {
 	if err != nil || delivery == nil {
 		t.Fatalf("领取失败: d=%v err=%v", delivery, err)
 	}
-	w.process(delivery)
+	w.process(delivery, nil)
 
 	if atomic.LoadInt32(&attempts) != 1 {
 		t.Fatalf("应尝试处理 1 次，实际 %d", atomic.LoadInt32(&attempts))
@@ -125,7 +125,7 @@ func TestMessageSurvivesProcessingFailure(t *testing.T) {
 	if err != nil || retried == nil {
 		t.Fatalf("重投后领取失败: d=%v err=%v", retried, err)
 	}
-	w.process(retried)
+	w.process(retried, nil)
 
 	if atomic.LoadInt32(&attempts) != 2 || atomic.LoadInt32(&success) != 1 {
 		t.Errorf("应共尝试 2 次、成功 1 次，实际 attempts=%d success=%d",
@@ -184,7 +184,7 @@ func TestReclaimerRecoversOnStartup(t *testing.T) {
 	if err != nil || delivery == nil {
 		t.Fatalf("重启后领取失败: d=%v err=%v", delivery, err)
 	}
-	w.process(delivery)
+	w.process(delivery, nil)
 	if atomic.LoadInt32(&handled) != 1 {
 		t.Errorf("重启后应处理 1 条，实际 %d", atomic.LoadInt32(&handled))
 	}
