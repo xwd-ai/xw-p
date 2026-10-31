@@ -12,11 +12,12 @@
 2. :func:`validate_config` 按 :data:`KIND_SPECS` 校验渠道约束与凭据：种类与渠道
    是否匹配、必填凭据是否齐、有没有拼错的凭据项。问题一次列全，而不是修一个
    报一个。
-3. :func:`build_registry` 构造实现并登记。尚未接入的种类（SMTP、短信网关等）
+3. :func:`build_registry` 构造实现并登记。尚未接入的种类（短信网关、推送等）
    跳过并记进报告，其余照常装配；某个渠道最终没有任何启用实现时同样写进报告。
 
-当前接入的实现只有 ``console``：它把所有渠道的投递打进行日志。其余种类的配置
-会被识别、校验、跳过，等对应实现落地后只需往 :data:`BUILDERS` 里加一项。
+当前接入的实现是 ``console`` 与 ``smtp``：前者把所有渠道的投递打进行日志，
+后者把 email 真正提交到中继。其余种类的配置会被识别、校验、跳过，等对应
+实现落地后只需往 :data:`BUILDERS` 里加一项。
 """
 from __future__ import annotations
 
@@ -32,6 +33,7 @@ from ..models.channel import Channel
 from .base import DEFAULT_PRIORITY, Provider
 from .console import ConsoleProvider
 from .registry import Entry, ProviderRegistry
+from .smtp import SMTPConfigError, SMTPProvider
 
 logger = logging.getLogger("xw.provider.factory")
 
@@ -108,9 +110,23 @@ def _build_console(cfg: ProviderConfig) -> Provider:
     return ConsoleProvider(cfg.channel, identifier=cfg.id, priority=cfg.priority)
 
 
+def _build_smtp(cfg: ProviderConfig) -> Provider:
+    """构造 SMTP 实现；凭据组合不合法时转成配置错误而不是启动崩溃。"""
+    try:
+        return SMTPProvider.from_credentials(
+            cfg.channel,
+            cfg.credentials,
+            identifier=cfg.id,
+            priority=cfg.priority,
+        )
+    except SMTPConfigError as exc:
+        raise ProviderConfigError(f"{cfg.label}：{exc}") from exc
+
+
 #: 种类 → 构造函数。没列在这里的种类会在装配时跳过（实现尚未接入）。
 BUILDERS: dict[str, Callable[[ProviderConfig], Provider]] = {
     "console": _build_console,
+    "smtp": _build_smtp,
 }
 
 #: 已接入实现的种类。

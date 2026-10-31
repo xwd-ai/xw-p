@@ -149,7 +149,8 @@ API 侧：
 {
   "providers": [
     {"id": "email-smtp", "channel": "email", "kind": "smtp", "priority": 10,
-     "credentials": {"host": "smtp.example.com", "from": "notify@example.com", "password": "…"}},
+     "credentials": {"host": "smtp.example.com", "from": "互动提醒 <notify@example.com>",
+                     "username": "notify", "password": "…", "tls": "starttls"}},
     {"id": "email-console", "channel": "email", "kind": "console", "priority": 100},
     {"id": "sms-console", "channel": "sms", "kind": "console", "enabled": false}
   ]
@@ -175,7 +176,17 @@ API 侧：
 
 校验在装配阶段完成并一次列全问题：未知渠道、`kind` 与渠道不匹配、标识重复、负优先级、缺少必填凭据、拼错的凭据项（例如把 `password` 写成 `Password`，错误信息会给出建议）都会让引擎启动失败，而不是等到投递那一刻才报认证错误。配置里出现的凭据值不会进日志，启动日志只打印标识、渠道、优先级与凭据名。
 
-`smtp` / `twilio` / `fcm` / `apns` / `slack` / `teams` 的真实实现尚未接入，配置里写了这些种类会被跳过并在启动日志逐条告警，其余渠道照常装配；如果某个投递渠道最终没有任何启用的实现，也会在启动日志里点出来——那种情况下分发阶段会退化成 mock 打印。
+`smtp` 已有真实实现（见下节），`twilio` / `fcm` / `apns` / `slack` / `teams` 尚未接入：配置里写了这些种类会被跳过并在启动日志逐条告警，其余渠道照常装配；如果某个投递渠道最终没有任何启用的实现，也会在启动日志里点出来——那种情况下分发阶段会退化成 mock 打印。
+
+#### 邮件投递（`kind: smtp`）
+
+引擎侧的实现是 `internal/mailer` 里的一个最小 SMTP 客户端（`internal/pipeline/smtp_email.go` 把它接成渠道实现），API 侧是 `app/providers/smtp.py`，两者按同一份凭据语义工作：
+
+- **加密**：`tls` 取 `none` / `starttls` / `tls`（隐式 TLS，也叫 SMTPS），也接受 `ssl`、`plain` 等别名；不填时按端口推导——465 隐式 TLS、25 明文、其余 STARTTLS；不填端口时按加密方式取 465 / 25 / 587。
+- **认证**：`username` + `password` 成对出现，走 `AUTH PLAIN`（Python 侧由 `smtplib` 在 PLAIN 被拒时回退 LOGIN）。口令只允许在加密连接上发送，配置成「明文 + 口令」会直接装配失败。
+- **结果**：投递失败不抛异常，`reason` 里带阶段与服务器回复（如「SMTP 收件人 a@b 失败（550）：no such user」），写进执行明细；成功时记录报文标识，便于在中继日志里找到那一封。
+- **边界**：连接、握手、提交共用同一个超时（默认 10 秒，Python 侧可传 `timeout`），超时或引擎退出时中断连接；主题与地址里的换行符在拼报文之前就被拒掉，避免头注入；证书默认严格校验，自签内网中继需要在代码里传入自带信任链的 `ssl.SSLContext`（Python）或 `SkipVerify`（Go，仅测试与受控内网）。
+- **降级**：把 console 条目留在同一渠道、优先级调低，即可在中继故障时先观察日志而不是整条链路失败。
 
 ### API 侧的渠道装配
 
@@ -183,10 +194,11 @@ API 进程读同一份 `XW_PROVIDERS_FILE`，校验规则与引擎一致（渠�
 
 - `providers/base.py`：`Provider` 抽象基类。收件人按渠道寻址（`in_app` → 订阅者标识、`email` → 邮箱、`sms` → 手机号、`push` → 设备 token，`chat` 的目标由实现自己的 webhook 决定），缺地址在进入实现之前就判失败；投递结果是 `sent` + `reason` 的固定结构，实现里抛出的异常由基类兜住转成失败结果，调用方不需要写 `try`。
 - `providers/console.py`：console 实现，把投递打成一行结构化日志，是所有渠道的兜底项。
+- `providers/smtp.py`：SMTP 实现，把 email 真正提交到中继；凭据校验（端口、加密方式、口令与连接方式的组合）在构造时就完成，投递失败按阶段给出原因。
 - `providers/registry.py`：按渠道索引实现，同一渠道按优先级取用（小的优先、同级按登记顺序），支持停用后回退、按标识原地替换、按标识摘除；读写由一把锁保护，取用返回快照。
 - `providers/factory.py`：解析并校验配置，装配成注册表，报告登记了哪些、跳过了哪些（实现尚未接入的种类）、还有哪些渠道空着。
 
-当前只接入 `console`：配置里写了 `inapp` 等尚未实现的种类会被跳过——因此沿用 [`infra/providers.example.json`](infra/providers.example.json) 时，API 内置消费者下的 `in_app` 渠道没有可用实现（示例文件里的 `inapp` 条目服务于引擎），需要把该条改成 `console` 或另配一份。
+已接入 `console` 与 `smtp`：`inapp` 等尚未实现的种类会被跳过——因此沿用 [`infra/providers.example.json`](infra/providers.example.json) 时，API 内置消费者下的 `in_app` 渠道没有可用实现（示例文件里的 `inapp` 条目服务于引擎），需要把该条改成 `console` 或另配一份。
 
 投递前先校验寻址信息，缺 `email` / `phone` / `deviceToken` 时该渠道直接记为失败：执行明细（`GET /v1/executions`）里是 `status=failed` 加具体原因，消息记录也为 `failed`，不会把「地址没配」记成已发送。配置本身写错（未知渠道、种类与渠道不匹配、缺必填凭据）会让 API 启动失败，与引擎的处理一致。
 

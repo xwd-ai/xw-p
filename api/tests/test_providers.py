@@ -308,14 +308,22 @@ def test_build_registry_skips_kinds_without_implementation():
             priority=10,
             credentials={"host": "smtp.example.com", "from": "notify@example.com"},
         ),
+        ProviderConfig(
+            channel=Channel.SMS,
+            kind="twilio",
+            id="sms-twilio",
+            priority=10,
+            credentials={"account_sid": "AC123", "auth_token": "t", "from": "+8613800000000"},
+        ),
     ]
     report = build_registry(configs)
 
-    assert [entry.id for entry in report.bound] == ["email-console"]
-    assert report.skipped and report.skipped[0][0] == "email-smtp"
+    # console 与 smtp 都已接入，twilio 仍未接入：跳过并记进报告。
+    assert [entry.id for entry in report.bound] == ["email-console", "email-smtp"]
+    assert report.skipped and report.skipped[0][0] == "sms-twilio"
     assert "尚未接入" in report.skipped[0][1]
-    # 主实现被跳过时不能把渠道留空：console 仍可投递
-    assert report.registry.get(Channel.EMAIL) is not None
+    # smtp 优先级更高，应当被选为 email 的默认实现。
+    assert report.registry.get(Channel.EMAIL).identifier == "email-smtp"
     assert Channel.SMS in report.unbound_channels
 
 

@@ -2,6 +2,7 @@
 
 - :mod:`.base`：:class:`Provider` 抽象基类，收口收件人寻址、结果结构与耗时打点；
 - :mod:`.console`：console mock 实现，把投递打印成结构化日志；
+- :mod:`.smtp`：SMTP 实现，把 email 真正提交到中继服务器；
 - :mod:`.registry`：按渠道索引实现，按优先级取用，支持启停与原地替换；
 - :mod:`.factory`：读取与引擎共用的渠道配置，校验后装配注册表。
 
@@ -36,6 +37,8 @@ from .factory import (
     validate_config,
 )
 from .registry import Entry, ProviderRegistry
+from .smtp import DEFAULT_TIMEOUT as SMTP_DEFAULT_TIMEOUT
+from .smtp import SMTPConfigError, SMTPProvider
 
 __all__ = [
     "ADDRESS_FIELDS",
@@ -53,6 +56,9 @@ __all__ = [
     "ProviderConfigError",
     "ProviderRegistry",
     "Recipient",
+    "SMTPConfigError",
+    "SMTPProvider",
+    "SMTP_DEFAULT_TIMEOUT",
     "build_registry",
     "create_registry",
     "default_configs",

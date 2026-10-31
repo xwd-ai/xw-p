@@ -123,7 +123,7 @@ func TestBuildRegistryUsesBuiltinConsoleProviders(t *testing.T) {
 }
 
 // 配置了渠道文件时按文件装配：优先级决定默认实现，停用条目只登记不取用，
-// 尚未接入的种类跳过而不影响其余渠道。
+// smtp 这类已接入的种类按凭据构造真实实现。
 func TestBuildRegistryFromConfigFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "providers.json")
@@ -141,15 +141,15 @@ func TestBuildRegistryFromConfigFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("装配失败：%v", err)
 	}
-	if registry.Len() != 2 {
-		t.Fatalf("登记条目数 = %d, 期望 2（smtp 尚未接入，不计入）", registry.Len())
+	if registry.Len() != 3 {
+		t.Fatalf("登记条目数 = %d, 期望 3（两条 email + 一条停用的 sms）", registry.Len())
 	}
 	entry, ok := registry.Select(domain.ChannelEmail)
-	if !ok || entry.ID != "email-console" {
-		t.Errorf("email 默认实现 = %q, 期望 email-console", entry.ID)
+	if !ok || entry.ID != "email-smtp" {
+		t.Errorf("email 默认实现 = %q, 期望优先级更高的 email-smtp", entry.ID)
 	}
-	if _, ok := registry.LookupByID("email-smtp"); ok {
-		t.Error("尚未接入的种类不应登记")
+	if smtp, ok := registry.LookupByID("email-smtp"); !ok || !smtp.Enabled {
+		t.Error("smtp 实现应登记为启用条目")
 	}
 	if entry, ok := registry.LookupByID("sms-console"); !ok || entry.Enabled {
 		t.Error("停用配置应登记为停用条目")
