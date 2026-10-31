@@ -57,6 +57,9 @@ type Config struct {
 	// WorkflowsFile 是工作流定义快照文件（JSON 数组）的路径，
 	// 用于给没有携带步骤定义的消息提供按名称回退查找。为空表示不加载。
 	WorkflowsFile string
+	// ProvidersFile 是渠道配置文件（JSON）的路径：声明每个渠道用哪种实现、
+	// 优先级、开关与凭据。为空表示使用内置的 console 实现。
+	ProvidersFile string
 	// AdminAddr 是运维接口（死信查询/重放）的监听地址。
 	// 空字符串表示不启动；未配置 XW_ADMIN_ADDR 时沿用 ENGINE_PORT。
 	AdminAddr string
@@ -97,6 +100,7 @@ func Load() Config {
 		RetryInterval:    envDuration("XW_RETRY_INTERVAL", worker.DefaultRetryInterval),
 
 		WorkflowsFile: strings.TrimSpace(os.Getenv("XW_WORKFLOWS_FILE")),
+		ProvidersFile: strings.TrimSpace(os.Getenv("XW_PROVIDERS_FILE")),
 		AdminAddr:     adminListenAddr(),
 	}
 }

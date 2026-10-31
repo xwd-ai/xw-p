@@ -1,0 +1,9 @@
+{
+  "providers": [
+    {"id": "inapp", "channel": "in_app", "kind": "inapp", "priority": 100},
+    {"id": "console-email", "channel": "email", "kind": "console", "priority": 100},
+    {"id": "console-sms", "channel": "sms", "kind": "console", "priority": 100},
+    {"id": "console-push", "channel": "push", "kind": "console", "priority": 100},
+    {"id": "console-chat", "channel": "chat", "kind": "console", "priority": 100}
+  ]
+}

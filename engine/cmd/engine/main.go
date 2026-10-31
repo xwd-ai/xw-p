@@ -24,6 +24,7 @@ import (
 	"github.com/xwd-ai/xw-p/engine/internal/admin"
 	"github.com/xwd-ai/xw-p/engine/internal/config"
 	"github.com/xwd-ai/xw-p/engine/internal/pipeline"
+	"github.com/xwd-ai/xw-p/engine/internal/provider"
 	"github.com/xwd-ai/xw-p/engine/internal/queue"
 	"github.com/xwd-ai/xw-p/engine/internal/runner"
 	"github.com/xwd-ai/xw-p/engine/internal/schedule"
@@ -64,7 +65,13 @@ func main() {
 
 	// 聚合卡片存储：多实例共享走 Redis，Redis 不可用时回退进程内存
 	// （单实例语义正确，多实例会各开一张卡，日志里明示这件事）。
-	pipe, closeDigest := newPipeline(logger, cfg)
+	pipe, closeDigest, err := newPipeline(logger, cfg)
+	if err != nil {
+		// 渠道配置写错时直接退出：带着半套渠道继续跑，只会在投递那一刻
+		// 才发现某个渠道没人接。
+		logger.Error("[engine] 渠道实现装配失败", "error", err)
+		os.Exit(1)
+	}
 	defer closeDigest()
 
 	// 延迟调度器：到期任务 → 管线续跑。delay 步骤到期后把剩余步骤跑完。
@@ -259,14 +266,22 @@ func loadWorkflowSource(logger *slog.Logger, cfg config.Config) runner.Source {
 
 // newPipeline 组装执行管线并选定聚合卡片存储，返回管线与资源释放函数。
 //
+// 渠道实现由 buildRegistry 决定：未配置 XW_PROVIDERS_FILE 时用内置的 console
+// 实现，配置后按文件内容装配。
+//
 // 默认使用 Redis 存储：多个引擎实例共享同一张聚合卡片，计数走 HINCRBY，
 // 窗口靠键的 TTL 收敛。显式配置 XW_DIGEST_STORE=memory 或 Redis 不可用时
 // 回退进程内存储——那意味着多实例会各开一张卡，只在单实例部署下成立。
-func newPipeline(logger *slog.Logger, cfg config.Config) (*pipeline.Pipeline, func()) {
-	pipe := pipeline.New(logger).WithTimeouts(timeoutPolicy(cfg))
-	registry := pipe.Registry()
-	ids := make([]string, 0, registry.Len())
-	for _, entry := range registry.Entries() {
+func newPipeline(logger *slog.Logger, cfg config.Config) (*pipeline.Pipeline, func(), error) {
+	registry, err := buildRegistry(logger, cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	pipe := pipeline.NewWithRegistry(logger, registry).WithTimeouts(timeoutPolicy(cfg))
+
+	entries := registry.Entries()
+	ids := make([]string, 0, len(entries))
+	for _, entry := range entries {
 		ids = append(ids, entry.ID)
 	}
 	logger.Info("[engine] 渠道实现注册表",
@@ -281,7 +296,7 @@ func newPipeline(logger *slog.Logger, cfg config.Config) (*pipeline.Pipeline, fu
 
 	if strings.EqualFold(strings.TrimSpace(cfg.DigestStore), "memory") {
 		logger.Info("[engine] 聚合卡片存储：进程内存（单实例语义）")
-		return pipe, func() {}
+		return pipe, func() {}, nil
 	}
 
 	client := redis.NewClient(&redis.Options{
@@ -295,13 +310,57 @@ func newPipeline(logger *slog.Logger, cfg config.Config) (*pipeline.Pipeline, fu
 		logger.Warn("[engine] 聚合卡片存储连接 Redis 失败，本次回退进程内存；多实例下计数会各算各的",
 			"redis", cfg.RedisAddr, "error", err)
 		_ = client.Close()
-		return pipe, func() {}
+		return pipe, func() {}, nil
 	}
 
 	store := pipeline.NewRedisDigestStoreWithPrefix(client, cfg.DigestPrefix)
 	pipe.WithDigestStore(store)
 	logger.Info("[engine] 聚合卡片存储：Redis", "redis", cfg.RedisAddr, "prefix", store.Prefix())
-	return pipe, func() { _ = client.Close() }
+	return pipe, func() { _ = client.Close() }, nil
+}
+
+// buildRegistry 组装渠道实现注册表。
+//
+// 两种来源：未配置 XW_PROVIDERS_FILE 时使用内置的五个 console 实现（本地
+// 跑通链路用）；配置了文件则严格按文件装配——文件解析失败、校验不通过或
+// 实现构造失败都让进程起不来，避免「配置写错了但看起来在跑」。文件里声明
+// 但实现尚未接入的种类跳过并逐条告警，装配结果里仍缺实现的渠道也一并列出：
+// 那些渠道在运行期会退化为分发阶段的 mock 打印。
+func buildRegistry(logger *slog.Logger, cfg config.Config) (*pipeline.ProviderRegistry, error) {
+	if cfg.ProvidersFile == "" {
+		return pipeline.DefaultProviderRegistry(logger), nil
+	}
+
+	set, err := provider.LoadSet(cfg.ProvidersFile)
+	if err != nil {
+		return nil, err
+	}
+
+	registry := pipeline.NewProviderRegistry()
+	report, err := set.Bind(registry, pipeline.ProviderFactory(logger))
+	if err != nil {
+		return nil, err
+	}
+	for _, skipped := range report.Skipped {
+		logger.Warn("[engine] 渠道实现尚未接入，配置已跳过",
+			"id", skipped.ID,
+			"channel", skipped.Channel,
+			"kind", skipped.Kind,
+			"reason", skipped.Reason,
+		)
+	}
+	if len(report.Missing) > 0 {
+		logger.Warn("[engine] 以下渠道没有启用的实现，投递将回退为 mock 打印",
+			"channels", report.Missing)
+	}
+	logger.Info("[engine] 渠道配置已加载",
+		"file", set.Source(),
+		"providers", set.Len(),
+		"bound", len(report.Bound),
+		"skipped", len(report.Skipped),
+		"configured", set.String(),
+	)
+	return registry, nil
 }
 
 // timeoutPolicy 组装超时策略：环境变量未配置时沿用管线默认值。

@@ -143,3 +143,16 @@ func TestDelayStoreConfig(t *testing.T) {
 		t.Errorf("显式配置未生效：store=%q prefix=%q", cfg.DelayStore, cfg.DelayPrefix)
 	}
 }
+
+// 渠道配置文件路径来自 XW_PROVIDERS_FILE，未配置时为空（走内置 console 实现）。
+func TestLoadReadsProvidersFileEnv(t *testing.T) {
+	t.Setenv("XW_PROVIDERS_FILE", "  /etc/xw/providers.json  ")
+	if got := Load().ProvidersFile; got != "/etc/xw/providers.json" {
+		t.Errorf("XW_PROVIDERS_FILE = %q, 期望去空白后的路径", got)
+	}
+
+	t.Setenv("XW_PROVIDERS_FILE", "")
+	if got := Load().ProvidersFile; got != "" {
+		t.Errorf("未配置时应为空，实际 %q", got)
+	}
+}

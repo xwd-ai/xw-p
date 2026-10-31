@@ -109,6 +109,7 @@ API 侧：
 | `XW_RETRY_JITTER` | `0.3` | 抖动比例，实际等待在 `[d*(1-jitter), d]` 内随机，`0` 表示不抖动 |
 | `XW_RETRY_INTERVAL` | `1s` | 到期重试写回队列的扫描间隔 |
 | `XW_WORKFLOWS_FILE` | 空 | 工作流定义快照文件（JSON 数组）；仅用于给没有携带步骤的消息按名称回退查找 |
+| `XW_PROVIDERS_FILE` | 空 | 渠道配置文件（JSON）；为空时使用内置的 console 实现 |
 | `XW_ADMIN_ADDR` | `127.0.0.1:<ENGINE_PORT>` | 管理接口监听地址（死信查询/重放）；`off` 表示不启动 |
 
 超时是链路兜底：渠道卡住时管线不再无限等待，超时的步骤与后续步骤都会被记为失败/短路并写进执行明细。超时值应大于下游的正常延迟（例如设为渠道 P99 的数倍），而不是贴着平均值设置。
@@ -138,6 +139,42 @@ API 侧：
 在途记录由回收流程负责收尾：引擎启动时先扫一轮、之后按 `XW_RECLAIM_INTERVAL` 周期扫描，把「租约到期 + 半个租约宽限」后仍未确认的消息原子地写回队列（`ZRANGEBYSCORE` 选过期租约、`RPUSH` 回主队列、`HDEL`/`ZREM` 清理，全过程在一个 Lua 脚本里完成，多实例并发回收不会重复入队）。这条路径覆盖两类情况：本进程上一轮崩溃留下的消息，以及集群里其他实例异常退出留下的消息。
 
 处理失败的消息走退避重试，而不是等租约到期重投：worker 把消息放进重试集合（`<queue>:retry` 记可重试时刻、`<queue>:retry:body` 存原始消息体、`<queue>:retry:record` 记次数与首次失败时间），到期后由重试泵原子地写回主队列。等待时长按 `XW_RETRY_BASE_DELAY` 起步、逐次翻倍到 `XW_RETRY_MAX_DELAY` 封顶，再按 `XW_RETRY_JITTER` 向下抖动——同一批同时失败的消息不会在同一毫秒一起回到队列，避免下游刚恢复就被打满。失败次数按消息体哈希记账并带 TTL（覆盖整个退避窗口），因此计数不随重投丢失，消息体本身始终原样写回。处理次数达到 `XW_RETRY_MAX_ATTEMPTS` 后不再重试，转入死信列表 `<queue>:dead`，保留原始消息、失败次数、首次失败时间与最后一次失败原因。把这些状态从「在途记录」摘走与写入重试集合在同一个脚本里完成，所以重试中的消息不会被租约回收重复抓取。
+
+### 渠道配置
+
+默认装配下五个投递渠道各有一个 console 实现（`in_app` 写收件箱，其余打印结构化日志）。要指定渠道用哪种实现、优先级与凭据，用 `XW_PROVIDERS_FILE` 指向一个 JSON 文件，示例见 [`infra/providers.example.json`](infra/providers.example.json)：
+
+```json
+{
+  "providers": [
+    {"id": "email-smtp", "channel": "email", "kind": "smtp", "priority": 10,
+     "credentials": {"host": "smtp.example.com", "from": "notify@example.com", "password": "…"}},
+    {"id": "email-console", "channel": "email", "kind": "console", "priority": 100},
+    {"id": "sms-console", "channel": "sms", "kind": "console", "enabled": false}
+  ]
+}
+```
+
+字段：`id`（必填，注册表内的寻址键，启停/替换/日志都用它）、`channel`（必填，只能是 `in_app` / `email` / `sms` / `push` / `chat`）、`kind`（必填，实现种类）、`priority`（可选，小的优先，缺省 `100`）、`enabled`（可选，缺省 `true`）、`credentials`（可选，该实现需要的凭据）。
+
+同一渠道的多条配置构成一条取用序列：投递取第一个启用的实现，其余按优先级作为备选；优先级相同时保持文件中的顺序。`enabled: false` 的条目仍会登记进注册表，便于运行期再打开，但不会参与取用。
+
+`kind` 同时约束了渠道与凭据：
+
+| `kind` | 可用渠道 | 必填凭据 | 可选凭据 |
+| --- | --- | --- | --- |
+| `console` | 全部投递渠道 | — | — |
+| `inapp` | `in_app` | — | — |
+| `smtp` | `email` | `host`、`from` | `port`、`username`、`password`、`tls`、`reply_to` |
+| `twilio` | `sms` | `account_sid`、`auth_token`、`from` | `endpoint` |
+| `fcm` | `push` | `server_key` | `project_id`、`endpoint` |
+| `apns` | `push` | `key_id`、`team_id`、`private_key` | `bundle_id`、`sandbox`、`endpoint` |
+| `slack` | `chat` | `webhook_url` | — |
+| `teams` | `chat` | `webhook_url` | — |
+
+校验在装配阶段完成并一次列全问题：未知渠道、`kind` 与渠道不匹配、标识重复、负优先级、缺少必填凭据、拼错的凭据项（例如把 `password` 写成 `Password`，错误信息会给出建议）都会让引擎启动失败，而不是等到投递那一刻才报认证错误。配置里出现的凭据值不会进日志，启动日志只打印标识、渠道、优先级与凭据名。
+
+`smtp` / `twilio` / `fcm` / `apns` / `slack` / `teams` 的真实实现尚未接入，配置里写了这些种类会被跳过并在启动日志逐条告警，其余渠道照常装配；如果某个投递渠道最终没有任何启用的实现，也会在启动日志里点出来——那种情况下分发阶段会退化成 mock 打印。
 
 ### 死信运维接口
 

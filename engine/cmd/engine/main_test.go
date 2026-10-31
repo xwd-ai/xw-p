@@ -2,12 +2,16 @@ package main
 
 import (
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
 
 	"github.com/xwd-ai/xw-p/engine/internal/config"
+	"github.com/xwd-ai/xw-p/engine/internal/domain"
 	"github.com/xwd-ai/xw-p/engine/internal/schedule"
 )
 
@@ -99,5 +103,78 @@ func TestNewDelayStoreFallsBackWhenRedisDown(t *testing.T) {
 
 	if _, ok := store.(*schedule.MemoryStore); !ok {
 		t.Fatalf("Redis 不可用时应回退进程内存储，实际 %T", store)
+	}
+}
+
+// buildRegistry 的默认路径：未配置渠道文件时登记内置的五个 console 实现。
+func TestBuildRegistryUsesBuiltinConsoleProviders(t *testing.T) {
+	registry, err := buildRegistry(discardLogger(), config.Config{})
+	if err != nil {
+		t.Fatalf("默认装配失败：%v", err)
+	}
+	if registry.Len() != 5 {
+		t.Fatalf("登记条目数 = %d, 期望 5", registry.Len())
+	}
+	for _, ch := range domain.DeliveryChannels() {
+		if !registry.Has(ch) {
+			t.Errorf("渠道 %s 缺少可用实现", ch)
+		}
+	}
+}
+
+// 配置了渠道文件时按文件装配：优先级决定默认实现，停用条目只登记不取用，
+// 尚未接入的种类跳过而不影响其余渠道。
+func TestBuildRegistryFromConfigFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "providers.json")
+	content := `{"providers": [
+		{"id": "email-console", "channel": "email", "kind": "console", "priority": 100},
+		{"id": "sms-console", "channel": "sms", "kind": "console", "enabled": false},
+		{"id": "email-smtp", "channel": "email", "kind": "smtp", "priority": 10,
+		 "credentials": {"host": "smtp.example.com", "from": "notify@example.com"}}
+	]}`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("写测试配置失败：%v", err)
+	}
+
+	registry, err := buildRegistry(discardLogger(), config.Config{ProvidersFile: path})
+	if err != nil {
+		t.Fatalf("装配失败：%v", err)
+	}
+	if registry.Len() != 2 {
+		t.Fatalf("登记条目数 = %d, 期望 2（smtp 尚未接入，不计入）", registry.Len())
+	}
+	entry, ok := registry.Select(domain.ChannelEmail)
+	if !ok || entry.ID != "email-console" {
+		t.Errorf("email 默认实现 = %q, 期望 email-console", entry.ID)
+	}
+	if _, ok := registry.LookupByID("email-smtp"); ok {
+		t.Error("尚未接入的种类不应登记")
+	}
+	if entry, ok := registry.LookupByID("sms-console"); !ok || entry.Enabled {
+		t.Error("停用配置应登记为停用条目")
+	}
+	if registry.Has(domain.ChannelSMS) {
+		t.Error("只有停用实现的渠道不应被判定为可用")
+	}
+}
+
+// 配置写错时直接返回错误，让进程起不来，而不是带着半套渠道继续跑。
+func TestBuildRegistryRejectsInvalidConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "providers.json")
+	if err := os.WriteFile(path, []byte(`[{"id": "email", "channel": "email", "kind": "smtp"}]`), 0o600); err != nil {
+		t.Fatalf("写测试配置失败：%v", err)
+	}
+
+	registry, err := buildRegistry(discardLogger(), config.Config{ProvidersFile: path})
+	if err == nil {
+		t.Fatal("缺少凭据的配置应装配失败")
+	}
+	if registry != nil {
+		t.Error("失败时不应返回注册表")
+	}
+	if !strings.Contains(err.Error(), "credentials") {
+		t.Errorf("错误信息应指出缺少凭据：%v", err)
 	}
 }
