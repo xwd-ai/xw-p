@@ -29,12 +29,16 @@ class Channel(str, Enum):
         """返回真正执行投递的渠道（排除 delay/digest 这类编排步骤）。"""
         return [c for c in cls if c not in (cls.DELAY, cls.DIGEST)]
 
+    def is_delivery(self) -> bool:
+        """是否为可投递渠道（``delay`` / ``digest`` 只是编排步骤）。"""
+        return self not in (Channel.DELAY, Channel.DIGEST)
+
 
 class Provider(Protocol):
-    """Provider 占位接口：把一个已渲染好的消息投递到对应渠道。
+    """Provider 协议：把一个已渲染好的消息投递到对应渠道。
 
-    契约约定：每个 Provider 负责单一渠道；``send`` 返回投递结果，
-    异常由上层统一捕获并写入消息状态机。
+    这里只声明最小契约（有渠道、能投递）；可继承的实现基类见 ``app.providers``，
+    收件人寻址、结果结构与耗时打点由基类收口，注册表按渠道取用。
     """
 
     channel: Channel
@@ -46,7 +50,7 @@ class Provider(Protocol):
 
 @runtime_checkable
 class ProviderRegistry(Protocol):
-    """按渠道注册/获取 Provider 的注册表契约（后续 Phase 落地实现）。"""
+    """按渠道注册/获取 Provider 的注册表契约（实现见 ``app.providers.registry``）。"""
 
     def register(self, provider: Provider) -> None: ...
 

@@ -73,7 +73,7 @@ python -m venv .venv && .venv/bin/pip install -r requirements.txt
 # 3. 触发一条评论通知（demo）
 curl -X POST http://127.0.0.1:8000/v1/events/trigger \
   -H "Content-Type: application/json" \
-  -d '{"name":"post_commented","to":{"subscriberId":"creator_1","email":"hi@example.com","channels":["in_app","push","email"]},"payload":{"post_id":"P-2026-1001","post_title":"我的第一支 Vlog","actor":"小林","comment":"拍得真好，求教程！"}}'
+  -d '{"name":"post_commented","to":{"subscriberId":"creator_1","email":"hi@example.com","deviceToken":"fcm-token-9f2c1d","channels":["in_app","push","email"]},"payload":{"post_id":"P-2026-1001","post_title":"我的第一支 Vlog","actor":"小林","comment":"拍得真好，求教程！"}}'
 ```
 
 ### 环境变量
@@ -87,6 +87,7 @@ API 侧：
 | `XW_STORAGE` | `jsonl` | 持久化后端：`jsonl` / `postgres` |
 | `XW_DATABASE_URL` | `postgresql+psycopg://xwnotify:xwnotify@localhost:5432/xwnotify` | Postgres 连接串（`XW_STORAGE=postgres` 时生效） |
 | `XW_API_WORKER` | 按总线决定 | API 内置消费线程开关；`XW_BUS=memory` 时默认开，`redis` 时默认关（队列归引擎消费） |
+| `XW_PROVIDERS_FILE` | 空 | 渠道配置文件（JSON），与引擎侧共用同一份；为空时每个投递渠道装配一个 console 实现 |
 
 引擎侧：
 
@@ -175,6 +176,19 @@ API 侧：
 校验在装配阶段完成并一次列全问题：未知渠道、`kind` 与渠道不匹配、标识重复、负优先级、缺少必填凭据、拼错的凭据项（例如把 `password` 写成 `Password`，错误信息会给出建议）都会让引擎启动失败，而不是等到投递那一刻才报认证错误。配置里出现的凭据值不会进日志，启动日志只打印标识、渠道、优先级与凭据名。
 
 `smtp` / `twilio` / `fcm` / `apns` / `slack` / `teams` 的真实实现尚未接入，配置里写了这些种类会被跳过并在启动日志逐条告警，其余渠道照常装配；如果某个投递渠道最终没有任何启用的实现，也会在启动日志里点出来——那种情况下分发阶段会退化成 mock 打印。
+
+### API 侧的渠道装配
+
+API 进程读同一份 `XW_PROVIDERS_FILE`，校验规则与引擎一致（渠道约束、必填凭据、拼错的凭据项），装配分四层：
+
+- `providers/base.py`：`Provider` 抽象基类。收件人按渠道寻址（`in_app` → 订阅者标识、`email` → 邮箱、`sms` → 手机号、`push` → 设备 token，`chat` 的目标由实现自己的 webhook 决定），缺地址在进入实现之前就判失败；投递结果是 `sent` + `reason` 的固定结构，实现里抛出的异常由基类兜住转成失败结果，调用方不需要写 `try`。
+- `providers/console.py`：console 实现，把投递打成一行结构化日志，是所有渠道的兜底项。
+- `providers/registry.py`：按渠道索引实现，同一渠道按优先级取用（小的优先、同级按登记顺序），支持停用后回退、按标识原地替换、按标识摘除；读写由一把锁保护，取用返回快照。
+- `providers/factory.py`：解析并校验配置，装配成注册表，报告登记了哪些、跳过了哪些（实现尚未接入的种类）、还有哪些渠道空着。
+
+当前只接入 `console`：配置里写了 `inapp` 等尚未实现的种类会被跳过——因此沿用 [`infra/providers.example.json`](infra/providers.example.json) 时，API 内置消费者下的 `in_app` 渠道没有可用实现（示例文件里的 `inapp` 条目服务于引擎），需要把该条改成 `console` 或另配一份。
+
+投递前先校验寻址信息，缺 `email` / `phone` / `deviceToken` 时该渠道直接记为失败：执行明细（`GET /v1/executions`）里是 `status=failed` 加具体原因，消息记录也为 `failed`，不会把「地址没配」记成已发送。配置本身写错（未知渠道、种类与渠道不匹配、缺必填凭据）会让 API 启动失败，与引擎的处理一致。
 
 ### 死信运维接口
 

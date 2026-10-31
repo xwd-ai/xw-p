@@ -48,6 +48,10 @@ DATABASE_URL = _env(
 # 幂等后端：memory（默认）| redis
 IDEMPOTENCY_BACKEND = _env("XW_IDEMPOTENCY", "memory")
 
+# 渠道配置文件（JSON）：与引擎侧共用的格式，用于指定每个渠道走哪种实现。
+# 为空时 API 侧为每个投递渠道装配一个 console 实现。
+PROVIDERS_FILE = _env("XW_PROVIDERS_FILE", "")
+
 # 幂等键缓存 TTL（秒）：超过该时长后同键请求视为新请求
 IDEMPOTENCY_TTL = int(_env("XW_IDEMPOTENCY_TTL", "86400"))
 

@@ -143,7 +143,14 @@ def _trigger(client, name="post_commented", subscriber="creator_1001", channels=
                     "post_mentioned": ["in_app", "push"]}[name]
     body = {
         "name": name,
-        "to": {"subscriberId": subscriber, "channels": channels},
+        "to": {
+            "subscriberId": subscriber,
+            "channels": channels,
+            # 多渠道投递需要各渠道的寻址信息，缺一项该渠道就会被判失败
+            "email": "creator@example.com",
+            "phone": "+8613800000000",
+            "deviceToken": "fcm-token-9f2c1d",
+        },
         "payload": {"post_id": "P-2026-1001", "post_title": "我的第一支 Vlog", "actor": "小林"},
     }
     body.update(extra)

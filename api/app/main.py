@@ -21,6 +21,7 @@ from .dashboard_routes import router as dashboard_router
 from .execution_routes import router as execution_router
 from .idempotency import get_idempotency_store
 from .inbox import router as inbox_router
+from .providers import factory as provider_factory
 from .schemas import TriggerEvent, TriggerResponse, new_queued_message
 from .worker import Worker
 from .workflow import get_registry
@@ -40,6 +41,9 @@ async def lifespan(app: FastAPI):
     storage_hint = config.storage_warning()
     if storage_hint:
         logger.warning(storage_hint)
+    # 渠道注册表在启动时装配：配置写错直接暴露出来，而不是等到第一条消息
+    # 投递失败才发现；尚未接入的种类与空着的渠道会在日志里逐条列出。
+    provider_factory.get_registry()
     # redis 总线由 Go 引擎消费；API 内置线程只在 memory 总线的单进程 demo 里起，
     # 否则两个消费者会抢同一条消息。
     if config.API_WORKER:
