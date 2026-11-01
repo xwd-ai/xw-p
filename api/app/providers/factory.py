@@ -15,9 +15,10 @@
 3. :func:`build_registry` 构造实现并登记。尚未接入的种类（短信网关、推送等）
    跳过并记进报告，其余照常装配；某个渠道最终没有任何启用实现时同样写进报告。
 
-当前接入的实现是 ``console`` 与 ``smtp``：前者把所有渠道的投递打进行日志，
-后者把 email 真正提交到中继。其余种类的配置会被识别、校验、跳过，等对应
-实现落地后只需往 :data:`BUILDERS` 里加一项。
+当前接入的实现是 ``console``（含短信专用的号码校验版本）、``smtp`` 与
+``twilio``：console 把所有渠道的投递打进行日志，smtp 把 email 提交到中继，
+twilio 按 Messages 资源契约提交短信。其余种类的配置会被识别、校验、跳过，
+等对应实现落地后只需往 :data:`BUILDERS` 里加一项。
 """
 from __future__ import annotations
 
@@ -33,7 +34,9 @@ from ..models.channel import Channel
 from .base import DEFAULT_PRIORITY, Provider
 from .console import ConsoleProvider
 from .registry import Entry, ProviderRegistry
+from .sms import ConsoleSMSProvider
 from .smtp import SMTPConfigError, SMTPProvider
+from .twilio import TwilioConfigError, TwilioSMSProvider
 
 logger = logging.getLogger("xw.provider.factory")
 
@@ -69,7 +72,7 @@ KIND_SPECS: dict[str, KindSpec] = {
     "twilio": KindSpec(
         channels=(Channel.SMS,),
         required=("account_sid", "auth_token", "from"),
-        optional=("endpoint",),
+        optional=("endpoint", "default_country_code", "status_callback", "timeout"),
     ),
     "fcm": KindSpec(
         channels=(Channel.PUSH,),
@@ -107,6 +110,9 @@ class ProviderConfig:
 
 
 def _build_console(cfg: ProviderConfig) -> Provider:
+    # 短信走专用实现：号码格式与计费段数在这里就判定，而不是无条件报成功。
+    if cfg.channel is Channel.SMS:
+        return ConsoleSMSProvider(cfg.channel, identifier=cfg.id, priority=cfg.priority)
     return ConsoleProvider(cfg.channel, identifier=cfg.id, priority=cfg.priority)
 
 
@@ -123,10 +129,24 @@ def _build_smtp(cfg: ProviderConfig) -> Provider:
         raise ProviderConfigError(f"{cfg.label}：{exc}") from exc
 
 
+def _build_twilio(cfg: ProviderConfig) -> Provider:
+    """构造短信网关实现；账户标识、发送方或端点不合法时装配阶段就失败。"""
+    try:
+        return TwilioSMSProvider.from_credentials(
+            cfg.channel,
+            cfg.credentials,
+            identifier=cfg.id,
+            priority=cfg.priority,
+        )
+    except TwilioConfigError as exc:
+        raise ProviderConfigError(f"{cfg.label}：{exc}") from exc
+
+
 #: 种类 → 构造函数。没列在这里的种类会在装配时跳过（实现尚未接入）。
 BUILDERS: dict[str, Callable[[ProviderConfig], Provider]] = {
     "console": _build_console,
     "smtp": _build_smtp,
+    "twilio": _build_twilio,
 }
 
 #: 已接入实现的种类。

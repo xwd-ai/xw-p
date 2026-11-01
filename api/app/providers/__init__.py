@@ -2,7 +2,9 @@
 
 - :mod:`.base`：:class:`Provider` 抽象基类，收口收件人寻址、结果结构与耗时打点；
 - :mod:`.console`：console mock 实现，把投递打印成结构化日志；
+- :mod:`.sms`：短信的号码规整、计费分段，以及会校验号码的 console 短信实现；
 - :mod:`.smtp`：SMTP 实现，把 email 真正提交到中继服务器；
+- :mod:`.twilio`：Twilio 风格的短信网关实现（Messages 资源契约）；
 - :mod:`.registry`：按渠道索引实现，按优先级取用，支持启停与原地替换；
 - :mod:`.factory`：读取与引擎共用的渠道配置，校验后装配注册表。
 
@@ -37,8 +39,16 @@ from .factory import (
     validate_config,
 )
 from .registry import Entry, ProviderRegistry
+from .sms import (
+    ConsoleSMSProvider,
+    PhoneNumberError,
+    normalize_phone,
+    sms_segments,
+    to_e164,
+)
 from .smtp import DEFAULT_TIMEOUT as SMTP_DEFAULT_TIMEOUT
 from .smtp import SMTPConfigError, SMTPProvider
+from .twilio import TwilioConfigError, TwilioSMSProvider
 
 __all__ = [
     "ADDRESS_FIELDS",
@@ -47,10 +57,12 @@ __all__ = [
     "SUPPORTED_KINDS",
     "BuildReport",
     "ConsoleProvider",
+    "ConsoleSMSProvider",
     "Delivery",
     "DeliveryResult",
     "Entry",
     "KindSpec",
+    "PhoneNumberError",
     "Provider",
     "ProviderConfig",
     "ProviderConfigError",
@@ -59,12 +71,17 @@ __all__ = [
     "SMTPConfigError",
     "SMTPProvider",
     "SMTP_DEFAULT_TIMEOUT",
+    "TwilioConfigError",
+    "TwilioSMSProvider",
     "build_registry",
     "create_registry",
     "default_configs",
     "get_registry",
     "load_configs",
+    "normalize_phone",
     "parse_configs",
     "set_registry",
+    "sms_segments",
+    "to_e164",
     "validate_config",
 ]

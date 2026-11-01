@@ -168,7 +168,7 @@ API 侧：
 | `console` | 全部投递渠道 | — | — |
 | `inapp` | `in_app` | — | — |
 | `smtp` | `email` | `host`、`from` | `port`、`username`、`password`、`tls`、`reply_to` |
-| `twilio` | `sms` | `account_sid`、`auth_token`、`from` | `endpoint` |
+| `twilio` | `sms` | `account_sid`、`auth_token`、`from` | `endpoint`、`default_country_code`、`status_callback`、`timeout` |
 | `fcm` | `push` | `server_key` | `project_id`、`endpoint` |
 | `apns` | `push` | `key_id`、`team_id`、`private_key` | `bundle_id`、`sandbox`、`endpoint` |
 | `slack` | `chat` | `webhook_url` | — |
@@ -176,7 +176,9 @@ API 侧：
 
 校验在装配阶段完成并一次列全问题：未知渠道、`kind` 与渠道不匹配、标识重复、负优先级、缺少必填凭据、拼错的凭据项（例如把 `password` 写成 `Password`，错误信息会给出建议）都会让引擎启动失败，而不是等到投递那一刻才报认证错误。配置里出现的凭据值不会进日志，启动日志只打印标识、渠道、优先级与凭据名。
 
-`smtp` 已有真实实现（见下节），`twilio` / `fcm` / `apns` / `slack` / `teams` 尚未接入：配置里写了这些种类会被跳过并在启动日志逐条告警，其余渠道照常装配；如果某个投递渠道最终没有任何启用的实现，也会在启动日志里点出来——那种情况下分发阶段会退化成 mock 打印。
+`smtp` 与 `twilio` 已有真实实现（见下两节），`fcm` / `apns` / `slack` / `teams` 尚未接入：配置里写了这些种类会被跳过并在启动日志逐条告警，其余渠道照常装配；如果某个投递渠道最终没有任何启用的实现，也会在启动日志里点出来——那种情况下分发阶段会退化成 mock 打印。
+
+引擎侧的 `twilio` 条目目前仍按「实现尚未接入」跳过，短信在引擎路径上由 `console` 种类承担（`internal/pipeline/console_sms.go`，会校验号码并按 GSM-7 / UCS-2 计算段数）。接口契约与客户端实现在 API 侧的渠道集成层，见下面的「短信投递」。
 
 #### 邮件投递（`kind: smtp`）
 
@@ -215,17 +217,55 @@ email 步骤的正文有两种写法，都由 render 阶段渲染：
 
 HTML 模板里的变量按 HTML 实体转义后再拼接，模板自身的标签不受影响：评论或帖子标题里带 `<script>` 时只会显示成文本，不会被当成页面代码执行。纯文本正文不做转义——那里的 `<` 就是一个普通字符。
 
+#### 短信投递（`kind: twilio`）
+
+`app/providers/sms.py` 负责号码与计费两件事，`app/providers/twilio.py` 是网关客户端。接口按「Twilio 风格的 Messages 资源」定义，凡是兼容这套报文约定的网关都能直接换上：
+
+| 项目 | 约定 |
+| --- | --- |
+| 端点 | `POST {endpoint}/2010-04-01/Accounts/{account_sid}/Messages.json` |
+| 认证 | `Authorization: Basic base64(account_sid:auth_token)` |
+| 请求体 | `application/x-www-form-urlencoded`：`To`、`From`、`Body`，可选 `StatusCallback` |
+| 成功响应 | `2xx` + JSON 消息资源（`sid`、`status`、`num_segments` …） |
+| 失败响应 | `4xx` / `5xx` + JSON 错误资源（`code`、`message`） |
+
+- **号码**：先去掉空格、连字符与括号，只允许一个前导 `+`，数字位数 6–15。号码没写国际区号时按 `default_country_code` 补上（写 `86` 或 `+86` 都行），没有配置则判失败而不是猜一个区号——猜错会把提醒发到别人的号段。发送方 `from` 可以是 E.164 号码，也可以是至多 11 位的字母数字标识。
+- **计费分段**：纯 ASCII 走 GSM-7（160 / 多段 153），出现任意非 ASCII 字符整条转 UCS-2（70 / 多段 67，按 UTF-16 码元计，emoji 占两个），段数写进投递日志，也用于解释账单。正文超过 1600 字符在本地就判失败，不必等网关回 `21617`。
+- **正文为空**：引擎路径上正文由 render 阶段产出，不会为空；API 内置消费者不渲染模板，此时给一句兜底文案。空正文会被网关以 `21602` 拒收，静默失败比收到一句平淡的提醒更糟。
+- **结果映射**：`queued` / `accepted` / `sending` / `sent` / `delivered` 算成功；`failed` / `undelivered` / `canceled` 与任何带 `error_code` 的响应算失败，原因里带错误码与网关原文。HTTP 层单独区分——`401` 指向账户标识或口令、`404` 指向 `account_sid` 与 `endpoint`、`429` 带上 `Retry-After`、`5xx` 记为网关错误、非 JSON 响应会被指出而不是当成成功。
+- **凭据**：`auth_token` 只出现在 `Authorization` 头里，不进日志；启动日志只打印标识、渠道、优先级与凭据名。
+
+```json
+{
+  "id": "sms-twilio",
+  "channel": "sms",
+  "kind": "twilio",
+  "priority": 10,
+  "credentials": {
+    "account_sid": "AC…",
+    "auth_token": "…",
+    "from": "+8613900000000",
+    "default_country_code": "86",
+    "status_callback": "https://notify.example.com/hooks/sms"
+  }
+}
+```
+
+不配凭据时 `sms` 渠道走的是 console 实现（`ConsoleSMSProvider`）：它同样规整号码、计算段数，号码不合法会如实报失败，而不是打印成功日志。
+
 ### API 侧的渠道装配
 
 API 进程读同一份 `XW_PROVIDERS_FILE`，校验规则与引擎一致（渠道约束、必填凭据、拼错的凭据项），装配分四层：
 
 - `providers/base.py`：`Provider` 抽象基类。收件人按渠道寻址（`in_app` → 订阅者标识、`email` → 邮箱、`sms` → 手机号、`push` → 设备 token，`chat` 的目标由实现自己的 webhook 决定），缺地址在进入实现之前就判失败；投递结果是 `sent` + `reason` 的固定结构，实现里抛出的异常由基类兜住转成失败结果，调用方不需要写 `try`。
 - `providers/console.py`：console 实现，把投递打成一行结构化日志，是所有渠道的兜底项。
+- `providers/sms.py`：短信的号码规整、E.164 补全与计费分段，以及 `ConsoleSMSProvider`——会真的校验号码格式的 console 短信实现。
 - `providers/smtp.py`：SMTP 实现，把 email 真正提交到中继；凭据校验（端口、加密方式、口令与连接方式的组合）在构造时就完成，投递失败按阶段给出原因。
+- `providers/twilio.py`：短信网关实现，按 Messages 资源契约提交；配置校验（账户标识、发送方、端点、超时）在构造时完成，投递失败按 HTTP 状态与网关错误码给出原因。
 - `providers/registry.py`：按渠道索引实现，同一渠道按优先级取用（小的优先、同级按登记顺序），支持停用后回退、按标识原地替换、按标识摘除；读写由一把锁保护，取用返回快照。
 - `providers/factory.py`：解析并校验配置，装配成注册表，报告登记了哪些、跳过了哪些（实现尚未接入的种类）、还有哪些渠道空着。
 
-已接入 `console` 与 `smtp`：`inapp` 等尚未实现的种类会被跳过——因此沿用 [`infra/providers.example.json`](infra/providers.example.json) 时，API 内置消费者下的 `in_app` 渠道没有可用实现（示例文件里的 `inapp` 条目服务于引擎），需要把该条改成 `console` 或另配一份。
+已接入 `console`、`smtp` 与 `twilio`：`inapp` 等尚未实现的种类会被跳过——因此沿用 [`infra/providers.example.json`](infra/providers.example.json) 时，API 内置消费者下的 `in_app` 渠道没有可用实现（示例文件里的 `inapp` 条目服务于引擎），需要把该条改成 `console` 或另配一份。
 
 投递前先校验寻址信息，缺 `email` / `phone` / `deviceToken` 时该渠道直接记为失败：执行明细（`GET /v1/executions`）里是 `status=failed` 加具体原因，消息记录也为 `failed`，不会把「地址没配」记成已发送。配置本身写错（未知渠道、种类与渠道不匹配、缺必填凭据）会让 API 启动失败，与引擎的处理一致。
 
