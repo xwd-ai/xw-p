@@ -100,14 +100,14 @@ func TestRenderDepthLimit(t *testing.T) {
 		Payload: map[string]any{"a": "1"},
 	})
 	// 构造一个深度有限的嵌套调用，确保 eval 能正常返回。
-	out := r.eval(ctx, "upper payload.a", 0)
-	if out != "1" {
-		t.Errorf("深层嵌套求值异常: %q", out)
+	out, ok := r.eval(ctx, "upper payload.a", 0)
+	if !ok || out != "1" {
+		t.Errorf("深层嵌套求值异常: %q（是否求值成功 = %v）", out, ok)
 	}
 	// 触发深度上限：直接以超限深度调用，应原样保留。
-	out = r.eval(ctx, "upper payload.a", maxRenderDepth+1)
-	if out != "{{ upper payload.a }}" {
-		t.Errorf("超限深度应原样保留，实际 = %q", out)
+	out, ok = r.eval(ctx, "upper payload.a", maxRenderDepth+1)
+	if ok || out != "{{ upper payload.a }}" {
+		t.Errorf("超限深度应原样保留，实际 = %q（是否求值成功 = %v）", out, ok)
 	}
 }
 

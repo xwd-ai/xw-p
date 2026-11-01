@@ -54,6 +54,7 @@ func (c *consoleEmailProvider) Send(d Delivery) SendResult {
 		"to", to,
 		"subject", d.Subject,
 		"body", d.Body,
+		"htmlBytes", len(d.HTML),
 		"stepId", d.StepID,
 		"workflow", d.WorkflowName,
 		"subscriberId", d.SubscriberID,

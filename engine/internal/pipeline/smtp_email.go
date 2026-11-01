@@ -15,6 +15,12 @@ import (
 // 给一句通用文案比让接收方猜要好。
 const defaultEmailSubject = "你有一条新的互动提醒"
 
+// htmlOnlyFallback 是只有 HTML 正文、没有纯文本时的降级文案。
+//
+// 纯文本段不能为空：只认纯文本的客户端会看到一封空白邮件，比收到一句
+// 「请用支持 HTML 的客户端查看」要糟得多。
+const htmlOnlyFallback = "这封邮件包含图文内容，请用支持 HTML 的邮件客户端查看。"
+
 // smtpEmailProvider 是 email 渠道的真实实现：把渲染好的内容经 SMTP 提交出去。
 //
 // 与 console 实现实现同一个 Provider 接口，区别只在最后一步是真连网还是打日志。
@@ -74,11 +80,18 @@ func (p *smtpEmailProvider) SendContext(ctx context.Context, d Delivery) SendRes
 	if subject == "" {
 		subject = defaultEmailSubject
 	}
+	// 两种正文形态一起交给客户端：有 HTML 时它按 multipart/alternative 提交，
+	// 纯文本段作为降级版本；没有 HTML 时仍是单段纯文本。
+	text := d.Body
+	if strings.TrimSpace(text) == "" && strings.TrimSpace(d.HTML) != "" {
+		text = htmlOnlyFallback
+	}
 	receipt, err := p.client.Send(ctx, mailer.Message{
 		From:    p.from,
 		To:      []string{to},
 		Subject: subject,
-		Text:    d.Body,
+		Text:    text,
+		HTML:    d.HTML,
 	})
 	if err != nil {
 		// 失败原因写进执行明细：运维据此区分「收件人被拒」与「连不上中继」。

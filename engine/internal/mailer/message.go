@@ -11,10 +11,12 @@ import (
 	"time"
 )
 
-// Message 是一封待提交的纯文本邮件。
+// Message 是一封待提交的邮件。
 //
-// 只保留 SMTP 提交必需的三要素（发件人、收件人、主题与正文）；HTML 正文、
-// 模板渲染与附件属于上层职责，客户端不参与内容拼装之外的决策。
+// 只保留 SMTP 提交必需的三要素（发件人、收件人、主题与正文）；模板渲染与
+// 附件属于上层职责，客户端不参与内容拼装之外的决策。正文可同时给出纯文本
+// 与 HTML 两种形态：两者都在时按 multipart/alternative 提交，由邮件客户端
+// 挑一种能显示的呈现，纯文本只是没写 HTML 时的唯一形态。
 type Message struct {
 	// From 是发件人，可带显示名：`XW 通知 <notify@example.com>`。
 	From string
@@ -22,8 +24,12 @@ type Message struct {
 	To []string
 	// Subject 是主题，非 ASCII 内容按 RFC 2047 编码。
 	Subject string
-	// Text 是正文，按 UTF-8 + base64 传输。
+	// Text 是纯文本正文，按 UTF-8 + base64 传输。
+	//
+	// 与 HTML 同时存在时它是降级版本：只认纯文本的客户端看到的仍是可读内容。
 	Text string
+	// HTML 是 HTML 正文，为空时邮件为纯文本单段。
+	HTML string
 	// ReplyTo 是可选的回信地址。
 	ReplyTo string
 	// MessageID 为空时自动生成，便于在服务器日志里追踪同一封邮件。
@@ -70,6 +76,11 @@ func (m Message) normalize() (envelopeFrom string, recipients []string, err erro
 }
 
 // build 生成待写入 DATA 段的完整报文（头 + 空行 + 正文）。
+//
+// 没有 HTML 正文时保持单段 text/plain——既能少一层 MIME 解析，也让「只发
+// 纯文本」的老路径在报文层面完全不变。有 HTML 时改为 multipart/alternative，
+// 纯文本在前、HTML 在后：按 RFC 2046 的约定，客户端从后往前挑第一个能显示
+// 的形态，因此支持 HTML 的客户端看到排版版本，其余客户端看到纯文本。
 func (m Message) build(envelopeFrom string, recipients []string, now time.Time) string {
 	var b strings.Builder
 	writeHeader(&b, "From", formatAddress(m.From))
@@ -81,11 +92,55 @@ func (m Message) build(envelopeFrom string, recipients []string, now time.Time) 
 	writeHeader(&b, "Date", now.Format(time.RFC1123Z))
 	writeHeader(&b, "Message-ID", m.messageID(envelopeFrom, now))
 	writeHeader(&b, "MIME-Version", "1.0")
-	writeHeader(&b, "Content-Type", "text/plain; charset=utf-8")
-	writeHeader(&b, "Content-Transfer-Encoding", "base64")
+
+	html := strings.TrimSpace(m.HTML)
+	if html == "" {
+		writeHeader(&b, "Content-Type", "text/plain; charset=utf-8")
+		writeHeader(&b, "Content-Transfer-Encoding", "base64")
+		b.WriteString("\r\n")
+		b.WriteString(encodeBase64Body(m.Text))
+		return b.String()
+	}
+
+	boundary := m.boundary(now)
+	writeHeader(&b, "Content-Type", `multipart/alternative; boundary="`+boundary+`"`)
 	b.WriteString("\r\n")
-	b.WriteString(wrapBase64(base64.StdEncoding.EncodeToString([]byte(m.Text))))
+	writePart(&b, boundary, "text/plain; charset=utf-8", m.Text)
+	writePart(&b, boundary, "text/html; charset=utf-8", html)
+	b.WriteString("--")
+	b.WriteString(boundary)
+	b.WriteString("--\r\n")
 	return b.String()
+}
+
+// writePart 写一个 base64 编码的 MIME 段（含分隔行与段头）。
+func writePart(b *strings.Builder, boundary, contentType, body string) {
+	b.WriteString("--")
+	b.WriteString(boundary)
+	b.WriteString("\r\n")
+	writeHeader(b, "Content-Type", contentType)
+	writeHeader(b, "Content-Transfer-Encoding", "base64")
+	b.WriteString("\r\n")
+	// encodeBase64Body 以 CRLF 收尾，下一段的分隔行因此自然另起一行。
+	b.WriteString(encodeBase64Body(body))
+}
+
+// encodeBase64Body 把正文按 UTF-8 编码成 76 列折行的 base64。
+func encodeBase64Body(text string) string {
+	return wrapBase64(base64.StdEncoding.EncodeToString([]byte(text)))
+}
+
+// boundary 生成多段报文的边界串。
+//
+// 边界以 `=_` 开头且含有 base64 字母表之外的 `-`，正文又是 base64 编码，
+// 因此天然不会与内容撞车；随机部分让同一进程连续发出的邮件边界互不相同。
+func (m Message) boundary(now time.Time) string {
+	buf := make([]byte, 12)
+	if _, err := rand.Read(buf); err != nil {
+		// 取不到随机数不影响投递：退化为时间戳，仍带有 `=`/`-` 两个非 base64 字符。
+		return fmt.Sprintf("=_xw_%d", now.UnixNano())
+	}
+	return "=_xw_" + hex.EncodeToString(buf)
 }
 
 // messageID 生成 `<时间.随机串@域>` 形式的标识；域取发件人域名，缺省用 localhost。

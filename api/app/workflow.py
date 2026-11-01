@@ -87,7 +87,11 @@ def _post_commented_workflow() -> Workflow:
                 type=Channel.EMAIL,
                 name="邮件",
                 config={
-                    "template": "你的帖子《{{payload.post_title}}》收到新评论：{{payload.comment}}"
+                    "subject": "《{{payload.post_title}}》收到新评论",
+                    "template": "你的帖子《{{payload.post_title}}》收到新评论：{{payload.comment}}",
+                    # 内置版式会把纯文本包成一封带排版的邮件；客户端不支持
+                    # HTML 时仍看到同一段纯文本。
+                    "format": "html",
                 },
             ),
         ],

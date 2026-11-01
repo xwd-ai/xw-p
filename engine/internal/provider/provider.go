@@ -31,6 +31,11 @@ type Delivery struct {
 	Subject string
 	// Body 是渲染后的消息正文。
 	Body string
+	// HTML 是渲染后的 HTML 正文，仅 email 渠道使用；为空表示只发纯文本。
+	//
+	// 它与 Body 是同一条消息的两种形态，不是替代关系：实现该发多段报文时
+	// 应当两段都带上，让不支持 HTML 的客户端仍能读到 Body。
+	HTML string
 	// StepID 是触发该投递的步骤 ID。
 	StepID string
 	// TriggerID 是触发本次投递的事件回执 ID，用于幂等去重与收件箱溯源。

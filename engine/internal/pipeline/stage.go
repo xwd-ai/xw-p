@@ -21,6 +21,11 @@ type StepResult struct {
 	TimedOut bool
 	// Rendered 表示 render 阶段产出的内容（如模板渲染后的文本）。
 	Rendered string
+	// RenderedHTML 表示渲染后的 HTML 正文（仅 email 步骤可能非空）。
+	//
+	// 它与 Rendered 是同一条消息的两种形态：前者给支持 HTML 的客户端，
+	// 后者是纯文本降级版本。
+	RenderedHTML string
 	// RenderedSubject 表示渲染后的标题（email 的 subject / push 与 in_app 的 title）。
 	// 标题同样支持模板变量，否则「《{{ payload.post_title }}》有新评论」会被原样发出。
 	RenderedSubject string

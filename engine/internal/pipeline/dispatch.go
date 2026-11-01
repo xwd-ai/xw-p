@@ -59,6 +59,7 @@ func (d *dispatchStage) Apply(ctx *Context, step domain.Step) error {
 		To:           d.recipientFor(ctx, step, ch),
 		Subject:      d.subjectFor(ctx, step),
 		Body:         res.Rendered,
+		HTML:         res.RenderedHTML,
 		StepID:       step.ID,
 		TriggerID:    ctx.Msg.TriggerID,
 		WorkflowName: ctx.Msg.Name,

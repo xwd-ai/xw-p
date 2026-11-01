@@ -188,6 +188,33 @@ API 侧：
 - **边界**：连接、握手、提交共用同一个超时（默认 10 秒，Python 侧可传 `timeout`），超时或引擎退出时中断连接；主题与地址里的换行符在拼报文之前就被拒掉，避免头注入；证书默认严格校验，自签内网中继需要在代码里传入自带信任链的 `ssl.SSLContext`（Python）或 `SkipVerify`（Go，仅测试与受控内网）。
 - **降级**：把 console 条目留在同一渠道、优先级调低，即可在中继故障时先观察日志而不是整条链路失败。
 
+#### 邮件正文的 HTML 形态
+
+email 步骤的正文有两种写法，都由 render 阶段渲染：
+
+| 步骤配置 | 产出 |
+| --- | --- |
+| `template` | 纯文本正文，单段 `text/plain` 报文 |
+| `html` | HTML 模板，按原样输出、只有变量被转义 |
+| `template` + `format: "html"` | 把纯文本套进内置版式（标题 + 正文 + 页脚，表格布局 + 内联样式） |
+| `format: "text"` | 显式关闭 HTML，即使配了 `html` 也不发多段报文 |
+
+两种正文同时存在时按 `multipart/alternative` 提交：纯文本段在前、HTML 段在后，邮件客户端从后往前挑第一个能显示的形态。只配了 `html`、没配 `template` 时，纯文本段给一句可读的降级文案，而不是留空。
+
+```json
+{
+  "id": "comment_email",
+  "type": "email",
+  "config": {
+    "subject": "《{{ payload.post_title }}》有新评论",
+    "template": "{{ payload.actor }} 说：{{ payload.comment }}",
+    "html": "<p><strong>{{ payload.actor }}</strong> 说：{{ payload.comment }}</p>"
+  }
+}
+```
+
+HTML 模板里的变量按 HTML 实体转义后再拼接，模板自身的标签不受影响：评论或帖子标题里带 `<script>` 时只会显示成文本，不会被当成页面代码执行。纯文本正文不做转义——那里的 `<` 就是一个普通字符。
+
 ### API 侧的渠道装配
 
 API 进程读同一份 `XW_PROVIDERS_FILE`，校验规则与引擎一致（渠道约束、必填凭据、拼错的凭据项），装配分四层：
