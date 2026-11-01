@@ -421,6 +421,44 @@ func TestBindBuildsRegistryFromConfig(t *testing.T) {
 	}
 }
 
+func TestPushMockKindSharedWithAPI(t *testing.T) {
+	// 配置文件与 API 侧共用：推送 mock 的条目在这里应当被识别、校验通过，
+	// 由工厂报告「实现尚未接入」而不是当成未知种类让引擎起不来。
+	set, err := NewSet([]Config{{
+		ID:      "push-mock",
+		Channel: domain.ChannelPush,
+		Kind:    KindPushMock,
+		Credentials: Credentials{
+			"platform": "apns",
+			"topic":    "com.example.xw",
+			"capacity": "100",
+		},
+	}})
+	if err != nil {
+		t.Fatalf("push-mock 配置应被接受: %v", err)
+	}
+
+	report, err := set.Bind(NewRegistry(), FactoryFunc(func(cfg Config) (Sender, error) {
+		return nil, fmt.Errorf("%w: %s", ErrUnsupportedKind, cfg.Kind)
+	}))
+	if err != nil {
+		t.Fatalf("未接入的种类不应让装配失败: %v", err)
+	}
+	if len(report.Bound) != 0 || len(report.Skipped) != 1 || report.Skipped[0].Kind != KindPushMock {
+		t.Fatalf("装配报告 = %+v，期望跳过 push-mock", report)
+	}
+
+	// fcm 的凭据按 HTTP v1 约定：项目标识加 OAuth2 访问令牌。
+	if _, err := NewSet([]Config{{
+		ID:          "push-fcm",
+		Channel:     domain.ChannelPush,
+		Kind:        KindFCM,
+		Credentials: Credentials{"project_id": "xw-notify"},
+	}}); err == nil || !strings.Contains(err.Error(), "access_token") {
+		t.Fatalf("缺少 access_token 应在装配阶段报出，实际: %v", err)
+	}
+}
+
 func TestBindSkipsUnsupportedKind(t *testing.T) {
 	set, err := NewSet([]Config{
 		{ID: "email-console", Channel: domain.ChannelEmail, Kind: KindConsole},

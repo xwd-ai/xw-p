@@ -29,6 +29,8 @@ const (
 	KindFCM Kind = "fcm"
 	// KindAPNs 通过 APNs 下发移动推送。
 	KindAPNs Kind = "apns"
+	// KindPushMock 推送的 mock 实现：按 FCM / APNs 的报文规则校验后只留痕，不联网。
+	KindPushMock Kind = "push-mock"
 	// KindSlack 通过 Slack 群机器人 webhook 推消息。
 	KindSlack Kind = "slack"
 	// KindTeams 通过 Teams 群机器人 webhook 推消息。
@@ -65,13 +67,17 @@ var kindSpecs = map[Kind]kindSpec{
 	},
 	KindFCM: {
 		channels: []domain.Channel{domain.ChannelPush},
-		required: []string{"server_key"},
-		optional: []string{"project_id", "endpoint"},
+		required: []string{"project_id", "access_token"},
+		optional: []string{"endpoint"},
 	},
 	KindAPNs: {
 		channels: []domain.Channel{domain.ChannelPush},
 		required: []string{"key_id", "team_id", "private_key"},
 		optional: []string{"bundle_id", "sandbox", "endpoint"},
+	},
+	KindPushMock: {
+		channels: []domain.Channel{domain.ChannelPush},
+		optional: []string{"platform", "project_id", "topic", "fail_with", "capacity"},
 	},
 	KindSlack: {
 		channels: []domain.Channel{domain.ChannelChat},

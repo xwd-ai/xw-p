@@ -313,12 +313,12 @@ def test_build_registry_skips_kinds_without_implementation():
             kind="fcm",
             id="push-fcm",
             priority=10,
-            credentials={"server_key": "key"},
+            credentials={"project_id": "xw-notify", "access_token": "ya29.test"},
         ),
     ]
     report = build_registry(configs)
 
-    # console 与 smtp 都已接入，fcm 仍未接入：跳过并记进报告。
+    # console 与 smtp 都已接入，fcm 的真实发送尚未接入：跳过并记进报告。
     assert [entry.id for entry in report.bound] == ["email-console", "email-smtp"]
     assert report.skipped and report.skipped[0][0] == "push-fcm"
     assert "尚未接入" in report.skipped[0][1]

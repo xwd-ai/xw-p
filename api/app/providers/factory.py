@@ -15,10 +15,11 @@
 3. :func:`build_registry` 构造实现并登记。尚未接入的种类（短信网关、推送等）
    跳过并记进报告，其余照常装配；某个渠道最终没有任何启用实现时同样写进报告。
 
-当前接入的实现是 ``console``（含短信专用的号码校验版本）、``smtp`` 与
-``twilio``：console 把所有渠道的投递打进行日志，smtp 把 email 提交到中继，
-twilio 按 Messages 资源契约提交短信。其余种类的配置会被识别、校验、跳过，
-等对应实现落地后只需往 :data:`BUILDERS` 里加一项。
+当前接入的实现是 ``console``（含短信专用的号码校验版本）、``smtp``、``twilio``
+与 ``push-mock``：console 把所有渠道的投递打进行日志，smtp 把 email 提交到中继，
+twilio 按 Messages 资源契约提交短信，push-mock 按 FCM / APNs 的报文契约校验后
+只记录不联网。其余种类的配置会被识别、校验、跳过，等对应实现落地后只需往
+:data:`BUILDERS` 里加一项。
 """
 from __future__ import annotations
 
@@ -33,6 +34,9 @@ from .. import config
 from ..models.channel import Channel
 from .base import DEFAULT_PRIORITY, Provider
 from .console import ConsoleProvider
+from .push_mock import DEFAULT_CAPACITY as PUSH_MOCK_CAPACITY
+from .push_mock import MockPushProvider
+from .push import PushConfigError
 from .registry import Entry, ProviderRegistry
 from .sms import ConsoleSMSProvider
 from .smtp import SMTPConfigError, SMTPProvider
@@ -76,13 +80,17 @@ KIND_SPECS: dict[str, KindSpec] = {
     ),
     "fcm": KindSpec(
         channels=(Channel.PUSH,),
-        required=("server_key",),
-        optional=("project_id", "endpoint"),
+        required=("project_id", "access_token"),
+        optional=("endpoint",),
     ),
     "apns": KindSpec(
         channels=(Channel.PUSH,),
         required=("key_id", "team_id", "private_key"),
         optional=("bundle_id", "sandbox", "endpoint"),
+    ),
+    "push-mock": KindSpec(
+        channels=(Channel.PUSH,),
+        optional=("platform", "project_id", "topic", "fail_with", "capacity"),
     ),
     "slack": KindSpec(channels=(Channel.CHAT,), required=("webhook_url",)),
     "teams": KindSpec(channels=(Channel.CHAT,), required=("webhook_url",)),
@@ -142,11 +150,38 @@ def _build_twilio(cfg: ProviderConfig) -> Provider:
         raise ProviderConfigError(f"{cfg.label}：{exc}") from exc
 
 
+def _build_push_mock(cfg: ProviderConfig) -> Provider:
+    """构造推送 mock：平台、项目标识与容量不合法时装配阶段就失败。"""
+    raw_capacity = str(cfg.credentials.get("capacity", "")).strip()
+    capacity = PUSH_MOCK_CAPACITY
+    if raw_capacity:
+        try:
+            capacity = int(raw_capacity, 10)
+        except ValueError as exc:
+            raise ProviderConfigError(
+                f"{cfg.label}：capacity 必须是整数，收到 {raw_capacity!r}"
+            ) from exc
+    try:
+        return MockPushProvider(
+            cfg.channel,
+            platform=str(cfg.credentials.get("platform", "")),
+            project_id=str(cfg.credentials.get("project_id", "")),
+            topic=str(cfg.credentials.get("topic", "")),
+            fail_with=str(cfg.credentials.get("fail_with", "")),
+            capacity=capacity,
+            identifier=cfg.id,
+            priority=cfg.priority,
+        )
+    except PushConfigError as exc:
+        raise ProviderConfigError(f"{cfg.label}：{exc}") from exc
+
+
 #: 种类 → 构造函数。没列在这里的种类会在装配时跳过（实现尚未接入）。
 BUILDERS: dict[str, Callable[[ProviderConfig], Provider]] = {
     "console": _build_console,
     "smtp": _build_smtp,
     "twilio": _build_twilio,
+    "push-mock": _build_push_mock,
 }
 
 #: 已接入实现的种类。

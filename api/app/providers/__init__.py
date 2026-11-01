@@ -5,6 +5,8 @@
 - :mod:`.sms`：短信的号码规整、计费分段，以及会校验号码的 console 短信实现；
 - :mod:`.smtp`：SMTP 实现，把 email 真正提交到中继服务器；
 - :mod:`.twilio`：Twilio 风格的短信网关实现（Messages 资源契约）；
+- :mod:`.push`：推送的报文契约（FCM HTTP v1 与 APNs token 认证）与设备 token 处理；
+- :mod:`.push_mock`：推送的 mock 实现，按同一套契约校验后只留痕、不联网；
 - :mod:`.registry`：按渠道索引实现，按优先级取用，支持启停与原地替换；
 - :mod:`.factory`：读取与引擎共用的渠道配置，校验后装配注册表。
 
@@ -38,6 +40,14 @@ from .factory import (
     set_registry,
     validate_config,
 )
+from .push import (
+    DeviceTokenError,
+    PayloadError,
+    Platform,
+    PushConfigError,
+    PushMessage,
+)
+from .push_mock import MockPushProvider, PushRecord
 from .registry import Entry, ProviderRegistry
 from .sms import (
     ConsoleSMSProvider,
@@ -60,13 +70,20 @@ __all__ = [
     "ConsoleSMSProvider",
     "Delivery",
     "DeliveryResult",
+    "DeviceTokenError",
     "Entry",
     "KindSpec",
+    "MockPushProvider",
+    "PayloadError",
     "PhoneNumberError",
+    "Platform",
     "Provider",
     "ProviderConfig",
     "ProviderConfigError",
     "ProviderRegistry",
+    "PushConfigError",
+    "PushMessage",
+    "PushRecord",
     "Recipient",
     "SMTPConfigError",
     "SMTPProvider",

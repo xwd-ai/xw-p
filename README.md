@@ -169,14 +169,15 @@ API 侧：
 | `inapp` | `in_app` | — | — |
 | `smtp` | `email` | `host`、`from` | `port`、`username`、`password`、`tls`、`reply_to` |
 | `twilio` | `sms` | `account_sid`、`auth_token`、`from` | `endpoint`、`default_country_code`、`status_callback`、`timeout` |
-| `fcm` | `push` | `server_key` | `project_id`、`endpoint` |
+| `push-mock` | `push` | — | `platform`、`project_id`、`topic`、`fail_with`、`capacity` |
+| `fcm` | `push` | `project_id`、`access_token` | `endpoint` |
 | `apns` | `push` | `key_id`、`team_id`、`private_key` | `bundle_id`、`sandbox`、`endpoint` |
 | `slack` | `chat` | `webhook_url` | — |
 | `teams` | `chat` | `webhook_url` | — |
 
 校验在装配阶段完成并一次列全问题：未知渠道、`kind` 与渠道不匹配、标识重复、负优先级、缺少必填凭据、拼错的凭据项（例如把 `password` 写成 `Password`，错误信息会给出建议）都会让引擎启动失败，而不是等到投递那一刻才报认证错误。配置里出现的凭据值不会进日志，启动日志只打印标识、渠道、优先级与凭据名。
 
-`smtp` 与 `twilio` 已有真实实现（见下两节），`fcm` / `apns` / `slack` / `teams` 尚未接入：配置里写了这些种类会被跳过并在启动日志逐条告警，其余渠道照常装配；如果某个投递渠道最终没有任何启用的实现，也会在启动日志里点出来——那种情况下分发阶段会退化成 mock 打印。
+`smtp` 与 `twilio` 已有真实实现，`push-mock` 是推送的校验型 mock（见下面的「推送投递」）；`fcm` / `apns` 的报文契约已定义但真实提交尚未接入，`slack` / `teams` 亦未接入：配置里写了这些种类会被跳过并在启动日志逐条告警，其余渠道照常装配；如果某个投递渠道最终没有任何启用的实现，也会在启动日志里点出来——那种情况下分发阶段会退化成 mock 打印。
 
 引擎侧的 `twilio` 条目目前仍按「实现尚未接入」跳过，短信在引擎路径上由 `console` 种类承担（`internal/pipeline/console_sms.go`，会校验号码并按 GSM-7 / UCS-2 计算段数）。接口契约与客户端实现在 API 侧的渠道集成层，见下面的「短信投递」。
 
@@ -253,6 +254,39 @@ HTML 模板里的变量按 HTML 实体转义后再拼接，模板自身的标签
 
 不配凭据时 `sms` 渠道走的是 console 实现（`ConsoleSMSProvider`）：它同样规整号码、计算段数，号码不合法会如实报失败，而不是打印成功日志。
 
+#### 推送投递（`kind: push-mock`）
+
+推送的收件人不是邮箱或号码，而是一台设备上的应用实例（device token）；报文也不是一段文本，而是网关规定的结构化 JSON。`app/providers/push.py` 把两家网关的报文契约定下来，`app/providers/push_mock.py` 按同一套规则校验后只留痕、不联网：
+
+| 项目 | FCM（HTTP v1） | APNs |
+| --- | --- | --- |
+| 端点 | `POST {endpoint}/v1/projects/{project_id}/messages:send` | `POST {endpoint}/3/device/{token}` |
+| 认证 | `Authorization: Bearer <OAuth2 access_token>` | `authorization: bearer <ES256 JWT>` |
+| 关键请求头 | `Content-Type: application/json` | `apns-topic`、`apns-push-type`、`apns-priority`、`apns-expiration`、`apns-id` |
+| 消息体 | `{"message": {"token", "notification", "data", "android"}}` | `{"aps": {"alert" / "content-available", "sound", "badge"}, …自定义字段}` |
+| 成功响应 | `200` + `{"name": "projects/…/messages/<id>"}` | `200` + 空响应体，标识在 `apns-id` 响应头 |
+| 失败响应 | `{"error": {"status", "code", "details": [{"errorCode"}]}}` | `{"reason": "BadDeviceToken"}` |
+
+- **设备 token**：APNs 是 32 字节即 64 位十六进制，统一转小写；FCM 只允许字母、数字与 `_ - : .`，长度 20–4096。两者都为空或形态不对时在进入渠道实现之前判失败，并把 token 脱敏成「头 6 位…尾 4 位（长度）」再写进日志——token 本身就是能向该设备发消息的凭据。
+- **平台推断**：不写 `platform` 时按 token 形态推断，64 位十六进制按 APNs 处理，其余按 FCM。64 位十六进制的 FCM token 在形态上无法与 APNs 区分，这种情况请显式写 `platform`，不要依赖推断。
+- **报文上限**：4 KiB（两家共同的限制，按实际发送的紧凑 JSON 字节数计算）。标题 200 字符、正文 2000 字符、`data` 最多 64 个字段且取值不超过 1024 字符，是本项目的本地保护——推送是用来喊一声的，超长宁可本地拒掉，也不要让网关截断或退化成一条空白通知。
+- **data 字段**：只接受标量，布尔写成 `true` / `false`；APNs 的 `aps` 是保留键，混进来会覆盖报文结构，因此直接拒绝。从事件载荷里取 data 时会跳过嵌套对象——它们不是给设备端的路由提示，塞进去只会撑大报文。
+- **静默推送**：标题与正文都为空时按静默推送处理，APNs 侧 `apns-push-type` 判成 `background`、优先级降到 5（该组合是硬性要求），FCM 侧 `android.priority` 用 `normal`。
+- **失败语义**：错误码到「能不能重试 / 要不要删 token」的映射写在契约层。FCM 的 `UNREGISTERED`、`SENDER_ID_MISMATCH` 与 APNs 的 `BadDeviceToken`、`DeviceTokenNotForTopic`、`Unregistered` 标为 token 已失效，调用方应把它从订阅者资料里摘掉；`QUOTA_EXCEEDED`、`TooManyRequests`、`ExpiredProviderToken` 与 5xx 标为可重试。`reason` 里给的是能指导下一步动作的话（如「应从订阅者资料中移除」），不是网关原文。
+- **mock 实现**：`push-mock` 校验 token、报文与 data，通过后把这一条记进内存环形缓冲（`capacity`，缺省 50），留痕含平台、脱敏 token、字节数、发送路径与成败。`fail_with` 让每条投递都按给定原因失败，用来演示「推送失败 → 降级到其他渠道」的分支，而不必真的把网关弄坏。`project_id` / `topic` 只影响留痕里的发送路径，不会凭空编造一个。
+
+```json
+{
+  "id": "push-mock",
+  "channel": "push",
+  "kind": "push-mock",
+  "priority": 10,
+  "credentials": {"platform": "apns", "topic": "com.example.xw", "capacity": "100"}
+}
+```
+
+真实提交（`kind: fcm` / `apns`）尚未接入：`fcm` 需要 `project_id` 与一枚有效约一小时的 OAuth2 访问令牌，`apns` 需要 `key_id`、`team_id` 与签名私钥换来的 provider token，两者都涉及凭据签发，留给实际接入时按部署方式补齐。引擎侧同一份配置里的 `push-mock` 条目同样按「实现尚未接入」跳过，推送在引擎路径上由 `console` 种类承担（`internal/pipeline/console_push.go`，会校验 token 并限制 4 KiB 载荷）。
+
 ### API 侧的渠道装配
 
 API 进程读同一份 `XW_PROVIDERS_FILE`，校验规则与引擎一致（渠道约束、必填凭据、拼错的凭据项），装配分四层：
@@ -262,10 +296,12 @@ API 进程读同一份 `XW_PROVIDERS_FILE`，校验规则与引擎一致（渠�
 - `providers/sms.py`：短信的号码规整、E.164 补全与计费分段，以及 `ConsoleSMSProvider`——会真的校验号码格式的 console 短信实现。
 - `providers/smtp.py`：SMTP 实现，把 email 真正提交到中继；凭据校验（端口、加密方式、口令与连接方式的组合）在构造时就完成，投递失败按阶段给出原因。
 - `providers/twilio.py`：短信网关实现，按 Messages 资源契约提交；配置校验（账户标识、发送方、端点、超时）在构造时完成，投递失败按 HTTP 状态与网关错误码给出原因。
+- `providers/push.py`：推送的报文契约——设备 token 校验与脱敏、`PushMessage` 的本地限制、FCM HTTP v1 与 APNs 的请求/响应结构，以及错误码到「可重试 / token 失效」的映射。
+- `providers/push_mock.py`：推送的 mock 实现，按同一套契约校验后把投递记进内存环形缓冲，可选按给定原因失败，便于演示失败与回退路径。
 - `providers/registry.py`：按渠道索引实现，同一渠道按优先级取用（小的优先、同级按登记顺序），支持停用后回退、按标识原地替换、按标识摘除；读写由一把锁保护，取用返回快照。
 - `providers/factory.py`：解析并校验配置，装配成注册表，报告登记了哪些、跳过了哪些（实现尚未接入的种类）、还有哪些渠道空着。
 
-已接入 `console`、`smtp` 与 `twilio`：`inapp` 等尚未实现的种类会被跳过——因此沿用 [`infra/providers.example.json`](infra/providers.example.json) 时，API 内置消费者下的 `in_app` 渠道没有可用实现（示例文件里的 `inapp` 条目服务于引擎），需要把该条改成 `console` 或另配一份。
+已接入 `console`、`smtp`、`twilio` 与 `push-mock`：`inapp` 等尚未实现的种类会被跳过——因此沿用 [`infra/providers.example.json`](infra/providers.example.json) 时，API 内置消费者下的 `in_app` 渠道没有可用实现（示例文件里的 `inapp` 条目服务于引擎），需要把该条改成 `console` 或另配一份。
 
 投递前先校验寻址信息，缺 `email` / `phone` / `deviceToken` 时该渠道直接记为失败：执行明细（`GET /v1/executions`）里是 `status=failed` 加具体原因，消息记录也为 `failed`，不会把「地址没配」记成已发送。配置本身写错（未知渠道、种类与渠道不匹配、缺必填凭据）会让 API 启动失败，与引擎的处理一致。
 
