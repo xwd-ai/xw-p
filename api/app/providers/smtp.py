@@ -32,6 +32,7 @@ from typing import Mapping, Optional
 
 from ..models.channel import Channel
 from .base import Delivery, DeliveryResult, Provider
+from .health import DEFAULT_PROBE_TIMEOUT, ProbeResult
 
 logger = logging.getLogger("xw.provider.smtp")
 
@@ -184,6 +185,29 @@ class SMTPProvider(Provider):
     @property
     def sender(self) -> str:
         return self._from_addr
+
+    def probe(self, timeout: float = DEFAULT_PROBE_TIMEOUT) -> ProbeResult:
+        """连接中继的端口后立刻断开，判断「这条路通不通」。
+
+        只验 TCP 可达，不做握手与认证：健康检查是高频动作，真跑一遍 EHLO/AUTH
+        既有副作用（部分中继会记账）也更慢。结论里写明这一点，免得把
+        「端口能连上」当成「凭据没问题」。原因不带用户名与口令。
+        """
+        budget = float(timeout) if timeout and timeout > 0 else DEFAULT_PROBE_TIMEOUT
+        try:
+            with socket.create_connection((self._host, self._port), timeout=budget):
+                pass
+        except socket.timeout:
+            return ProbeResult.unavailable(
+                f"连接 {self._host}:{self._port} 超时（{budget:.1f}s）"
+            )
+        except OSError as exc:
+            return ProbeResult.unavailable(
+                f"连接 {self._host}:{self._port} 失败：{exc}"
+            )
+        return ProbeResult.ok(
+            f"中继 {self._host}:{self._port} 可建立 TCP 连接（未验证认证与投递权限）"
+        )
 
     @classmethod
     def from_credentials(

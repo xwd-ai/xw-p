@@ -22,6 +22,7 @@ from typing import Any, Mapping, Optional
 
 from ..models.channel import Channel
 from .base import DEFAULT_PRIORITY, Delivery, DeliveryResult, Provider
+from .health import DEFAULT_PROBE_TIMEOUT, ProbeResult
 from .push import (
     Platform,
     PushConfigError,
@@ -132,6 +133,11 @@ class MockPushProvider(Provider):
     def clear(self) -> None:
         with self._lock:
             self._records.clear()
+
+    def probe(self, timeout: float = DEFAULT_PROBE_TIMEOUT) -> ProbeResult:
+        """mock 不联网，能接收投递就算可用；如实写明它不会真的推送到设备。"""
+        platform = self._platform.value if self._platform else "按 token 推断"
+        return ProbeResult.ok(f"推送 mock 只在进程内留痕（平台：{platform}），不联网")
 
     # ----------------------------------------------------------------- 投递
 

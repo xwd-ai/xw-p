@@ -21,7 +21,9 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Callable, Mapping, Optional
 from uuid import uuid4
 
@@ -35,6 +37,7 @@ from ..message_center import (
 )
 from ..models.channel import Channel
 from .base import Delivery, DeliveryResult, Provider
+from .health import DEFAULT_PROBE_TIMEOUT, ProbeResult
 
 logger = logging.getLogger("xw.provider.inapp")
 
@@ -107,6 +110,27 @@ class InAppProvider(Provider):
         if self._store is None:
             self._store = get_store()
         return self._store
+
+    def probe(self, timeout: float = DEFAULT_PROBE_TIMEOUT) -> ProbeResult:
+        """确认消息中心可写。
+
+        站内信没有外部网关，唯一的失败来源是存储：文件被目录占位、目录不可写。
+        这里只做「目录存在且可写」的判断，不写测试消息——健康检查不该在收件箱
+        里留下痕迹。进程内存储没有外部依赖，直接通过。
+        """
+        target = getattr(self.store, "path", None)
+        if target is None:
+            return ProbeResult.ok("消息中心为进程内存储，无外部依赖")
+        path = Path(str(target))
+        if path.exists() and not path.is_file():
+            return ProbeResult.unavailable(f"消息中心路径不是文件：{path}")
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return ProbeResult.unavailable(f"消息中心目录不可用：{path.parent}（{exc}）")
+        if not os.access(path.parent, os.W_OK):
+            return ProbeResult.unavailable(f"消息中心目录不可写：{path.parent}")
+        return ProbeResult.ok(f"消息中心可写：{path}")
 
     def _deliver(self, delivery: Delivery) -> DeliveryResult:
         payload = dict(delivery.payload or {})

@@ -12,6 +12,7 @@ import logging
 
 from ..models.channel import Channel
 from .base import Delivery, DeliveryResult, Provider
+from .health import DEFAULT_PROBE_TIMEOUT, ProbeResult
 
 logger = logging.getLogger("xw.provider.console")
 
@@ -54,6 +55,10 @@ class ConsoleProvider(Provider):
             _preview(dict(delivery.payload)),
         )
         return DeliveryResult.ok(self._id_for_result, delivery.channel)
+
+    def probe(self, timeout: float = DEFAULT_PROBE_TIMEOUT) -> ProbeResult:
+        """console 实现没有外部依赖，只要进程活着就能接活。"""
+        return ProbeResult.ok("console 实现只写日志，无外部依赖")
 
 
 __all__ = ["ConsoleProvider"]

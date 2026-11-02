@@ -22,6 +22,7 @@ from .execution_routes import router as execution_router
 from .idempotency import get_idempotency_store
 from .inbox import router as inbox_router
 from .providers import factory as provider_factory
+from .provider_routes import router as provider_router
 from .schemas import TriggerEvent, TriggerResponse, new_queued_message
 from .worker import Worker
 from .workflow import get_registry
@@ -70,6 +71,7 @@ app.include_router(dashboard_router)
 app.include_router(activity_router)
 app.include_router(execution_router)
 app.include_router(inbox_router)
+app.include_router(provider_router)
 
 
 def _env_mismatch(workflow_env, request_env: str) -> bool:

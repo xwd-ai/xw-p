@@ -9,7 +9,8 @@
 - :mod:`.push`：推送的报文契约（FCM HTTP v1 与 APNs token 认证）与设备 token 处理；
 - :mod:`.push_mock`：推送的 mock 实现，按同一套契约校验后只留痕、不联网；
 - :mod:`.registry`：按渠道索引实现，按优先级取用，支持启停与原地替换；
-- :mod:`.factory`：读取与引擎共用的渠道配置，校验后装配注册表。
+- :mod:`.health`：渠道实现的健康检查（配置检查与可选的在线探测）；
+- :mod:`.factory`：读取与引擎共用的渠道配置，校验后装配注册表，并支持把启停写回配置。
 
 投递结果的两种形态（成功 / 带原因的失败）由 :class:`DeliveryResult` 表达，
 渠道实现不向上抛异常。
@@ -50,6 +51,16 @@ from .push import (
     PushMessage,
 )
 from .push_mock import MockPushProvider, PushRecord
+from .health import (
+    HealthMonitor,
+    HealthState,
+    ProbeResult,
+    ProviderHealth,
+    get_monitor,
+    probe_provider,
+    set_monitor,
+    summarize,
+)
 from .registry import Entry, ProviderRegistry
 from .sms import (
     ConsoleSMSProvider,
@@ -74,15 +85,19 @@ __all__ = [
     "DeliveryResult",
     "DeviceTokenError",
     "Entry",
+    "HealthMonitor",
+    "HealthState",
     "InAppProvider",
     "KindSpec",
     "MockPushProvider",
     "PayloadError",
     "PhoneNumberError",
     "Platform",
+    "ProbeResult",
     "Provider",
     "ProviderConfig",
     "ProviderConfigError",
+    "ProviderHealth",
     "ProviderRegistry",
     "PushConfigError",
     "PushMessage",
@@ -97,11 +112,15 @@ __all__ = [
     "create_registry",
     "default_configs",
     "get_registry",
+    "get_monitor",
     "load_configs",
     "normalize_phone",
     "parse_configs",
+    "probe_provider",
+    "set_monitor",
     "set_registry",
     "sms_segments",
+    "summarize",
     "to_e164",
     "validate_config",
 ]

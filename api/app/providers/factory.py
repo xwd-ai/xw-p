@@ -25,6 +25,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import shutil
+import tempfile
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -100,6 +103,10 @@ KIND_SPECS: dict[str, KindSpec] = {
 
 # 配置项允许的字段，多写一个都视为拼错。
 _CONFIG_FIELDS = ("id", "channel", "kind", "priority", "enabled", "credentials")
+
+# 顶层允许的字段：``providers`` 是本层读取的条目数组，``retries`` 由引擎侧的
+# 渠道重试策略读取，本层不认识但必须容忍（两个进程共用一份文件）。
+_TOP_LEVEL_FIELDS = ("providers", "retries")
 
 
 @dataclass(frozen=True)
@@ -274,9 +281,14 @@ def _parse_item(raw: object, index: int) -> ProviderConfig:
 
 
 def parse_configs(raw: object) -> list[ProviderConfig]:
-    """解析配置（顶层数组或 ``{"providers": [...]}``），返回条目列表。"""
+    """解析配置（顶层数组或 ``{"providers": [...]}``），返回条目列表。
+
+    同一份文件由 API 与引擎共用，引擎侧还会读顶层的 ``retries``（渠道重试
+    策略）。API 不解释这一段，但必须容忍它存在——否则给引擎配了重试策略，
+    API 启动就会因为「未知字段」失败。
+    """
     if isinstance(raw, Mapping):
-        unknown = [str(key) for key in raw if key != "providers"]
+        unknown = [str(key) for key in raw if key not in _TOP_LEVEL_FIELDS]
         if unknown:
             raise ProviderConfigError(f"顶层含未知字段：{'、'.join(sorted(unknown))}")
         items = raw.get("providers")
@@ -410,6 +422,83 @@ def create_registry() -> ProviderRegistry:
     return report.registry
 
 
+def persist_enabled(
+    identifier: str,
+    enabled: bool,
+    *,
+    path: Optional[Path | str] = None,
+) -> Path:
+    """把某个条目的启停写回渠道配置文件，返回被写入的路径。
+
+    运行期启停默认只作用于当前进程；要让下次启动也生效，就把改动写回配置文件。
+    写入按「读原文 → 改一项 → 临时文件 + ``rename``」进行：顶层其它字段（如
+    ``retries``）与条目里的凭据原样保留，写一半就崩溃也不会留下半份配置。
+
+    只按显式 ``id`` 定位条目：自动编号的标识是注册表算出来的，配置文件里没有
+    对应写处，硬猜会改错项。找不到条目、没有配置来源或写入失败都抛
+    :class:`ProviderConfigError`，由调用方决定如何告知请求方。
+    """
+    target = Path(path) if path is not None else (Path(config.PROVIDERS_FILE) if config.PROVIDERS_FILE else None)
+    if target is None:
+        raise ProviderConfigError("未配置 XW_PROVIDERS_FILE，启停改动只作用于当前进程")
+
+    try:
+        text = target.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ProviderConfigError(f"读取渠道配置失败：{target}（{exc}）") from exc
+    try:
+        raw = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ProviderConfigError(
+            f"解析渠道配置失败：{target}（第 {exc.lineno} 行：{exc.msg}）"
+        ) from exc
+
+    if isinstance(raw, dict):
+        items = raw.get("providers")
+    else:
+        items = raw
+    if not isinstance(items, list):
+        raise ProviderConfigError(f"渠道配置不是数组：{target}")
+
+    matched = 0
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("id", "")).strip() != identifier:
+            continue
+        item["enabled"] = bool(enabled)
+        matched += 1
+    if not matched:
+        raise ProviderConfigError(
+            f"配置文件里没有 id 为 {identifier!r} 的条目，启停改动只作用于当前进程"
+        )
+
+    payload = json.dumps(raw, ensure_ascii=False, indent=2) + "\n"
+    tmp_path: Optional[Path] = None
+    try:
+        fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.", dir=str(target.parent))
+        tmp_path = Path(tmp_name)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(payload)
+            fh.flush()
+            os.fsync(fh.fileno())
+        if target.exists():
+            shutil.copymode(target, tmp_path)
+        os.replace(tmp_path, target)
+        tmp_path = None
+    except OSError as exc:
+        raise ProviderConfigError(f"写入渠道配置失败：{target}（{exc}）") from exc
+    finally:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+
+    logger.info("渠道配置已更新：%s（%s → enabled=%s）", target, identifier, enabled)
+    return target
+
+
 _registry: Optional[ProviderRegistry] = None
 _registry_lock = threading.Lock()
 
@@ -445,6 +534,7 @@ __all__ = [
     "get_registry",
     "load_configs",
     "parse_configs",
+    "persist_enabled",
     "set_registry",
     "validate_config",
 ]

@@ -12,6 +12,18 @@ def _env(key: str, default: str) -> str:
     return value if value is not None and value != "" else default
 
 
+def _env_float(key: str, default: float, *, minimum: float = 0.0) -> float:
+    """读取浮点配置：缺失或写错时回退默认值，不让一个数字配错就起不来。"""
+    raw = os.getenv(key)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if value >= minimum else default
+
+
 # 消息总线后端：memory（默认）| redis
 BUS_BACKEND = _env("XW_BUS", "memory")
 
@@ -51,6 +63,12 @@ IDEMPOTENCY_BACKEND = _env("XW_IDEMPOTENCY", "memory")
 # 渠道配置文件（JSON）：与引擎侧共用的格式，用于指定每个渠道走哪种实现。
 # 为空时 API 侧为每个投递渠道装配一个 console 实现。
 PROVIDERS_FILE = _env("XW_PROVIDERS_FILE", "")
+
+# 渠道实现健康检查：在线探测结果的缓存时长（秒，0 表示不缓存）与单次探测预算（秒）。
+# 探测预算不与引擎侧的 XW_PROVIDER_PROBE_TIMEOUT 共用：两者面向不同的探测实现，
+# 一个变量在两处套用不同默认值，改起来最容易误伤。
+PROVIDER_HEALTH_TTL = _env_float("XW_PROVIDER_HEALTH_TTL", 30.0)
+PROVIDER_HEALTH_TIMEOUT = _env_float("XW_PROVIDER_HEALTH_TIMEOUT", 2.0, minimum=0.1)
 
 # 幂等键缓存 TTL（秒）：超过该时长后同键请求视为新请求
 IDEMPOTENCY_TTL = int(_env("XW_IDEMPOTENCY_TTL", "86400"))
