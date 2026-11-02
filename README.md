@@ -113,6 +113,8 @@ API 侧：
 | `XW_PROVIDERS_FILE` | 空 | 渠道配置文件（JSON）；为空时使用内置的 console 实现 |
 | `XW_PROVIDER_PROBE_INTERVAL` | `30s` | 渠道健康探测的间隔；`off` 或 `0` 表示关闭周期探测（仍可手动触发） |
 | `XW_PROVIDER_PROBE_TIMEOUT` | `3s` | 单次探测的超时 |
+| `XW_PROVIDER_HEALTH_TTL` | `30s` | API 侧在线探测结果的缓存时长，`0` 表示不缓存 |
+| `XW_PROVIDER_HEALTH_TIMEOUT` | `2s` | API 侧单次探测的预算；与引擎侧的探测超时分开配置，两者面向不同实现 |
 | `XW_EXECUTION_FILE` | `api/data/executions.jsonl` | 投递结果回写的执行明细文件，与 API 共用同一份；写 `off` 表示不回写 |
 | `XW_CALLBACK_URL` | 空 | 投递结果回调地址（只接受 https，本机回环可用 http）；为空表示不回调 |
 | `XW_CALLBACK_TIMEOUT` | `5s` | 单次回调的超时 |
@@ -489,6 +491,18 @@ curl -X POST 127.0.0.1:8081/admin/providers/disable \
   -H 'Content-Type: application/json' -d '{"ids":["smtp-email"]}'
 curl -X POST 127.0.0.1:8081/admin/providers/probe
 ```
+
+API 进程也暴露同一份注册表的状态与启停入口，供看板与运维脚本直接调用（上面那组接口在引擎侧、只绑回环；这组走正常的 API Key 鉴权）：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/v1/providers?channel=email&deep=true&refresh=true` | 列出条目：是否启用、是否该渠道首选取用、健康结论与状态汇总；`deep` 触发在线探测，`refresh` 跳过缓存 |
+| `GET` | `/v1/providers/{id}` | 单条状态；未登记返回 404 |
+| `PUT` | `/v1/providers/{id}/enabled` | 请求体 `{"enabled": false}`，可选 `persist` 把改动写回配置文件 |
+
+两侧的口径不同是刻意的。引擎侧记录投递结果与周期探测，回答「这条通道最近稳不稳」；API 侧回答「此刻能不能接活」——默认只做配置检查（是否启用、是不是该渠道的首选），带 `deep=true` 才让实现自己探一次：SMTP 连一次端口就断开，站内信确认收件箱目录可写，console 与推送 mock 没有外部依赖直接报可用。结论里的 `probed` 字段区分「真的探过」与「只看了配置」，没有探测能力的实现不会假装探过。探测结果按条目缓存 `XW_PROVIDER_HEALTH_TTL`（默认 30 秒），看板轮询不会把中继连出一片连接；条目被启停替换后旧结论自动失效。
+
+停用之后该条目不再参与取用，投递落到同渠道的次选实现；停到某个渠道一条不剩时，接口返回 `warning` 并把该渠道列进 `unboundChannels`，随后的投递会在执行明细里记为失败「渠道没有可用的实现」——比在活动流里发现成片失败要早一步。启停默认只作用于当前进程；带 `persist=true` 时按「读原文 → 改一项 → 临时文件 + `rename`」写回 `XW_PROVIDERS_FILE`，顶层 `retries` 段与条目里的凭据原样保留，写失败则请求失败、内存状态不变，不会出现「接口说已停用、重启后又回来」。已运行的引擎读的是启动时的配置，写回对它不生效，需要重启引擎或改用引擎侧的启停接口。
 
 消费进程默认运行 `XW_WORKERS` 个消费者，各自独立完成「领取 → 处理 → 确认」。领取与登记在同一个 Lua 脚本里执行，同一条消息不会被两个消费者拿到；处理顺序也不承担语义，下游步骤只依赖消息自身的 `trigger_id`。收到退出信号后消费者停止领取新消息，正在处理的那条继续跑完并确认；超过 `XW_SHUTDOWN_GRACE` 仍未结束的会被放弃等待——这些消息保持未确认状态，租约到期后由回收流程重新投递，因此关闭流程不会丢消息。
 
