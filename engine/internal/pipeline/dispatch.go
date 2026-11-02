@@ -12,10 +12,11 @@ import (
 //
 // 优先经 ProviderRegistry 查找该渠道的 provider 并真正投递；未注册 provider
 // 的渠道回退为 mock 打印（保持管线在渠道逐批落地期间可运行）。
-// 当前已落地 provider：in_app / email / sms / push / chat。
+// 同一渠道登记了多个实现时按优先级主备切换：默认实现失败且失败与实现相关
+// 时，依次尝试后面的备选，实际用到的实现在结果里留痕。
 type dispatchStage struct {
 	logger   *slog.Logger
-	registry *ProviderRegistry
+	failover *Failover
 }
 
 // NewDispatchStage 创建分发阶段。
@@ -27,10 +28,10 @@ func NewDispatchStage(logger *slog.Logger, registry *ProviderRegistry) Stage {
 	if registry == nil {
 		registry = NewProviderRegistry()
 	}
-	return &dispatchStage{logger: logger, registry: registry}
+	return &dispatchStage{logger: logger, failover: NewFailover(registry)}
 }
 
-// Apply 执行投递：有 provider 的渠道真实调用，其余 mock 打印。
+// Apply 执行投递：有 provider 的渠道真实调用（失败时按优先级回退），其余 mock 打印。
 func (d *dispatchStage) Apply(ctx *Context, step domain.Step) error {
 	res := ctx.Results[step.ID]
 	res.StepID = step.ID
@@ -38,20 +39,6 @@ func (d *dispatchStage) Apply(ctx *Context, step domain.Step) error {
 	res.Channel = step.Type
 
 	ch := domain.Channel(step.Type)
-	entry, ok := d.registry.Select(ch)
-	if !ok {
-		// 未注册可用 provider：保持原有 mock 打印，视为投递成功（不阻断后续步骤）。
-		d.logger.Info("[mock] 分发步骤（未注册 provider）",
-			"stepId", step.ID,
-			"channel", string(step.Type),
-			"workflow", ctx.Msg.Name,
-			"subscriberId", ctx.Msg.SubscriberID,
-			"rendered", res.Rendered,
-		)
-		ctx.Results[step.ID] = res
-		return nil
-	}
-	sender := entry.Sender
 
 	// 构造投递请求：收件人按渠道从消息契约取值，内容取渲染结果。
 	delivery := Delivery{
@@ -66,29 +53,63 @@ func (d *dispatchStage) Apply(ctx *Context, step domain.Step) error {
 		SubscriberID: ctx.Msg.SubscriberID,
 	}
 
-	// 支持感知取消的 provider 优先走 SendContext：步骤超时时它能立即中断等待，
-	// 而不是把请求留在后台继续跑。
-	var send SendResult
-	if cs, ok := sender.(ContextSender); ok {
-		send = cs.SendContext(ctx.Context(), delivery)
-	} else {
-		send = sender.Send(delivery)
-	}
-	if send.Sent {
-		res.Sent = true
-		ctx.Results[step.ID] = res
-		d.logger.Debug("[dispatch] 投递成功",
+	// 按优先级依次尝试该渠道的实现：首个是默认实现，其后是备选。
+	outcome := d.failover.Send(ctx.Context(), delivery)
+	if outcome.Candidates == 0 {
+		// 未注册可用 provider：保持原有 mock 打印，视为投递成功（不阻断后续步骤）。
+		d.logger.Info("[mock] 分发步骤（未注册 provider）",
 			"stepId", step.ID,
-			"channel", string(ch),
-			"provider", entry.ID,
+			"channel", string(step.Type),
+			"workflow", ctx.Msg.Name,
+			"subscriberId", ctx.Msg.SubscriberID,
+			"rendered", res.Rendered,
 		)
+		ctx.Results[step.ID] = res
 		return nil
 	}
 
-	// 投递失败：记录错误，向上传播以触发失败短路。
-	res.Error = send.Reason
+	res.ProviderAttempts = outcome.Attempted()
+	res.UsedProvider = outcome.Provider.ID
+	res.ProviderFallback = outcome.FellBack()
+
+	if outcome.Sent {
+		res.Sent = true
+		ctx.Results[step.ID] = res
+		logArgs := []any{
+			"stepId", step.ID,
+			"channel", string(ch),
+			"provider", res.UsedProvider,
+		}
+		if res.ProviderFallback {
+			// 回退成功说明默认实现当时不可用：记 warn 级，便于看出渠道在靠备选兜底。
+			logArgs = append(logArgs,
+				"attempts", res.ProviderAttempts,
+				"skipped", skipSummary(outcome),
+			)
+			d.logger.Warn("[dispatch] 默认实现投递失败，已回退到备选", logArgs...)
+			return nil
+		}
+		d.logger.Debug("[dispatch] 投递成功", logArgs...)
+		return nil
+	}
+
+	// 投递失败：记录错误（含整条回退链的尝试），向上传播以触发失败短路。
+	res.Error = outcome.Result.Reason
 	ctx.Results[step.ID] = res
-	return &deliveryError{channel: ch, reason: send.Reason}
+	return &deliveryError{channel: ch, reason: outcome.Result.Reason}
+}
+
+// skipSummary 把失败的尝试拼成「标识: 原因」，用于回退成功的告警日志。
+func skipSummary(outcome Outcome) []string {
+	failed := outcome.FailedAttempts()
+	if len(failed) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(failed))
+	for _, a := range failed {
+		out = append(out, a.ProviderID+": "+a.Reason)
+	}
+	return out
 }
 
 // recipientFor 按渠道返回收件地址。

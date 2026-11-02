@@ -31,6 +31,15 @@ type StepResult struct {
 	RenderedSubject string
 	// Sent 表示该步骤经 provider 成功投递（仅注册了 provider 的渠道有意义）。
 	Sent bool
+	// UsedProvider 是实际完成投递的实现标识；发生回退时是备选的标识。
+	UsedProvider string
+	// ProviderAttempts 是按尝试顺序记录下来的实现标识。
+	//
+	// 只有一个实现（或未发生回退）时为单元素；内容校验失败导致回退链提前
+	// 终止时也只有到终止点为止的那几个实现。
+	ProviderAttempts []string
+	// ProviderFallback 表示默认实现失败后由备选完成投递。
+	ProviderFallback bool
 	// Deferred 表示该步骤是 delay 步骤且已登记延迟续跑任务，
 	// 之后尚未执行的步骤会在 DeferredUntil 时刻由调度器续跑。
 	Deferred bool

@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 
@@ -73,7 +74,7 @@ func (p *smtpEmailProvider) SendContext(ctx context.Context, d Delivery) SendRes
 			"workflow", d.WorkflowName,
 			"subscriberId", d.SubscriberID,
 		)
-		return SendResult{Sent: false, Reason: "收件邮箱为空"}
+		return SendResult{Sent: false, Reason: "收件邮箱为空", Terminal: true}
 	}
 
 	subject := strings.TrimSpace(d.Subject)
@@ -102,7 +103,11 @@ func (p *smtpEmailProvider) SendContext(ctx context.Context, d Delivery) SendRes
 			"subscriberId", d.SubscriberID,
 			"error", err.Error(),
 		)
-		return SendResult{Sent: false, Reason: err.Error()}
+		return SendResult{
+			Sent:     false,
+			Reason:   err.Error(),
+			Terminal: mailerPermanent(err),
+		}
 	}
 
 	p.logger.Info("[email] SMTP 投递成功",
@@ -117,4 +122,17 @@ func (p *smtpEmailProvider) SendContext(ctx context.Context, d Delivery) SendRes
 		Sent:   true,
 		Reason: "email 已提交至 " + to + "（" + receipt.MessageID + "）",
 	}
+}
+
+// mailerPermanent 判断一次 SMTP 失败是否与收件内容有关。
+//
+// 5xx 是服务器对本次投递的最终答复（地址不存在、域名不收信、策略拒收），
+// 换一个中继也是同样的结论，回退链到此为止；4xx 与连接类错误属于对端临时
+// 状态或本实现不可用，值得让同渠道的备选实现再试一次。
+func mailerPermanent(err error) bool {
+	var mailErr *mailer.Error
+	if errors.As(err, &mailErr) {
+		return mailErr.Code >= 500 && mailErr.Code < 600
+	}
+	return false
 }

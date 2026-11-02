@@ -37,3 +37,17 @@ type ProviderRegistry = provider.Registry
 func NewProviderRegistry() *ProviderRegistry {
 	return provider.NewRegistry()
 }
+
+// Attempt 是回退链上的一次投递尝试（实现标识、优先级、结果与耗时）。
+type Attempt = provider.Attempt
+
+// Outcome 是一次按优先级回退的投递结果。
+type Outcome = provider.Outcome
+
+// Failover 按渠道内优先级依次尝试实现，是分发阶段的主备切换入口。
+type Failover = provider.Failover
+
+// NewFailover 在注册表上构造回退调度器。
+func NewFailover(r *ProviderRegistry) *Failover {
+	return provider.NewFailover(r)
+}

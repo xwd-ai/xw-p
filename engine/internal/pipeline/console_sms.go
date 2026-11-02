@@ -62,7 +62,7 @@ func (c *consoleSMSProvider) Send(d Delivery) SendResult {
 			"workflow", d.WorkflowName,
 			"subscriberId", d.SubscriberID,
 		)
-		return SendResult{Sent: false, Reason: "手机号为空或格式非法"}
+		return SendResult{Sent: false, Reason: "手机号为空或格式非法", Terminal: true}
 	}
 
 	segments := SMSSegments(d.Body)

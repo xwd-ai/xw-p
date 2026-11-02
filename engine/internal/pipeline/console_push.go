@@ -53,7 +53,7 @@ func (c *consolePushProvider) Send(d Delivery) SendResult {
 			"workflow", d.WorkflowName,
 			"subscriberId", d.SubscriberID,
 		)
-		return SendResult{Sent: false, Reason: "缺少 device token"}
+		return SendResult{Sent: false, Reason: "缺少 device token", Terminal: true}
 	}
 
 	title := pushTitle(d)
@@ -65,7 +65,7 @@ func (c *consolePushProvider) Send(d Delivery) SendResult {
 			"stepId", d.StepID,
 			"workflow", d.WorkflowName,
 		)
-		return SendResult{Sent: false, Reason: fmt.Sprintf("payload 超过 %d 字节上限", pushPayloadLimit)}
+		return SendResult{Sent: false, Reason: fmt.Sprintf("payload 超过 %d 字节上限", pushPayloadLimit), Terminal: true}
 	}
 
 	c.logger.Info("[push] 投递成功（console mock）",

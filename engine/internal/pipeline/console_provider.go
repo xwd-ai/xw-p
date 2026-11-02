@@ -47,7 +47,7 @@ func (c *consoleEmailProvider) Send(d Delivery) SendResult {
 			"workflow", d.WorkflowName,
 			"subscriberId", d.SubscriberID,
 		)
-		return SendResult{Sent: false, Reason: "收件邮箱为空"}
+		return SendResult{Sent: false, Reason: "收件邮箱为空", Terminal: true}
 	}
 
 	c.logger.Info("[email] 投递成功（console mock）",

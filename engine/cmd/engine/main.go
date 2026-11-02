@@ -289,6 +289,11 @@ func newPipeline(logger *slog.Logger, cfg config.Config) (*pipeline.Pipeline, fu
 		"providers", ids,
 		"channels", registry.Channels(),
 	)
+	if chains := fallbackChains(registry); len(chains) > 0 {
+		// 同一渠道登记了多个实现时，启动日志把取用顺序写清楚：
+		// 第一个是默认实现，其后依次是失败时回退的备选。
+		logger.Info("[engine] 渠道取用序列（主备）", "chains", chains)
+	}
 	logger.Info("[engine] 执行超时预算",
 		"step", pipe.Timeouts().Step,
 		"workflow", pipe.Timeouts().Workflow,
@@ -317,6 +322,24 @@ func newPipeline(logger *slog.Logger, cfg config.Config) (*pipeline.Pipeline, fu
 	pipe.WithDigestStore(store)
 	logger.Info("[engine] 聚合卡片存储：Redis", "redis", cfg.RedisAddr, "prefix", store.Prefix())
 	return pipe, func() { _ = client.Close() }, nil
+}
+
+// fallbackChains 汇总每个渠道的取用序列（标识按优先级从高到低），
+// 只保留存在备选的渠道——单实现渠道没有主备关系可看。
+func fallbackChains(registry *pipeline.ProviderRegistry) map[string][]string {
+	out := make(map[string][]string)
+	for _, ch := range registry.Channels() {
+		candidates := registry.Candidates(ch)
+		if len(candidates) < 2 {
+			continue
+		}
+		ids := make([]string, 0, len(candidates))
+		for _, entry := range candidates {
+			ids = append(ids, entry.ID)
+		}
+		out[string(ch)] = ids
+	}
+	return out
 }
 
 // buildRegistry 组装渠道实现注册表。

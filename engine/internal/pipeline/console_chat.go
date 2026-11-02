@@ -59,7 +59,7 @@ func (c *consoleChatProvider) Send(d Delivery) SendResult {
 			"workflow", d.WorkflowName,
 			"subscriberId", d.SubscriberID,
 		)
-		return SendResult{Sent: false, Reason: "缺少 chat webhook 地址"}
+		return SendResult{Sent: false, Reason: "缺少 chat webhook 地址", Terminal: true}
 	}
 
 	hook, err := parseWebhook(raw)
@@ -69,7 +69,7 @@ func (c *consoleChatProvider) Send(d Delivery) SendResult {
 			"workflow", d.WorkflowName,
 			"reason", err.Error(),
 		)
-		return SendResult{Sent: false, Reason: err.Error()}
+		return SendResult{Sent: false, Reason: err.Error(), Terminal: true}
 	}
 
 	body := strings.TrimSpace(d.Body)
@@ -79,7 +79,7 @@ func (c *consoleChatProvider) Send(d Delivery) SendResult {
 			"workflow", d.WorkflowName,
 			"webhook", maskWebhook(hook),
 		)
-		return SendResult{Sent: false, Reason: "chat 消息正文为空"}
+		return SendResult{Sent: false, Reason: "chat 消息正文为空", Terminal: true}
 	}
 	if n := utf8.RuneCountInString(body); n > chatMessageLimit {
 		c.logger.Warn("[chat] 投递失败：消息超过字符上限",
@@ -89,8 +89,9 @@ func (c *consoleChatProvider) Send(d Delivery) SendResult {
 			"workflow", d.WorkflowName,
 		)
 		return SendResult{
-			Sent:   false,
-			Reason: fmt.Sprintf("chat 消息超过 %d 字符上限", chatMessageLimit),
+			Sent:     false,
+			Reason:   fmt.Sprintf("chat 消息超过 %d 字符上限", chatMessageLimit),
+			Terminal: true,
 		}
 	}
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"unicode/utf8"
 
@@ -71,7 +72,7 @@ func (p *slackChatProvider) SendContext(ctx context.Context, d Delivery) SendRes
 			"workflow", d.WorkflowName,
 			"subscriberId", d.SubscriberID,
 		)
-		return SendResult{Sent: false, Reason: "缺少 chat webhook 地址"}
+		return SendResult{Sent: false, Reason: "缺少 chat webhook 地址", Terminal: true}
 	}
 	if _, err := chat.NormalizeWebhook(webhook); err != nil {
 		p.logger.Warn("[chat] 投递失败：webhook 地址非法",
@@ -79,7 +80,7 @@ func (p *slackChatProvider) SendContext(ctx context.Context, d Delivery) SendRes
 			"workflow", d.WorkflowName,
 			"reason", err.Error(),
 		)
-		return SendResult{Sent: false, Reason: err.Error()}
+		return SendResult{Sent: false, Reason: err.Error(), Terminal: true}
 	}
 
 	body := strings.TrimSpace(d.Body)
@@ -89,7 +90,7 @@ func (p *slackChatProvider) SendContext(ctx context.Context, d Delivery) SendRes
 			"workflow", d.WorkflowName,
 			"webhook", chat.MaskWebhook(webhook),
 		)
-		return SendResult{Sent: false, Reason: "chat 消息正文为空"}
+		return SendResult{Sent: false, Reason: "chat 消息正文为空", Terminal: true}
 	}
 	if n := utf8.RuneCountInString(body); n > chatMessageLimit {
 		p.logger.Warn("[chat] 投递失败：消息超过字符上限",
@@ -102,6 +103,7 @@ func (p *slackChatProvider) SendContext(ctx context.Context, d Delivery) SendRes
 			Sent: false,
 			Reason: fmt.Sprintf("chat 消息超过 %d 字符上限（当前 %d）",
 				chatMessageLimit, n),
+			Terminal: true,
 		}
 	}
 
@@ -111,10 +113,16 @@ func (p *slackChatProvider) SendContext(ctx context.Context, d Delivery) SendRes
 	receipt, err := p.client.Send(ctx, webhook, msg)
 	if err != nil {
 		reason := err.Error()
+		terminal := false
 		var chatErr *chat.Error
-		if errors.As(err, &chatErr) && chatErr.Retryable() {
-			// 限流与 5xx 值得重试；4xx 里的地址或报文问题重试多少次都一样。
-			reason += "（可稍后重试）"
+		if errors.As(err, &chatErr) {
+			// 表外状态码与 4xx 拒收（webhook 撤销、频道权限、归档、报文超长）
+			// 换个实现也是一样的答复；限流与 5xx 值得让备选再试一次。
+			terminal = chatErr.Status >= 400 && chatErr.Status < 500 &&
+				chatErr.Status != http.StatusTooManyRequests
+			if chatErr.Retryable() {
+				reason += "（可稍后重试）"
+			}
 		}
 		p.logger.Warn("[chat] 投递失败",
 			"webhook", chat.MaskWebhook(webhook),
@@ -123,7 +131,7 @@ func (p *slackChatProvider) SendContext(ctx context.Context, d Delivery) SendRes
 			"subscriberId", d.SubscriberID,
 			"error", reason,
 		)
-		return SendResult{Sent: false, Reason: reason}
+		return SendResult{Sent: false, Reason: reason, Terminal: terminal}
 	}
 
 	p.logger.Info("[chat] 投递成功",

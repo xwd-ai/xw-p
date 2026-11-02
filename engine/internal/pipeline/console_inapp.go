@@ -61,7 +61,7 @@ func (p *inAppProvider) Send(d Delivery) SendResult {
 			"workflow", d.WorkflowName,
 			"triggerId", d.TriggerID,
 		)
-		return SendResult{Sent: false, Reason: "缺少订阅者 ID"}
+		return SendResult{Sent: false, Reason: "缺少订阅者 ID", Terminal: true}
 	}
 
 	body := strings.TrimSpace(d.Body)
@@ -71,7 +71,7 @@ func (p *inAppProvider) Send(d Delivery) SendResult {
 			"workflow", d.WorkflowName,
 			"subscriberId", subscriberID,
 		)
-		return SendResult{Sent: false, Reason: "站内信正文为空"}
+		return SendResult{Sent: false, Reason: "站内信正文为空", Terminal: true}
 	}
 
 	now := p.now().UTC()
@@ -96,7 +96,8 @@ func (p *inAppProvider) Send(d Delivery) SendResult {
 			"subscriberId", subscriberID,
 			"error", err,
 		)
-		return SendResult{Sent: false, Reason: "写入收件箱失败: " + err.Error()}
+		// 收件箱存储是各实现共用的一份，换备选实现仍会撞在同一处失败上。
+		return SendResult{Sent: false, Reason: "写入收件箱失败: " + err.Error(), Terminal: true}
 	}
 	if !inserted {
 		p.logger.Info("[in_app] 已存在同一条站内信（幂等去重）",
