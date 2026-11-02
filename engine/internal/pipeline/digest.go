@@ -593,15 +593,17 @@ func (p *Pipeline) handleDigest(ctx *Context, step domain.Step) StepResult {
 	res.AggregateOpened = outcome.Opened
 	res.AggregateExpiresAt = card.ExpiresAt
 
-	if sent, err := p.deliverDigest(ctx, step, spec, card, outcome.Opened, title, body); err != nil {
-		res.Error = err.Error()
+	deliverStarted := time.Now()
+	sent, deliverErr := p.deliverDigest(ctx, step, spec, card, outcome.Opened, title, body)
+	res.Duration = time.Since(deliverStarted)
+	if deliverErr != nil {
+		res.Error = deliverErr.Error()
 		ctx.Results[step.ID] = res
 		return res
-	} else {
-		// sent 表示本次是否真的投递出去：in_app 卡片总是写/改写成功即 true；
-		// 其他渠道窗口内命中既有卡片时不重复投递，为 false。
-		res.Sent = sent
 	}
+	// sent 表示本次是否真的投递出去：in_app 卡片总是写/改写成功即 true；
+	// 其他渠道窗口内命中既有卡片时不重复投递，为 false。
+	res.Sent = sent
 	ctx.Results[step.ID] = res
 
 	p.logger.Info("[digest] 聚合卡片已更新",

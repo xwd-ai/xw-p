@@ -156,3 +156,38 @@ func TestLoadReadsProvidersFileEnv(t *testing.T) {
 		t.Errorf("未配置时应为空，实际 %q", got)
 	}
 }
+
+// 执行明细回写：默认落在与 API 共用的数据目录，写 off 系列值表示不回写。
+func TestExecutionFileConfig(t *testing.T) {
+	t.Setenv("XW_EXECUTION_FILE", "")
+	if got := Load().ExecutionFile; got != defaultExecutionFile {
+		t.Errorf("默认执行明细路径应为 %q，实际 %q", defaultExecutionFile, got)
+	}
+
+	t.Setenv("XW_EXECUTION_FILE", "  /tmp/xw/executions.jsonl  ")
+	cfg := Load()
+	if cfg.ExecutionFile != "/tmp/xw/executions.jsonl" {
+		t.Errorf("XW_EXECUTION_FILE 应去空白，实际 %q", cfg.ExecutionFile)
+	}
+	if cfg.ExecutionDisabled() {
+		t.Errorf("配置了路径时不应判定为关闭")
+	}
+}
+
+func TestExecutionDisabled(t *testing.T) {
+	cases := map[string]bool{
+		"":                       true,
+		"off":                    true,
+		"OFF":                    true,
+		" disabled ":             true,
+		"none":                   true,
+		"-":                      true,
+		"api/data/execut.jsonl":  false,
+		"/var/log/xw/exec.jsonl": false,
+	}
+	for value, want := range cases {
+		if got := (Config{ExecutionFile: value}).ExecutionDisabled(); got != want {
+			t.Errorf("ExecutionFile=%q 的关闭判定 = %v，期望 %v", value, got, want)
+		}
+	}
+}

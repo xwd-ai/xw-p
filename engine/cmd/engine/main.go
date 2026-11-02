@@ -23,6 +23,7 @@ import (
 
 	"github.com/xwd-ai/xw-p/engine/internal/admin"
 	"github.com/xwd-ai/xw-p/engine/internal/config"
+	"github.com/xwd-ai/xw-p/engine/internal/execution"
 	"github.com/xwd-ai/xw-p/engine/internal/pipeline"
 	"github.com/xwd-ai/xw-p/engine/internal/provider"
 	"github.com/xwd-ai/xw-p/engine/internal/queue"
@@ -74,9 +75,14 @@ func main() {
 	}
 	defer closeDigest()
 
+	// 投递结果回写：引擎把每个渠道的成败与原因写进执行明细，API 的
+	// GET /v1/executions 读同一份文件。写不了不至于让投递失败，故只告警。
+	recorder, closeExecution := newExecutionRecorder(logger, cfg)
+	defer closeExecution()
+
 	// 延迟调度器：到期任务 → 管线续跑。delay 步骤到期后把剩余步骤跑完。
 	// 未到期任务存在 Redis，重启或换实例都不会丢。
-	scheduler, closeDelayStore := newDelayScheduler(logger, pipe, cfg)
+	scheduler, closeDelayStore := newDelayScheduler(logger, pipe, cfg, recorder)
 	defer closeDelayStore()
 
 	// 把调度器接成管线的延迟出口：没有这一句，delay 步骤会以「未配置调度器」
@@ -85,7 +91,7 @@ func main() {
 
 	// 执行器：把队列消息还原成工作流并跑完步骤。工作流定义优先取消息自带
 	// 的快照，快照缺失时回退到启动时加载的定义表。
-	exec := runner.New(pipe, loadWorkflowSource(logger, cfg), logger)
+	exec := runner.New(pipe, loadWorkflowSource(logger, cfg), logger).WithRecorder(recorder)
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -166,7 +172,7 @@ func main() {
 //
 // in_app 渠道写入默认收件箱存储，其余渠道走 console mock，
 // 与本进程的投递语义保持一致。返回值里的函数用于释放存储连接。
-func newDelayScheduler(logger *slog.Logger, pipe *pipeline.Pipeline, cfg config.Config) (*schedule.Scheduler, func()) {
+func newDelayScheduler(logger *slog.Logger, pipe *pipeline.Pipeline, cfg config.Config, recorder *execution.Recorder) (*schedule.Scheduler, func()) {
 	handler := func(ctx context.Context, item schedule.Item) error {
 		deferral, results, err := pipe.Resume(item.Payload)
 		if err != nil {
@@ -186,18 +192,51 @@ func newDelayScheduler(logger *slog.Logger, pipe *pipeline.Pipeline, cfg config.
 				)
 			}
 		}
+		// 续跑同样是一次投递：不写执行明细的话，delay 之后的渠道在后台
+		// 就查不到结果（触发时刻只有前半程的明细）。
+		recorded := runner.RecordResults(recorder, logger, deferral.Message, results)
 		logger.Info("[engine] 延迟任务已续跑",
 			"workflow", deferral.WorkflowName,
 			"delayStep", deferral.StepID,
 			"subscriberId", deferral.Message.SubscriberID,
 			"steps", len(results),
 			"sent", sent,
+			"recorded", recorded,
 		)
 		return nil
 	}
 	store, closeStore := newDelayStore(logger, cfg)
 	return schedule.New(store, handler, logger,
 		schedule.WithClaimLease(cfg.DelayLeaseOrDefault())), closeStore
+}
+
+// newExecutionRecorder 装配投递结果的执行明细回写。
+//
+// 三种情况：显式关闭（XW_EXECUTION_FILE=off）、文件打不开（目录只读、路径被
+// 目录占位）、正常打开。前两种都返回 nil 记录器，投递照常进行——审计链路
+// 出问题不该拦住消息本身，但必须在启动日志里说清楚，否则「执行明细是空的」
+// 会被误当成「没有投递过」。
+func newExecutionRecorder(logger *slog.Logger, cfg config.Config) (*execution.Recorder, func()) {
+	if cfg.ExecutionDisabled() {
+		logger.Info("[engine] 执行明细回写已关闭", "reason", "XW_EXECUTION_FILE=off")
+		return nil, func() {}
+	}
+
+	store, err := execution.NewJSONLStore(cfg.ExecutionFile)
+	if err != nil {
+		logger.Error("[engine] 执行明细文件不可用，本次不回写投递结果",
+			"file", cfg.ExecutionFile,
+			"error", err,
+		)
+		return nil, func() {}
+	}
+
+	logger.Info("[engine] 投递结果将回写执行明细", "file", store.Path())
+	return execution.NewRecorder(store, logger), func() {
+		if err := store.Close(); err != nil {
+			logger.Warn("[engine] 关闭执行明细文件失败", "file", store.Path(), "error", err)
+		}
+	}
 }
 
 // newDelayStore 选定延迟任务存储：默认 Redis ZSET（重启与多实例都不丢），

@@ -23,6 +23,9 @@
 - ``reason``：失败原因（成功时为空）。
 - ``duration_ms``：投递耗时（毫秒）。
 - ``created_at``：ISO 8601 时间戳。
+- ``step_id`` / ``provider`` / ``attempts`` / ``fallback``：排查用的补充信息，
+  由引擎回写时给出——哪个步骤、实际完成投递的实现、按顺序试过哪些实现、
+  是否发生过主备回退。API 侧消费线程写入的记录没有这几项，一律回空值。
 """
 from __future__ import annotations
 
@@ -42,7 +45,13 @@ _MAX_LIMIT = 200
 
 
 def _to_item(record: dict) -> dict:
-    """把一条存储记录归一化为执行明细条目。"""
+    """把一条存储记录归一化为执行明细条目。
+
+    引擎回写的记录比 API 侧还带几个排查字段；它们不是每条记录都有
+    （API 自己写的记录、Postgres 后端只落固定几列），缺失时给空值而不省略键，
+    前端与调用方不必逐字段判空。
+    """
+    attempts = record.get("attempts")
     return {
         "id": record.get("id") or "",
         "trigger_id": record.get("trigger_id"),
@@ -51,6 +60,10 @@ def _to_item(record: dict) -> dict:
         "reason": record.get("reason"),
         "duration_ms": record.get("duration_ms", 0),
         "created_at": record.get("created_at"),
+        "step_id": record.get("step_id"),
+        "provider": record.get("provider"),
+        "attempts": list(attempts) if isinstance(attempts, (list, tuple)) else [],
+        "fallback": bool(record.get("fallback")),
     }
 
 

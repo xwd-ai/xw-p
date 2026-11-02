@@ -23,6 +23,7 @@ from app.execution_log import (
 )
 from app.jsonl_reader import READ_CHUNK
 from app.main import app
+from app.timeutil import parse_dt
 
 
 def _rec(trigger_id="t1", channel="email", status="sent", reason=None,
@@ -337,3 +338,50 @@ def test_executions_endpoint_limit_bounds(client):
 
 
 __all__ = []
+
+
+# --- 引擎回写的记录 ---
+
+# 引擎（engine/internal/execution）写出的一行：时间戳固定六位小数 + 显式偏移，
+# 另带步骤、实现标识、尝试序列与回退标记。这里是硬编码的样本，用来锁住
+# 跨语言的行格式：引擎改了序列化方式，这条用例会先失败。
+ENGINE_LINE = (
+    '{"id":"6f1c4d2a9b7e4f0c8a1b2c3d4e5f6071","trigger_id":"t-9","workflow":"post_commented",'
+    '"subscriber_id":"creator_1","step_id":"notify","channel":"email","status":"failed",'
+    '"reason":"SMTP 收件人 a@b 失败（550）：no such user","provider":"console-email",'
+    '"attempts":["smtp-email","console-email"],"fallback":true,"duration_ms":128,'
+    '"created_at":"2026-11-02T10:09:12.123456+00:00"}'
+)
+
+
+def test_engine_line_exposes_writeback_fields(tmp_path, monkeypatch):
+    """引擎写的行能被读出来，且投递结果与排查字段都出现在接口返回里。"""
+    import app.execution_log as mod
+
+    path = tmp_path / "executions.jsonl"
+    path.write_text(ENGINE_LINE + "\n", encoding="utf-8")
+    monkeypatch.setattr(mod, "_execution_store", JSONLExecutionStore(path=path))
+
+    data = TestClient(app).get("/v1/executions").json()
+    assert data["total"] == 1
+    item = data["items"][0]
+    assert item["status"] == "failed"
+    assert item["reason"] == "SMTP 收件人 a@b 失败（550）：no such user"
+    assert item["duration_ms"] == 128
+    assert item["step_id"] == "notify"
+    assert item["provider"] == "console-email"
+    assert item["attempts"] == ["smtp-email", "console-email"]
+    assert item["fallback"] is True
+    # 时间戳格式必须能被 API 侧解析，否则游标翻页会提前结束。
+    assert parse_dt(item["created_at"]) is not None
+
+
+def test_item_defaults_for_records_without_writeback_fields():
+    """API 自己写的记录没有排查字段：缺失时回空值，不省略键。"""
+    from app.execution_routes import _to_item
+
+    item = _to_item(_rec(trigger_id="t1", channel="sms"))
+    assert item["step_id"] is None
+    assert item["provider"] is None
+    assert item["attempts"] == []
+    assert item["fallback"] is False

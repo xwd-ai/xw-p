@@ -22,6 +22,12 @@ JSONL 后端从文件尾部倒着读，取满一页即停；Postgres 后端拼 `
 - ``reason``：失败原因（成功时为空）。
 - ``duration_ms``：投递耗时（毫秒，mock 阶段为 0）。
 - ``created_at``：ISO 8601 时间戳。
+
+引擎侧（``engine/internal/execution``）写同一份文件时还会带上
+``workflow`` / ``subscriber_id`` / ``step_id`` / ``provider`` / ``attempts`` /
+``fallback``：哪个步骤、实际完成投递的渠道实现、按顺序试过哪些实现、是否
+发生过主备回退。这几个键对本模块是透明的——读取按字典取已知字段，多出来的
+键原样保留，``GET /v1/executions`` 会把它们一并回给调用方。
 """
 from __future__ import annotations
 

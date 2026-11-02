@@ -3,6 +3,7 @@
 // 职责边界：
 //   - 决定这条消息该执行哪份步骤定义（消息自带的快照优先，其次按名称回退查找）；
 //   - 调用 pipeline 执行，并把结果汇总成一条可读的执行报告；
+//   - 把每个渠道的投递结果回写成执行明细（见 writeback.go）；
 //   - 区分「不可修复」与「暂时性」失败：前者记日志后由消费方确认丢弃，后者
 //     交由消费方保留在途记录等待重投。
 //
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/xwd-ai/xw-p/engine/internal/domain"
+	"github.com/xwd-ai/xw-p/engine/internal/execution"
 	"github.com/xwd-ai/xw-p/engine/internal/pipeline"
 	"github.com/xwd-ai/xw-p/engine/internal/queue"
 )
@@ -46,15 +48,18 @@ type Report struct {
 	Deferred bool
 	// Rejected 非空表示工作流步骤校验不通过，整条消息未执行任何投递。
 	Rejected string
+	// Recorded 是回写到执行明细的条数（未启用回写时为 0）。
+	Recorded int
 	// Duration 是这次执行耗时。
 	Duration time.Duration
 }
 
 // Runner 按消息执行工作流步骤。
 type Runner struct {
-	pipe   *pipeline.Pipeline
-	source Source
-	logger *slog.Logger
+	pipe     *pipeline.Pipeline
+	source   Source
+	logger   *slog.Logger
+	recorder *execution.Recorder
 }
 
 // New 创建 Runner。source 可为 nil（只接受自带步骤快照的消息）；
@@ -64,6 +69,12 @@ func New(pipe *pipeline.Pipeline, source Source, logger *slog.Logger) *Runner {
 		logger = slog.Default()
 	}
 	return &Runner{pipe: pipe, source: source, logger: logger}
+}
+
+// WithRecorder 接上执行明细回写；recorder 为 nil 时只执行不记账。
+func (r *Runner) WithRecorder(recorder *execution.Recorder) *Runner {
+	r.recorder = recorder
+	return r
 }
 
 // Execute 是消费侧的执行入口。
@@ -112,6 +123,10 @@ func (r *Runner) Run(msg queue.QueuedMessage) (Report, error) {
 		return rep, fmt.Errorf("%w: 工作流 %s 校验不通过：%s",
 			queue.ErrUndeliverable, rep.Workflow, rep.Rejected)
 	}
+
+	// 投递结果回写执行明细：引擎是 Redis 队列的实际消费方，不写这一份，
+	// 后台「执行详情」就只能看到触发、看不到每个渠道最后有没有发出去。
+	rep.Recorded = RecordResults(r.recorder, r.logger, msg, results)
 
 	r.logReport(&rep)
 	return rep, nil
@@ -171,6 +186,7 @@ func (r *Runner) logReport(rep *Report) {
 		"skipped", rep.Skipped,
 		"shortCircuited", rep.ShortCircuited,
 		"deferred", rep.Deferred,
+		"recorded", rep.Recorded,
 		"duration", rep.Duration,
 	}
 	if rep.Failed > 0 || rep.ShortCircuited > 0 {

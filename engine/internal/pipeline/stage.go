@@ -40,6 +40,9 @@ type StepResult struct {
 	ProviderAttempts []string
 	// ProviderFallback 表示默认实现失败后由备选完成投递。
 	ProviderFallback bool
+	// Duration 是分发阶段的实际耗时，含回退链上每一次失败的尝试。
+	// 它只覆盖投递本身，不含过滤/渲染；执行明细里的 duration_ms 取自这里。
+	Duration time.Duration
 	// Deferred 表示该步骤是 delay 步骤且已登记延迟续跑任务，
 	// 之后尚未执行的步骤会在 DeferredUntil 时刻由调度器续跑。
 	Deferred bool

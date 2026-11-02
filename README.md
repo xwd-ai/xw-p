@@ -111,6 +111,7 @@ API 侧：
 | `XW_RETRY_INTERVAL` | `1s` | 到期重试写回队列的扫描间隔 |
 | `XW_WORKFLOWS_FILE` | 空 | 工作流定义快照文件（JSON 数组）；仅用于给没有携带步骤的消息按名称回退查找 |
 | `XW_PROVIDERS_FILE` | 空 | 渠道配置文件（JSON）；为空时使用内置的 console 实现 |
+| `XW_EXECUTION_FILE` | `api/data/executions.jsonl` | 投递结果回写的执行明细文件，与 API 共用同一份；写 `off` 表示不回写 |
 | `XW_ADMIN_ADDR` | `127.0.0.1:<ENGINE_PORT>` | 管理接口监听地址（死信查询/重放）；`off` 表示不启动 |
 
 超时是链路兜底：渠道卡住时管线不再无限等待，超时的步骤与后续步骤都会被记为失败/短路并写进执行明细。超时值应大于下游的正常延迟（例如设为渠道 P99 的数倍），而不是贴着平均值设置。
@@ -131,7 +132,7 @@ API 侧：
 }
 ```
 
-执行结果按消息汇总成一行日志：`steps` / `sent` / `failed` / `skipped` / `shortCircuited` / `deferred` 与耗时，配合 `trigger_id` 可以定位到具体是哪条互动、哪一个步骤出的问题。
+执行结果按消息汇总成一行日志：`steps` / `sent` / `failed` / `skipped` / `shortCircuited` / `deferred` / `recorded` 与耗时，配合 `trigger_id` 可以定位到具体是哪条互动、哪一个步骤出的问题。
 
 一条消息只应被一个消费者处理：`XW_BUS=redis` 时队列归引擎消费，API 进程的内置消费线程默认关闭（`XW_API_WORKER=1` 可强制打开）；memory 总线是单进程 demo，才由 API 自己的线程消费。
 
@@ -457,6 +458,26 @@ psql "$XW_DATABASE_URL" -f scripts/migrations/006_execution_indexes.sql
 - **JSONL**：从文件尾部倒着按块读，取满一页即停，读取量取决于页大小而不是文件大小。这个后端定位是 demo——过滤条件太稀疏时仍会退到顺序扫描。
 
 执行明细（`GET /v1/executions`）用同一套翻页约定：按触发标识 / 渠道 / 状态 / 时间范围过滤，`nextCursor` 取下一页。游标是上一页最后一条记录的 `(created_at, id)`——一次触发会写出多条渠道明细，触发标识不足以区分同一次触发的记录，因此次级键取记录自身的标识（JSONL 写入时生成，Postgres 用自增主键），配套 `006_execution_indexes.sql` 的复合索引。
+
+### 投递结果的回写
+
+执行明细由引擎在每次投递之后写入（`engine/internal/execution`）：分发阶段拿到的每个步骤结果折算成一行 `(trigger_id, channel)` 记录，`status` 为 `sent` / `failed`，`reason` 是失败原因，`duration_ms` 是这一次投递的耗时（含回退链上每一次失败的尝试）。除 API 侧约定的字段外还带四项排查信息：`step_id`（哪个步骤）、`provider`（实际完成投递的实现）、`attempts`（按顺序试过哪些实现）、`fallback`（是否由备选兜底）。
+
+- **续跑也要记账**：`delay` 之后由调度器续跑的步骤同样写明细，否则触发时刻的明细只有前半程，后面的渠道查不到结果。
+- **没投递就不写**：被过滤、条件不满足、上游失败短路、只是登记了延迟的步骤不产生记录。「没发」和「发失败」混在同一张表里，会让失败原因变成噪音。
+- **写失败不影响投递**：记录写不进去只记 Warn——消息已经发出去了，因为它没记上账而重投一次反而会再发一遍。
+
+回写落在 `api/data/executions.jsonl`（`XW_EXECUTION_FILE` 可指定，写 `off` 关闭），与 API 侧消费线程写入的是同一份文件，`GET /v1/executions` 一起返回：引擎是 `XW_BUS=redis` 时的实际消费方，不写这一份，后台就只能看到触发、看不到每个渠道最后有没有发出去。`XW_STORAGE=postgres` 时两者尚未合并——API 自己写的记录进数据库，引擎这一侧仍写文件，把引擎回写接进数据库需要额外的驱动依赖，暂未实现。
+
+```json
+{"id":"9e33abb09bd8e9e5efb500ba9fba88a4","trigger_id":"smoke-exec-2","workflow":"post_commented",
+ "subscriber_id":"creator_1","step_id":"mail","channel":"email","status":"failed",
+ "reason":"投递失败（email）: SMTP 连接 127.0.0.1:1 失败：dial tcp 127.0.0.1:1: connect: connection refused",
+ "provider":"smtp-email","attempts":["smtp-email"],"duration_ms":0,
+ "created_at":"2026-11-02T02:17:45.509555+00:00"}
+```
+
+时间戳固定六位小数并以 `+00:00` 表示 UTC，而不是 Go 默认的 `RFC3339Nano`：写入方与读取方是两个进程、两种语言，格式要按对方的解析能力来定。`api/tests/test_execution_log.py` 用一行硬编码的引擎记录锁住这个约定。
 
 仪表盘统计（`GET /v1/dashboard/stats`）同样不保留原始记录：Postgres 侧用 `count(*) FILTER` / `jsonb_array_elements_text` / `date_trunc` 三条聚合查询直接出结果，JSONL 后端逐行流式累加，内存占用与记录条数无关。
 

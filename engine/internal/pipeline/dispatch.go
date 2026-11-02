@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/xwd-ai/xw-p/engine/internal/domain"
 )
@@ -54,7 +55,9 @@ func (d *dispatchStage) Apply(ctx *Context, step domain.Step) error {
 	}
 
 	// 按优先级依次尝试该渠道的实现：首个是默认实现，其后是备选。
+	started := time.Now()
 	outcome := d.failover.Send(ctx.Context(), delivery)
+	res.Duration = time.Since(started)
 	if outcome.Candidates == 0 {
 		// 未注册可用 provider：保持原有 mock 打印，视为投递成功（不阻断后续步骤）。
 		d.logger.Info("[mock] 分发步骤（未注册 provider）",

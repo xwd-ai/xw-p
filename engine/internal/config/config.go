@@ -60,6 +60,10 @@ type Config struct {
 	// ProvidersFile 是渠道配置文件（JSON）的路径：声明每个渠道用哪种实现、
 	// 优先级、开关与凭据。为空表示使用内置的 console 实现。
 	ProvidersFile string
+	// ExecutionFile 是投递结果回写的执行明细文件路径。引擎与 API 共用同一份
+	// 数据目录，默认指向 api/data/executions.jsonl；写 off/disabled/none/- 表示
+	// 不回写（只保留日志与执行汇总）。
+	ExecutionFile string
 	// AdminAddr 是运维接口（死信查询/重放）的监听地址。
 	// 空字符串表示不启动；未配置 XW_ADMIN_ADDR 时沿用 ENGINE_PORT。
 	AdminAddr string
@@ -101,8 +105,24 @@ func Load() Config {
 
 		WorkflowsFile: strings.TrimSpace(os.Getenv("XW_WORKFLOWS_FILE")),
 		ProvidersFile: strings.TrimSpace(os.Getenv("XW_PROVIDERS_FILE")),
+		ExecutionFile: strings.TrimSpace(envOr("XW_EXECUTION_FILE", defaultExecutionFile)),
 		AdminAddr:     adminListenAddr(),
 	}
+}
+
+// defaultExecutionFile 是执行明细回写的默认路径。
+//
+// 与收件箱（api/data/inbox.jsonl）同理：引擎写、API 读，两个进程共用一份
+// 数据目录，因此默认指向 API 侧的执行明细文件。
+const defaultExecutionFile = "api/data/executions.jsonl"
+
+// ExecutionDisabled 判断是否关闭了执行明细回写。
+func (c Config) ExecutionDisabled() bool {
+	switch strings.ToLower(strings.TrimSpace(c.ExecutionFile)) {
+	case "", "off", "disabled", "none", "-":
+		return true
+	}
+	return false
 }
 
 // adminListenAddr 解析运维接口的监听地址。
