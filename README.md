@@ -116,6 +116,10 @@ API 侧：
 | `XW_CALLBACK_TIMEOUT` | `5s` | 单次回调的超时 |
 | `XW_CALLBACK_WORKERS` | `2` | 回调的发送并发数，取值 `1`–`16` |
 | `XW_CALLBACK_QUEUE` | `256` | 回调事件的缓冲队列长度，满了丢弃事件而不阻塞投递 |
+| `XW_CALLBACK_SECRET` | 空 | 回调签名密钥（至少 16 字节）；为空表示不签名，配置了但过短会在装配期报错 |
+| `XW_CALLBACK_RETRY_ATTEMPTS` | `3` | 单条回调的最多尝试次数（含首次），取值 `1`–`10`，`1` 表示不重试 |
+| `XW_CALLBACK_RETRY_BASE` | `500ms` | 第一次重试前的等待时长，之后按 2 的幂增长 |
+| `XW_CALLBACK_RETRY_MAX` | `10s` | 重试等待的上限 |
 | `XW_ADMIN_ADDR` | `127.0.0.1:<ENGINE_PORT>` | 管理接口监听地址（死信查询/重放）；`off` 表示不启动 |
 
 超时是链路兜底：渠道卡住时管线不再无限等待，超时的步骤与后续步骤都会被记为失败/短路并写进执行明细。超时值应大于下游的正常延迟（例如设为渠道 P99 的数倍），而不是贴着平均值设置。
@@ -550,9 +554,29 @@ psql "$XW_DATABASE_URL" -f scripts/migrations/006_execution_indexes.sql
 - **退出时排空**：收到退出信号后停止收新事件，等队列里的事件发完，最多等到 `XW_SHUTDOWN_GRACE`；没发完的记为丢弃并写日志，不会让一个不响应的接收方拖住进程。
 - **地址约束**：只接受 https，http 仅放行本机回环（本地联调）；带用户名口令或 `#` 片段的地址在装配期就被拒绝。日志和错误信息里只出现协议与主机，路径与查询串里的令牌不会落盘。
 - **与明细同源**：`delay` 之后的续跑同样补推一条，否则接入方只拿得到前半程。字段与执行明细一致（`provider` / `attempts` / `fallback` / `duration_ms` 都在），接入方不必再查一次 `GET /v1/executions`。
-- **失败分级**：4xx 视为报文或鉴权问题，除 429 外不再尝试；5xx、429、连接失败与超时标为可重试。当前每次执行只提交一次回调，`retryable` 随日志与统计给出，作为后续重试策略的依据。
+- **失败分级**：4xx 视为报文或鉴权问题，除 429 外不再尝试；5xx、429、连接失败与超时标为可重试。
+- **可重试失败按退避再发**：单条事件默认最多试 3 次（`XW_CALLBACK_RETRY_ATTEMPTS`），间隔从 `XW_CALLBACK_RETRY_BASE` 起翻倍、到 `XW_CALLBACK_RETRY_MAX` 封顶并向下抖动。接收方给了 `Retry-After`（429/503）时按对方的时间等，但仍受封顶约束——对方要求等一小时时，这条回执早就没有意义了，继续占住发送 goroutine 更坏。重试沿用同一个 `X-XW-Event-Id`，接收方按它去重即可。退出宽限到期会打断正在等待的退避，已经发出去的请求仍会跑完。
+- **报文签名**：配置 `XW_CALLBACK_SECRET` 后，每个请求带 `X-XW-Timestamp`（Unix 秒）与 `X-XW-Signature: v1=<hex>`。签名内容是 `HMAC-SHA256(secret, "<timestamp>.<body>")`，时间戳与正文一起签——只签正文，报文能被搬到新时间戳下重放；只签时间戳则护不住内容。接收方应校验签名并比较时间戳与本地时钟（默认容差 5 分钟），`engine/internal/webhook` 里的 `Verifier` 就是这套逻辑的可执行版本。头部允许空格分隔的多个签名值，密钥轮换期间接收方可以同时认新旧两把。
 
 报文里两个头部让接收方在读完正文之前就能路由与去重：`X-XW-Event`（事件名）与 `X-XW-Event-Id`（与报文里的 `id` 相同）。
+
+接收端校验签名只需要几行：
+
+```python
+import hashlib, hmac, time
+
+SECRET = b"<与 XW_CALLBACK_SECRET 相同>"
+
+def verify(headers, raw_body: bytes, tolerance: int = 300) -> bool:
+    ts = headers.get("X-XW-Timestamp", "")
+    sig = headers.get("X-XW-Signature", "")
+    if not ts.isdigit() or abs(time.time() - int(ts)) > tolerance:
+        return False                     # 缺时间戳，或超出容差（可能是重放）
+    expected = "v1=" + hmac.new(SECRET, ts.encode() + b"." + raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, sig)
+```
+
+比较用固定时间实现（`compare_digest`），不要用 `==`：字符串比较在第一个不同的字节就返回，能把密钥一位一位试出来。校验必须用原始字节，先解析再重新序列化会改变字段顺序，签名随之失效。
 
 ## 压测
 

@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/xwd-ai/xw-p/engine/internal/backoff"
 )
 
 // fakeSender 记录被提交的事件，行为可按用例替换。
@@ -38,7 +40,10 @@ func quietOptions() Options {
 		Workers:   2,
 		QueueSize: 16,
 		Timeout:   time.Second,
-		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		// 多数用例只关心「一条事件发一次」；重试另有专门用例，显式关掉，
+		// 免得断言被重试次数搅乱。
+		Retry:  backoff.Policy{MaxAttempts: 1},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 }
 
@@ -246,5 +251,12 @@ func TestOptionsNormalized(t *testing.T) {
 	}
 	if opts.Timeout != MaxTimeout {
 		t.Errorf("超时应收敛到上限: %v", opts.Timeout)
+	}
+	// 没配重试时补上缺省曲线，而不是退化成「只发一次」。
+	if opts.Retry.MaxAttempts != DefaultRetryAttempts {
+		t.Errorf("缺省重试次数不符: %d", opts.Retry.MaxAttempts)
+	}
+	if opts.Retry.Base <= 0 || opts.Retry.Max <= 0 {
+		t.Errorf("缺省退避时长未补齐: %+v", opts.Retry)
 	}
 }

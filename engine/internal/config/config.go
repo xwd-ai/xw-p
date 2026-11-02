@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xwd-ai/xw-p/engine/internal/backoff"
 	"github.com/xwd-ai/xw-p/engine/internal/queue"
 	"github.com/xwd-ai/xw-p/engine/internal/schedule"
 	"github.com/xwd-ai/xw-p/engine/internal/webhook"
@@ -75,6 +76,15 @@ type Config struct {
 	CallbackTimeout time.Duration
 	CallbackWorkers int
 	CallbackQueue   int
+	// CallbackSecret 是回调报文的签名密钥，为空表示不签名。签名覆盖时间戳
+	// 与正文，接收方可用它判断报文是否被改过、是否被重放。
+	CallbackSecret string
+	// CallbackRetryAttempts / Base / Max 是回调事件的重试曲线：
+	// 可重试失败（连不上、超时、5xx、429）按指数退避再试，
+	// 次数含首次尝试，写 1 表示不重试。
+	CallbackRetryAttempts int
+	CallbackRetryBase     time.Duration
+	CallbackRetryMax      time.Duration
 
 	// AdminAddr 是运维接口（死信查询/重放）的监听地址。
 	// 空字符串表示不启动；未配置 XW_ADMIN_ADDR 时沿用 ENGINE_PORT。
@@ -122,9 +132,28 @@ func Load() Config {
 		CallbackTimeout: envDuration("XW_CALLBACK_TIMEOUT", webhook.DefaultTimeout),
 		CallbackWorkers: envInt("XW_CALLBACK_WORKERS", webhook.DefaultWorkers),
 		CallbackQueue:   envInt("XW_CALLBACK_QUEUE", webhook.DefaultQueueSize),
-		AdminAddr:       adminListenAddr(),
+		CallbackSecret:  strings.TrimSpace(os.Getenv("XW_CALLBACK_SECRET")),
+
+		CallbackRetryAttempts: envInt("XW_CALLBACK_RETRY_ATTEMPTS", webhook.DefaultRetryAttempts),
+		CallbackRetryBase:     envDuration("XW_CALLBACK_RETRY_BASE", webhook.DefaultRetryBase),
+		CallbackRetryMax:      envDuration("XW_CALLBACK_RETRY_MAX", webhook.DefaultRetryMax),
+
+		AdminAddr: adminListenAddr(),
 	}
 }
+
+// CallbackRetry 返回回调的重试曲线。
+func (c Config) CallbackRetry() backoff.Policy {
+	return backoff.Policy{
+		MaxAttempts: c.CallbackRetryAttempts,
+		Base:        c.CallbackRetryBase,
+		Max:         c.CallbackRetryMax,
+		Jitter:      webhook.DefaultRetryJitter,
+	}
+}
+
+// CallbackSigned 判断是否为回调报文签名。
+func (c Config) CallbackSigned() bool { return c.CallbackSecret != "" }
 
 // CallbackDisabled 判断是否关闭了投递结果回调。
 func (c Config) CallbackDisabled() bool {

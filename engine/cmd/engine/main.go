@@ -268,14 +268,23 @@ func newCallbackDispatcher(logger *slog.Logger, cfg config.Config) (*webhook.Dis
 		return nil, func() {}
 	}
 
+	// 密钥配错（过短、过长）时不悄悄降级成不签名：接收方会开始拒绝所有
+	// 回调，而引擎这边只看得到「回调失败」，排查会绕远路。
+	signer, err := webhook.NewSigner(cfg.CallbackSecret)
+	if err != nil {
+		logger.Error("[engine] 回调签名密钥不合法，本次不回调", "error", err)
+		return nil, func() {}
+	}
+
 	opts := webhook.Options{
 		Workers:   cfg.CallbackWorkers,
 		QueueSize: cfg.CallbackQueue,
 		Timeout:   cfg.CallbackTimeout,
+		Retry:     cfg.CallbackRetry(),
 		Logger:    logger,
 	}.Normalized()
 
-	dispatcher := webhook.NewDispatcher(target, webhook.NewClient(opts.Timeout), opts)
+	dispatcher := webhook.NewDispatcher(target, webhook.NewClient(opts.Timeout).WithSigner(signer), opts)
 	if dispatcher == nil {
 		return nil, func() {}
 	}
@@ -285,6 +294,8 @@ func newCallbackDispatcher(logger *slog.Logger, cfg config.Config) (*webhook.Dis
 		"timeout", opts.Timeout,
 		"workers", opts.Workers,
 		"queue", opts.QueueSize,
+		"signed", signer != nil,
+		"retry", opts.Retry.String(),
 	)
 
 	return dispatcher, func() {
@@ -306,6 +317,7 @@ func newCallbackDispatcher(logger *slog.Logger, cfg config.Config) (*webhook.Dis
 			"enqueued", stats.Enqueued,
 			"delivered", stats.Delivered,
 			"failed", stats.Failed,
+			"retried", stats.Retried,
 			"dropped", stats.Dropped,
 		)
 	}

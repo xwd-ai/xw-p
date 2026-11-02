@@ -217,6 +217,10 @@ func TestLoadReadsCallbackEnv(t *testing.T) {
 	t.Setenv("XW_CALLBACK_TIMEOUT", "3s")
 	t.Setenv("XW_CALLBACK_WORKERS", "4")
 	t.Setenv("XW_CALLBACK_QUEUE", "128")
+	t.Setenv("XW_CALLBACK_SECRET", "  s3cr3t-key-for-xw-notify-test  ")
+	t.Setenv("XW_CALLBACK_RETRY_ATTEMPTS", "5")
+	t.Setenv("XW_CALLBACK_RETRY_BASE", "250ms")
+	t.Setenv("XW_CALLBACK_RETRY_MAX", "4s")
 	cfg = Load()
 	if cfg.CallbackURL != "https://community.example.com/hooks/xw" {
 		t.Errorf("XW_CALLBACK_URL 应去空白，实际 %q", cfg.CallbackURL)
@@ -229,6 +233,37 @@ func TestLoadReadsCallbackEnv(t *testing.T) {
 	}
 	if cfg.CallbackWorkers != 4 || cfg.CallbackQueue != 128 {
 		t.Errorf("并发与队列配置未生效: %d / %d", cfg.CallbackWorkers, cfg.CallbackQueue)
+	}
+	// 密钥去空白后才进签名器：配置里的换行很容易让长度判断失真。
+	if cfg.CallbackSecret != "s3cr3t-key-for-xw-notify-test" || !cfg.CallbackSigned() {
+		t.Errorf("签名密钥未生效: %q", cfg.CallbackSecret)
+	}
+	retry := cfg.CallbackRetry()
+	if retry.MaxAttempts != 5 || retry.Base != 250*time.Millisecond || retry.Max != 4*time.Second {
+		t.Errorf("重试曲线未生效: %+v", retry)
+	}
+	if retry.Jitter <= 0 || retry.Jitter > 1 {
+		t.Errorf("抖动应由引擎统一给定: %v", retry.Jitter)
+	}
+}
+
+// 未配置密钥时不签名；重试曲线缺省是「三次、500ms 起步、10s 封顶」。
+func TestCallbackDefaults(t *testing.T) {
+	t.Setenv("XW_CALLBACK_SECRET", "")
+	t.Setenv("XW_CALLBACK_RETRY_ATTEMPTS", "")
+	t.Setenv("XW_CALLBACK_RETRY_BASE", "")
+	t.Setenv("XW_CALLBACK_RETRY_MAX", "")
+	cfg := Load()
+
+	if cfg.CallbackSigned() {
+		t.Error("未配置密钥时不应签名")
+	}
+	retry := cfg.CallbackRetry()
+	if retry.MaxAttempts != webhook.DefaultRetryAttempts {
+		t.Errorf("重试次数默认值不符: %d", retry.MaxAttempts)
+	}
+	if retry.Base != webhook.DefaultRetryBase || retry.Max != webhook.DefaultRetryMax {
+		t.Errorf("退避默认值不符: %+v", retry)
 	}
 }
 

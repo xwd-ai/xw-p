@@ -77,3 +77,40 @@ func TestNewCallbackDispatcherNormalizesOptions(t *testing.T) {
 	}
 	closeFn()
 }
+
+// 签名密钥与重试曲线随配置生效。
+func TestNewCallbackDispatcherSecretAndRetry(t *testing.T) {
+	cfg := config.Config{
+		CallbackURL:           "https://community.example.com/cb",
+		CallbackSecret:        "s3cr3t-key-for-xw-notify-test",
+		CallbackRetryAttempts: 4,
+		CallbackRetryBase:     100 * time.Millisecond,
+		CallbackRetryMax:      time.Second,
+	}
+	dispatcher, closeFn := newCallbackDispatcher(discardLogger(), cfg)
+	if dispatcher == nil {
+		t.Fatal("合法配置应装配回调")
+	}
+	defer closeFn()
+
+	if got := dispatcher.Retry().MaxAttempts; got != 4 {
+		t.Errorf("重试次数应取配置值，实际 %d", got)
+	}
+	if stats := dispatcher.Stats(); stats.Retried != 0 {
+		t.Errorf("尚未投递时不应有重试计数: %+v", stats)
+	}
+}
+
+// 密钥过短属于配置错误：不悄悄降级成「不签名」，直接不装配——
+// 否则接收方会开始拒收所有回调，而引擎这边只看得到「回调失败」。
+func TestNewCallbackDispatcherInvalidSecret(t *testing.T) {
+	cfg := config.Config{
+		CallbackURL:    "https://community.example.com/cb",
+		CallbackSecret: "short",
+	}
+	dispatcher, closeFn := newCallbackDispatcher(discardLogger(), cfg)
+	if dispatcher != nil {
+		t.Error("密钥不合法时不应装配回调")
+	}
+	closeFn()
+}
