@@ -46,5 +46,17 @@
     return text ? JSON.parse(text) : null;
   }
 
-  window.xwData = { CH, seed, subs, API_BASE, api };
+  // HTML 转义：凡是来自后端的字符串，拼进 innerHTML 之前都要过一遍。
+  //
+  // 帖子标题、评论正文、创作者昵称都是终端用户能写的内容。它们的转义在
+  // 引擎侧只覆盖到投递报文（HTML 邮件的正文段），页面这一层得自己再做一次：
+  // 把 `<img src=x onerror=...>` 当标题拼进模板字符串，等于让一条评论在
+  // 运营后台里执行。
+  const ESC_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+  function esc(value) {
+    return String(value === null || value === undefined ? '' : value)
+      .replace(/[&<>"']/g, ch => ESC_MAP[ch]);
+  }
+
+  window.xwData = { CH, seed, subs, API_BASE, api, esc };
 })();

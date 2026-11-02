@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"fmt"
 	"html"
 	"regexp"
 	"strings"
@@ -13,10 +14,14 @@ import (
 // 支持两种模板表达式：
 //   - 变量替换「{{ var }}」：var 可为 payload 嵌套变量（payload.items[0].name）、
 //     系统变量（$workflow）或已展开的 payload.<key>。
-//   - 内置函数「{{ fn arg... }}」：如 {{ upper payload.customer_name }}、
+//   - 内置函数「{{ fn arg... }}」：如 {{ upper payload.author }}、
 //     {{ format_amount payload.amount }}，参数本身也可为变量。
 //
 // 缺失变量原样保留占位符（错误策略见 render 实现）。
+//
+// 替换是单遍的：变量值拼进结果之后不会再被当作模板扫描一遍，因此负载里
+// 写着「{{ upper payload.secret }}」的字段只会原样显示成一串花括号，
+// 不会被求值。这条性质由 TestRenderDoesNotReexpandValues 锁定。
 type renderStage struct {
 	// expr 匹配模板表达式：变量或函数调用，允许字母/数字/下划线/点/美元符/方括号。
 	expr *regexp.Regexp
@@ -37,6 +42,18 @@ func newRenderStage() *renderStage {
 	}
 }
 
+// renderForm 描述一段模板的产出形态，决定变量值如何清理（见 sanitize.go）。
+type renderForm int
+
+const (
+	// formInline 是单行文本：邮件主题、推送与站内信标题。
+	formInline renderForm = iota
+	// formBlock 是多行正文。
+	formBlock
+	// formHTML 是 HTML 正文：变量值先清理控制字符再按 HTML 转义。
+	formHTML
+)
+
 // Apply 渲染当前步骤的正文模板与标题模板并写回 Results。
 //
 // 标题（email 的 subject、push/in_app 的 title）与正文走同一套变量与内置函数：
@@ -49,7 +66,7 @@ func (r *renderStage) Apply(ctx *Context, step domain.Step) error {
 		Channel:  step.Type,
 	}
 
-	subject, err := r.Render(ctx, stepHeaderTemplate(step))
+	subject, err := r.RenderInline(ctx, stepHeaderTemplate(step))
 	if err != nil {
 		res.Error = err.Error()
 		ctx.Results[step.ID] = res
@@ -155,27 +172,35 @@ func stepHeaderTemplate(step domain.Step) string {
 	return ""
 }
 
-// Render 渲染一段模板文本并返回结果。
+// Render 渲染一段多行正文模板并返回结果。
 //
 // 抽成独立方法供编排步骤复用：digest 步骤需要在聚合计数据算完之后，
-// 用注入的 digest.* 变量渲染卡片标题与正文，但它的产出并不走
+// 用注入的 digest.* 变量渲染卡片正文，但它的产出并不走
 // 「一阶段一结果」的常规流程（否则同一步骤的聚合元数据会被覆盖）。
 func (r *renderStage) Render(ctx *Context, tmpl string) (string, error) {
-	return r.render(ctx, tmpl, false)
+	return r.render(ctx, tmpl, formBlock)
+}
+
+// RenderInline 渲染一段单行模板（邮件主题、推送标题、聚合卡片标题）。
+//
+// 与 Render 的区别只有清理强度：单行文本里的换行一律折成空格，
+// 否则一个带换行的帖子标题就能往邮件里塞额外的头字段。
+func (r *renderStage) RenderInline(ctx *Context, tmpl string) (string, error) {
+	return r.render(ctx, tmpl, formInline)
 }
 
 // RenderHTML 渲染一段 HTML 模板。
 //
-// 与 Render 的唯一区别是变量值按 HTML 转义后再拼进去：模板自身的标签原样
+// 与 Render 的第二个区别是变量值按 HTML 转义后再拼进去：模板自身的标签原样
 // 保留，而 payload 里的用户内容（评论、帖子标题、昵称）即使带 `<script>`
 // 也只会显示成文本。帖子标题与评论是最典型的用户可控输入，不转义就等于把
 // 用户内容当页面代码执行。
 func (r *renderStage) RenderHTML(ctx *Context, tmpl string) (string, error) {
-	return r.render(ctx, tmpl, true)
+	return r.render(ctx, tmpl, formHTML)
 }
 
-// render 按需转义变量值地渲染模板。
-func (r *renderStage) render(ctx *Context, tmpl string, escape bool) (string, error) {
+// render 按产出形态清理变量值地渲染模板。
+func (r *renderStage) render(ctx *Context, tmpl string, form renderForm) (string, error) {
 	if tmpl == "" {
 		return "", nil
 	}
@@ -183,15 +208,65 @@ func (r *renderStage) render(ctx *Context, tmpl string, escape bool) (string, er
 	if err := validateTemplate(tmpl); err != nil {
 		return "", err
 	}
-	return r.expr.ReplaceAllStringFunc(tmpl, func(m string) string {
+
+	// 边替换边累计长度：等到拼完再检查，一个被放大的模板已经在内存里了。
+	written := 0
+	overflow := false
+	out := r.expr.ReplaceAllStringFunc(tmpl, func(m string) string {
+		if overflow {
+			return m
+		}
 		inner := strings.TrimSpace(r.expr.FindStringSubmatch(m)[1])
 		value, ok := r.eval(ctx, inner, 0)
-		// 缺失变量保留占位符原样（其中没有需要转义的字符），由上游决定如何处理。
-		if ok && escape {
-			return html.EscapeString(value)
+		// 缺失变量保留占位符原样（其中没有需要清理的字符），由上游决定如何处理。
+		if !ok {
+			return value
+		}
+		value = cleanValue(value, form)
+		written += len(value)
+		if written > maxRenderedBytes {
+			overflow = true
 		}
 		return value
-	}), nil
+	})
+	if overflow || len(out) > maxRenderedBytes {
+		return "", fmt.Errorf("渲染结果超过上限 %d 字节", maxRenderedBytes)
+	}
+	// 模板自身的文本也要过一遍：工作流里的标题可能是多行 YAML 写的，
+	// 换行同样会破坏单行字段。
+	return cleanTemplate(out, form), nil
+}
+
+// cleanValue 按产出形态清理一个变量值。
+func cleanValue(value string, form renderForm) string {
+	switch form {
+	case formInline:
+		return sanitizeSingleLine(value)
+	case formHTML:
+		// 先清理再转义：反过来的话控制字符会变成实体留在页面里。
+		return html.EscapeString(sanitizeMultiLine(value))
+	default:
+		return sanitizeMultiLine(value)
+	}
+}
+
+// cleanTemplate 清理整段渲染结果（模板文本 + 已清理的变量值）。
+//
+// HTML 形态只清控制字符、不转义：模板里的标签是作者写的，转义等于把
+// 排版也一起变成文本。
+func cleanTemplate(out string, form renderForm) string {
+	if form == formInline {
+		return sanitizeSingleLine(out)
+	}
+	return sanitizeMultiLine(out)
+}
+
+// hasTemplateExpr 判断文本里是否还残留模板表达式。
+//
+// 分发阶段用它拦住「没走渲染就拿来当标题」的兜底路径：把
+// `{{ payload.post_title }}` 原样发给用户，等于把模板语法暴露出去。
+func hasTemplateExpr(s string) bool {
+	return strings.Contains(s, "{{") && strings.Contains(s, "}}")
 }
 
 // eval 求值一个模板表达式：若含空格则视为函数调用，否则视为变量替换。

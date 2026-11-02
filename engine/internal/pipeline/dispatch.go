@@ -42,12 +42,16 @@ func (d *dispatchStage) Apply(ctx *Context, step domain.Step) error {
 	ch := domain.Channel(step.Type)
 
 	// 构造投递请求：收件人按渠道从消息契约取值，内容取渲染结果。
+	//
+	// 标题与正文在这里再过一次清理：渲染阶段已经清过，但分发是内容离开引擎
+	// 前的最后一道口子，聚合卡片、未走渲染阶段的步骤同样会经过这里。渠道层
+	// 不该依赖上游是否记得清理，清理函数本身也是幂等的。
 	delivery := Delivery{
 		Channel:      ch,
 		To:           d.recipientFor(ctx, step, ch),
-		Subject:      d.subjectFor(ctx, step),
-		Body:         res.Rendered,
-		HTML:         res.RenderedHTML,
+		Subject:      sanitizeSingleLine(d.subjectFor(ctx, step)),
+		Body:         sanitizeMultiLine(res.Rendered),
+		HTML:         sanitizeMultiLine(res.RenderedHTML),
 		StepID:       step.ID,
 		TriggerID:    ctx.Msg.TriggerID,
 		WorkflowName: ctx.Msg.Name,
@@ -132,13 +136,21 @@ func (d *dispatchStage) recipientFor(ctx *Context, step domain.Step, ch domain.C
 
 // subjectFor 返回消息标题：优先用 render 阶段渲染好的标题（标题里可能有
 // 帖子名、互动者变量），没有则回退到步骤原始配置。
+//
+// 回退路径要挡住模板原文：渲染后标题为空（帖子标题本身为空）时，直接拿
+// 步骤配置里的 `{{ payload.post_title }}` 去投递，收件人看到的会是一串
+// 花括号。此时改用工作流名，仍然是可读的标题。
 func (d *dispatchStage) subjectFor(ctx *Context, step domain.Step) string {
 	if res, ok := ctx.Results[step.ID]; ok {
 		if s := strings.TrimSpace(res.RenderedSubject); s != "" {
 			return s
 		}
 	}
-	return deliverySubject(ctx, step)
+	fallback := deliverySubject(ctx, step)
+	if hasTemplateExpr(fallback) {
+		return workflowName(ctx)
+	}
+	return fallback
 }
 
 // deliveryRecipient 按渠道解析收件地址（dispatch 与 digest 步骤共用）。

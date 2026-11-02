@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const { CH, seed, subs, API_BASE, api } = window.xwData;
+  const { CH, seed, subs, API_BASE, api, esc } = window.xwData;
 
   /* ============ 移动端侧边栏 ============ */
   const navToggle = document.getElementById('nav-toggle');
@@ -84,8 +84,8 @@
   function activityRow(a) {
     const c = CH[a.ch];
     return `<div class="act"><div class="ch" style="background:${c.bg}">${c.icon}</div>
-      <div class="meta"><div class="t">${a.t}</div><div class="d">${a.d}</div></div>
-      <div class="ts">${a.ts}</div><span class="pill ok">已投递</span></div>`;
+      <div class="meta"><div class="t">${esc(a.t)}</div><div class="d">${esc(a.d)}</div></div>
+      <div class="ts">${esc(a.ts)}</div><span class="pill ok">已投递</span></div>`;
   }
   function renderSeed() {
     document.getElementById('dash-activity').innerHTML = seed.map(activityRow).join('');
@@ -173,13 +173,13 @@
       return;
     }
     box.innerHTML = list.map(i => `
-      <div class="inbox-item${i.read ? '' : ' unread'}" data-id="${i.message_id || i.trigger_id}">
+      <div class="inbox-item${i.read ? '' : ' unread'}" data-id="${esc(i.message_id || i.trigger_id)}">
         <div class="inbox-dot"></div>
         <div class="inbox-body">
-          <div class="inbox-title">${i.title || '通知'}</div>
-          ${i.body ? `<div class="inbox-text">${i.body}</div>` : ''}
+          <div class="inbox-title">${esc(i.title || '通知')}</div>
+          ${i.body ? `<div class="inbox-text">${esc(i.body)}</div>` : ''}
         </div>
-        <div class="inbox-ts">${fmtTs(i.updated_at || i.created_at)}</div>
+        <div class="inbox-ts">${esc(fmtTs(i.updated_at || i.created_at))}</div>
       </div>`).join('');
 
     box.querySelectorAll('.inbox-item').forEach(el => {
@@ -242,9 +242,9 @@
   function renderSubs() {
     document.getElementById('sub-list').innerHTML = subs.map(s => `
       <div class="act">
-        <div class="ch" style="background:#eef0ff">${s.n[0]}</div>
-        <div class="meta"><div class="t">${s.n}</div><div class="d">${s.id}</div></div>
-        <div>${s.ch.map(c => `<span class="pill ok" style="margin-left:4px">${CH[c].label}</span>`).join('')}</div>
+        <div class="ch" style="background:#eef0ff">${esc(s.n[0])}</div>
+        <div class="meta"><div class="t">${esc(s.n)}</div><div class="d">${esc(s.id)}</div></div>
+        <div>${s.ch.map(c => `<span class="pill ok" style="margin-left:4px">${esc(CH[c].label)}</span>`).join('')}</div>
       </div>`).join('');
   }
 
@@ -365,9 +365,9 @@
       return;
     }
     box.innerHTML = wfList.map(w => `
-      <div class="wf-item${w.id === wfCurrentId ? ' active' : ''}" data-id="${w.id}">
-        <span class="wf-name">${w.name}</span>
-        <span class="wf-ver">v${w.version}</span>
+      <div class="wf-item${w.id === wfCurrentId ? ' active' : ''}" data-id="${esc(w.id)}">
+        <span class="wf-name">${esc(w.name)}</span>
+        <span class="wf-ver">v${esc(w.version)}</span>
       </div>`).join('');
     box.querySelectorAll('.wf-item').forEach(el => {
       el.addEventListener('click', () => selectWorkflow(el.dataset.id));

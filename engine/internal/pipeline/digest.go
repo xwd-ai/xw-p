@@ -569,7 +569,7 @@ func (p *Pipeline) handleDigest(ctx *Context, step domain.Step) StepResult {
 	ctx.Variables["digest.actors"] = strings.Join(card.Actors, "、")
 	ctx.Variables["digest.opened"] = outcome.Opened
 
-	title, err := p.renderText(ctx, spec.Title)
+	title, err := p.renderInline(ctx, spec.Title)
 	if err != nil {
 		res.Error = "渲染聚合卡片标题失败: " + err.Error()
 		ctx.Results[step.ID] = res
@@ -685,8 +685,8 @@ func (p *Pipeline) deliverDigest(ctx *Context, step domain.Step, spec DigestSpec
 	outcome := p.dispatch.failover.Send(ctx.Context(), Delivery{
 		Channel:      spec.Channel,
 		To:           deliveryRecipient(ctx, step, spec.Channel),
-		Subject:      title,
-		Body:         body,
+		Subject:      sanitizeSingleLine(title),
+		Body:         sanitizeMultiLine(body),
 		StepID:       step.ID,
 		TriggerID:    ctx.Msg.TriggerID,
 		WorkflowName: workflowName(ctx),
@@ -719,7 +719,10 @@ func (p *Pipeline) inboxStore() (InboxStore, bool) {
 	return store, store != nil
 }
 
-// resolveDigestField 解析一个变量表达式为去空白的字符串（缺失返回空串）。
+// resolveDigestField 解析一个变量表达式为去空白的单行字符串（缺失返回空串）。
+//
+// 聚合键与互动者都是标识（帖子 ID、昵称），按单行文本清理：它们会进卡片
+// 作用域与日志，带换行的键会在日志里造出半行假记录。
 func (p *Pipeline) resolveDigestField(ctx *Context, field string) string {
 	if field == "" || p.renderer == nil {
 		return ""
@@ -728,15 +731,23 @@ func (p *Pipeline) resolveDigestField(ctx *Context, field string) string {
 	if !ok || v == nil {
 		return ""
 	}
-	return strings.TrimSpace(stringify(v))
+	return sanitizeSingleLine(stringify(v))
 }
 
-// renderText 用当前变量表渲染一段模板文本。
+// renderText 用当前变量表渲染一段多行模板（聚合卡片正文）。
 func (p *Pipeline) renderText(ctx *Context, tmpl string) (string, error) {
 	if p.renderer == nil {
-		return tmpl, nil
+		return sanitizeMultiLine(tmpl), nil
 	}
 	return p.renderer.Render(ctx, tmpl)
+}
+
+// renderInline 用当前变量表渲染一段单行模板（聚合卡片标题）。
+func (p *Pipeline) renderInline(ctx *Context, tmpl string) (string, error) {
+	if p.renderer == nil {
+		return sanitizeSingleLine(tmpl), nil
+	}
+	return p.renderer.RenderInline(ctx, tmpl)
 }
 
 // lastActor 返回最近出现的互动者（互动者列表为空时返回空串）。

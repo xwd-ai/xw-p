@@ -2,6 +2,8 @@
 (function () {
   'use strict';
 
+  const { esc } = window.xwData;
+
   const WS = document.getElementById('wf-svg');
   const NS = 'http://www.w3.org/2000/svg';
   const nodeW = 150, nodeH = 54;
@@ -33,9 +35,9 @@
       <rect width="${nodeW}" height="${nodeH}" rx="12" fill="#fff" stroke="${c}" stroke-width="2"/>
       <rect width="${nodeW}" height="${nodeH}" rx="12" fill="${c}" opacity="0.06"/>
       <circle cx="20" cy="${nodeH/2}" r="14" fill="${c}" opacity="0.14"/>
-      <text x="20" y="${nodeH/2 + 5}" font-size="14" text-anchor="middle">${ICONS[n.type]}</text>
-      <text x="44" y="${nodeH/2 - 2}" font-size="13" font-weight="700" fill="#1a1d2e">${(n.type).toUpperCase()}</text>
-      <text x="44" y="${nodeH/2 + 16}" font-size="10.5" fill="#8a8fa3">${n.name || n.id} · 已启用</text>`;
+      <text x="20" y="${nodeH/2 + 5}" font-size="14" text-anchor="middle">${esc(ICONS[n.type])}</text>
+      <text x="44" y="${nodeH/2 - 2}" font-size="13" font-weight="700" fill="#1a1d2e">${esc(String(n.type).toUpperCase())}</text>
+      <text x="44" y="${nodeH/2 + 16}" font-size="10.5" fill="#8a8fa3">${esc(n.name || n.id)} · 已启用</text>`;
     return g;
   }
 
