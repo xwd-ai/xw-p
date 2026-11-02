@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -34,6 +35,9 @@ func (c *consoleEmailProvider) Channel() domain.Channel {
 func (c *consoleEmailProvider) ID() string {
 	return "console-email"
 }
+
+// Probe 供健康检查调用：console 实现只写日志，没有外部依赖，恒为可用。
+func (c *consoleEmailProvider) Probe(context.Context) error { return nil }
 
 // Send 把邮件内容打印到控制台，模拟发送成功。
 //

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"mime"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -297,4 +298,70 @@ func decodeMail(t *testing.T, raw string) (string, string) {
 		t.Fatalf("正文不是合法 base64：%v", err)
 	}
 	return subject, string(decoded)
+}
+
+// Probe 只做 TCP 连通性检查：中继在线时成功，关掉之后失败并给出地址。
+func TestSMTPEmailProviderProbe(t *testing.T) {
+	srv, err := mailertest.New(mailertest.Config{})
+	if err != nil {
+		t.Fatalf("启动测试服务器失败：%v", err)
+	}
+
+	emailProvider, err := NewSMTPEmailProvider(discardLogger(), mailer.Config{
+		Host:    srv.Host(),
+		Port:    srv.Port(),
+		From:    "notify@example.com",
+		TLS:     mailer.TLSDisabled,
+		Timeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("构造 smtp provider 失败：%v", err)
+	}
+	prober, ok := emailProvider.(provider.Prober)
+	if !ok {
+		t.Fatal("smtp 实现应支持主动探测")
+	}
+	if err := prober.Probe(context.Background()); err != nil {
+		t.Fatalf("中继在线时探测应成功：%v", err)
+	}
+
+	srv.Close()
+	if err := prober.Probe(context.Background()); err == nil {
+		t.Error("中继已关闭，探测应失败")
+	}
+}
+
+// 端口没人监听时探测应尽快失败，而不是拖到健康检查超时才返回。
+func TestSMTPEmailProviderProbeUnreachable(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("申请端口失败：%v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close()
+
+	emailProvider, err := NewSMTPEmailProvider(discardLogger(), mailer.Config{
+		Host:    "127.0.0.1",
+		Port:    port,
+		From:    "notify@example.com",
+		TLS:     mailer.TLSDisabled,
+		Timeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("构造 smtp provider 失败：%v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	start := time.Now()
+	err = emailProvider.(provider.Prober).Probe(ctx)
+	if err == nil {
+		t.Fatal("端口无人监听时探测应失败")
+	}
+	if !strings.Contains(err.Error(), "不可达") {
+		t.Errorf("失败原因应说明不可达：%q", err.Error())
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("探测耗时应受超时约束，实际 %s", elapsed)
+	}
 }

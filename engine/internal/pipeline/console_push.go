@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -40,6 +41,9 @@ func (c *consolePushProvider) Channel() domain.Channel {
 func (c *consolePushProvider) ID() string {
 	return "console-push"
 }
+
+// Probe 供健康检查调用：console 实现只写日志，没有外部依赖，恒为可用。
+func (c *consolePushProvider) Probe(context.Context) error { return nil }
 
 // Send 校验 device token 与 payload 体积后打印推送内容，模拟提交成功。
 //

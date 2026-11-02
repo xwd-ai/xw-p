@@ -3,7 +3,10 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net"
+	"strconv"
 	"strings"
 
 	"github.com/xwd-ai/xw-p/engine/internal/domain"
@@ -57,6 +60,22 @@ func (p *smtpEmailProvider) Channel() domain.Channel {
 // ID 返回该实现的稳定标识，供注册表寻址与日志溯源。
 func (p *smtpEmailProvider) ID() string {
 	return "smtp-email"
+}
+
+// Probe 探测 SMTP 中继是否可达：只建立 TCP 连接，不发 EHLO、不做认证。
+//
+// 健康检查回答的是「这条通道现在还通不通」，不是「账号口令还对不对」：
+// 每次探测都完整握手会在中继的登录审计里留下周期性记录，而连接层不通
+// （防火墙、DNS、端口写错）已经覆盖了大多数会让投递整体失败的原因。
+func (p *smtpEmailProvider) Probe(ctx context.Context) error {
+	cfg := p.client.Config()
+	addr := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
+	dialer := net.Dialer{Timeout: cfg.Timeout}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return fmt.Errorf("SMTP 中继 %s 不可达: %w", addr, err)
+	}
+	return conn.Close()
 }
 
 // Send 提交邮件；不感知取消，供只调用 Send 的调用方使用。

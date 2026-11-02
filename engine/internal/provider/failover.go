@@ -180,6 +180,17 @@ func NewFailover(r *Registry) *Failover {
 	return &Failover{registry: r, wait: sleepCtx}
 }
 
+// Registry 返回回退链使用的注册表。
+//
+// 分发阶段据此区分「渠道没配」与「配了但全被停用」——两者都表现为没有
+// 候选，但前者可以回退 mock，后者必须报错。
+func (f *Failover) Registry() *Registry {
+	if f == nil {
+		return nil
+	}
+	return f.registry
+}
+
 // WithRetries 设置渠道级重试策略，返回自身便于链式装配。
 func (f *Failover) WithRetries(t RetryTable) *Failover {
 	if f == nil {

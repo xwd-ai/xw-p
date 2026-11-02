@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xwd-ai/xw-p/engine/internal/provider"
 	"github.com/xwd-ai/xw-p/engine/internal/queue"
 	"github.com/xwd-ai/xw-p/engine/internal/schedule"
 	"github.com/xwd-ai/xw-p/engine/internal/webhook"
@@ -281,6 +282,42 @@ func TestCallbackDisabled(t *testing.T) {
 	for value, want := range cases {
 		if got := (Config{CallbackURL: value}).CallbackDisabled(); got != want {
 			t.Errorf("CallbackURL=%q 的关闭判定 = %v，期望 %v", value, got, want)
+		}
+	}
+}
+
+// 渠道探测：未配置时 30s / 3s，写 off 或 0 表示关闭周期探测，
+// 写错的值回退默认而不是静默停摆。
+func TestProviderProbeConfig(t *testing.T) {
+	cases := []struct {
+		interval string
+		timeout  string
+		want     time.Duration
+		enabled  bool
+		limit    time.Duration
+	}{
+		{interval: "", timeout: "", want: provider.DefaultProbeInterval, enabled: true, limit: provider.DefaultProbeTimeout},
+		{interval: "5s", timeout: "1s", want: 5 * time.Second, enabled: true, limit: time.Second},
+		{interval: "off", timeout: "500ms", want: 0, enabled: false, limit: 500 * time.Millisecond},
+		{interval: "0", timeout: "", want: 0, enabled: false, limit: provider.DefaultProbeTimeout},
+		{interval: "每周", timeout: "", want: provider.DefaultProbeInterval, enabled: true, limit: provider.DefaultProbeTimeout},
+	}
+	for _, tc := range cases {
+		t.Setenv("XW_PROVIDER_PROBE_INTERVAL", tc.interval)
+		t.Setenv("XW_PROVIDER_PROBE_TIMEOUT", tc.timeout)
+		cfg := Load()
+		if cfg.ProviderProbeInterval != tc.want {
+			t.Errorf("interval=%q 解析为 %s，期望 %s", tc.interval, cfg.ProviderProbeInterval, tc.want)
+		}
+		if cfg.ProviderProbeEnabled() != tc.enabled {
+			t.Errorf("interval=%q 的启用判定 = %v，期望 %v", tc.interval, cfg.ProviderProbeEnabled(), tc.enabled)
+		}
+		if got := cfg.ProviderProbeTimeoutOrDefault(); got != tc.limit {
+			t.Errorf("timeout=%q 解析为 %s，期望 %s", tc.timeout, got, tc.limit)
+		}
+		// 关闭周期探测时仍要给出一个可用的默认间隔，便于日志与手动探测。
+		if cfg.ProviderProbeIntervalOrDefault() <= 0 {
+			t.Errorf("interval=%q 的兜底间隔应为正数", tc.interval)
 		}
 	}
 }

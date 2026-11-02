@@ -12,6 +12,7 @@ import (
 
 	"github.com/xwd-ai/xw-p/engine/internal/config"
 	"github.com/xwd-ai/xw-p/engine/internal/domain"
+	"github.com/xwd-ai/xw-p/engine/internal/provider"
 	"github.com/xwd-ai/xw-p/engine/internal/schedule"
 )
 
@@ -179,5 +180,33 @@ func TestBuildRegistryRejectsInvalidConfig(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "credentials") {
 		t.Errorf("错误信息应指出缺少凭据：%v", err)
+	}
+}
+
+// 管线装配完成后必须带上一份健康记录器：运维接口读的就是它，装配漏了就
+// 只能看到空列表。默认注册表的五个实现此刻都还没有观测，状态应为 unknown。
+func TestNewPipelineWiresProviderHealth(t *testing.T) {
+	cfg := config.Config{DigestStore: "memory", ProvidersFile: ""}
+	pipe, closeFn, err := newPipeline(discardLogger(), cfg)
+	if err != nil {
+		t.Fatalf("装配管线失败：%v", err)
+	}
+	defer closeFn()
+
+	health := pipe.Health()
+	if health == nil {
+		t.Fatal("管线应带有健康记录器")
+	}
+	snapshot := health.Snapshot()
+	if len(snapshot) != len(pipe.Registry().Entries()) {
+		t.Fatalf("快照应覆盖全部登记条目：%d vs %d", len(snapshot), len(pipe.Registry().Entries()))
+	}
+	for _, st := range snapshot {
+		if st.State != provider.StateUnknown {
+			t.Errorf("%s 尚未观测，状态应为 unknown，实际 %s", st.ID, st.State)
+		}
+	}
+	if got := health.DownAfter(); got != provider.DefaultDownAfter {
+		t.Errorf("默认判死阈值 = %d，期望 %d", got, provider.DefaultDownAfter)
 	}
 }

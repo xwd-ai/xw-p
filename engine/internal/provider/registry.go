@@ -235,6 +235,22 @@ func (r *Registry) Has(ch domain.Channel) bool {
 	return ok
 }
 
+// Registered 判断某渠道是否登记过实现（无论启用与否）。
+//
+// 用于区分两种「没有可用实现」：渠道压根没配（分发阶段保持 mock 打印），
+// 与渠道配了但全被停用（应当报错——停用的意思是「别走这条路」，不是
+// 「假装发成功了」）。
+func (r *Registry) Registered(ch domain.Channel) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, e := range r.entries {
+		if e.Channel == ch {
+			return true
+		}
+	}
+	return false
+}
+
 // Channels 返回登记过的渠道（去重），顺序与 domain.AllChannels 一致，便于日志稳定可读。
 func (r *Registry) Channels() []domain.Channel {
 	r.mu.RLock()

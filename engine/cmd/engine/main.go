@@ -103,6 +103,31 @@ func main() {
 		WithNotifier(callback)
 
 	var wg sync.WaitGroup
+
+	// 渠道健康：投递结果自动记入健康记录器，周期探测补齐「这段时间没有消息
+	// 经过」的实现。探测只建立连接、不真的投递，不会往群里或用户手机上发
+	// 测试消息；关掉周期探测后，运维接口仍可手动触发一次。
+	checker := provider.NewChecker(pipe.Registry(), pipe.Health(), logger).
+		WithInterval(cfg.ProviderProbeIntervalOrDefault()).
+		WithTimeout(cfg.ProviderProbeTimeoutOrDefault())
+	if cfg.ProviderProbeEnabled() {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			checker.Run(ctx)
+		}()
+		logger.Info("[engine] 渠道健康探测已启用",
+			"interval", checker.Interval(),
+			"timeout", checker.Timeout(),
+			"downAfter", pipe.Health().DownAfter(),
+		)
+	} else {
+		logger.Info("[engine] 渠道健康探测已关闭",
+			"reason", "XW_PROVIDER_PROBE_INTERVAL<=0",
+			"fallback", "仍按投递结果记录，可经运维接口手动探测",
+		)
+	}
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -148,11 +173,13 @@ func main() {
 		)
 	}
 
-	// 运维接口：死信查询、重放与丢弃。死信的键布局与记录格式由队列包定义，
-	// 这里只把队列方法挂到 HTTP 上，避免出现第二份「键名拼装」的实现。
+	// 运维接口：死信查询、重放与丢弃，以及渠道健康查询、启停与手动探测。
+	// 死信的键布局与记录格式由队列包定义，这里只把队列方法挂到 HTTP 上，
+	// 避免出现第二份「键名拼装」的实现。
 	if cfg.AdminAddr != "" {
 		wg.Add(1)
-		adminServer := admin.New(consumer, logger)
+		adminServer := admin.New(consumer, logger).
+			WithProviders(pipe.Registry(), pipe.Health(), checker)
 		go func() {
 			defer wg.Done()
 			if err := adminServer.Run(ctx, cfg.AdminAddr); err != nil {

@@ -3,6 +3,7 @@ package pipeline
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -214,6 +215,25 @@ func (s *JSONLInboxStore) ensureFresh() error {
 		return nil
 	}
 	return s.loadIndex()
+}
+
+// Probe 检查收件箱文件当前是否可写：打开（必要时创建）后立即关闭，不写内容。
+//
+// 健康探测不该往收件箱里塞测试消息，但「目录只读 / 磁盘挂载丢了」这类故障
+// 在第一条消息到来之前就该暴露，所以这里只验证能否拿到追加写的句柄。
+func (s *JSONLInboxStore) Probe() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if dir := filepath.Dir(s.path); dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("收件箱目录不可用: %w", err)
+		}
+	}
+	f, err := os.OpenFile(s.path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
+	if err != nil {
+		return fmt.Errorf("收件箱文件不可写: %w", err)
+	}
+	return f.Close()
 }
 
 // Save 追加写入条目；同 ID 已存在时返回 false 且不落盘。

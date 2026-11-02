@@ -18,6 +18,8 @@ import (
 type dispatchStage struct {
 	logger   *slog.Logger
 	failover *Failover
+	// health 记录每次投递的成败，供运维接口观察渠道当前是否可用。
+	health *HealthTracker
 }
 
 // NewDispatchStage 创建分发阶段。
@@ -29,7 +31,11 @@ func NewDispatchStage(logger *slog.Logger, registry *ProviderRegistry) Stage {
 	if registry == nil {
 		registry = NewProviderRegistry()
 	}
-	return &dispatchStage{logger: logger, failover: NewFailover(registry)}
+	return &dispatchStage{
+		logger:   logger,
+		failover: NewFailover(registry),
+		health:   NewHealthTracker(registry),
+	}
 }
 
 // Apply 执行投递：有 provider 的渠道真实调用（失败时按优先级回退），其余 mock 打印。
@@ -62,7 +68,21 @@ func (d *dispatchStage) Apply(ctx *Context, step domain.Step) error {
 	started := time.Now()
 	outcome := d.failover.Send(ctx.Context(), delivery)
 	res.Duration = time.Since(started)
+	// 投递结果是健康的被动观测来源：消息真的走通了没有，比探测更接近事实。
+	d.recordHealth(outcome)
 	if outcome.Candidates == 0 {
+		if reg := d.failover.Registry(); reg != nil && reg.Registered(ch) {
+			// 渠道配了实现但全被停用：这是运维的明确决定，不该退化成 mock
+			// 打印并算作成功——那会让「停用后消息去哪了」变成一个查不出的问题。
+			res.Error = "渠道 " + string(ch) + " 的实现均已停用"
+			ctx.Results[step.ID] = res
+			d.logger.Warn("[dispatch] 渠道实现均已停用，投递未执行",
+				"stepId", step.ID,
+				"channel", string(ch),
+				"workflow", ctx.Msg.Name,
+			)
+			return &deliveryError{channel: ch, reason: res.Error}
+		}
 		// 未注册可用 provider：保持原有 mock 打印，视为投递成功（不阻断后续步骤）。
 		d.logger.Info("[mock] 分发步骤（未注册 provider）",
 			"stepId", step.ID,
@@ -114,6 +134,27 @@ func (d *dispatchStage) Apply(ctx *Context, step domain.Step) error {
 	res.Error = outcome.Result.Reason
 	ctx.Results[step.ID] = res
 	return &deliveryError{channel: ch, reason: outcome.Result.Reason}
+}
+
+// recordHealth 把一次投递的结果折算成健康观测。
+//
+// 只记「与实现相关」的失败：缺收件地址、正文为空这类 Terminal 失败换哪个
+// 实现都是同样结论，算在渠道头上会让一条格式错误的消息把整个渠道标红。
+// 成功记在实际完成投递的实现上——回退到备选时，主实现已经在失败的尝试里
+// 各记过一次，这里只补那次成功。
+func (d *dispatchStage) recordHealth(o Outcome) {
+	if d.health == nil {
+		return
+	}
+	for _, a := range o.Attempts {
+		if a.Sent || a.Terminal {
+			continue
+		}
+		d.health.Record(a.ProviderID, false, a.Reason)
+	}
+	if o.Sent {
+		d.health.Record(o.Provider.ID, true, o.Result.Reason)
+	}
 }
 
 // skipSummary 把失败的尝试拼成「标识: 原因」，用于回退成功的告警日志。

@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -45,6 +46,9 @@ func (c *consoleChatProvider) Channel() domain.Channel {
 func (c *consoleChatProvider) ID() string {
 	return "console-chat"
 }
+
+// Probe 供健康检查调用：console 实现只写日志，没有外部依赖，恒为可用。
+func (c *consoleChatProvider) Probe(context.Context) error { return nil }
 
 // Send 校验 webhook 地址与消息体后打印推送内容，模拟提交成功。
 //

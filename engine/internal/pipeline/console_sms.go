@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -48,6 +49,9 @@ func (c *consoleSMSProvider) Channel() domain.Channel {
 func (c *consoleSMSProvider) ID() string {
 	return "console-sms"
 }
+
+// Probe 供健康检查调用：console 实现只写日志，没有外部依赖，恒为可用。
+func (c *consoleSMSProvider) Probe(context.Context) error { return nil }
 
 // Send 校验手机号并打印短信内容，模拟提交成功。
 //

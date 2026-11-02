@@ -66,3 +66,17 @@ func DefaultRetryTable() RetryTable { return provider.DefaultRetryTable() }
 func NewRetryTable(defaults RetryPolicy, overrides map[domain.Channel]RetryPolicy) (RetryTable, error) {
 	return provider.NewRetryTable(defaults, overrides)
 }
+
+// HealthTracker 汇总渠道实现的健康观测（投递结果与主动探测）。
+type HealthTracker = provider.HealthTracker
+
+// ProviderStatus 是一条渠道实现的健康快照。
+type ProviderStatus = provider.Status
+
+// ProviderState 是渠道实现的健康状态（unknown / up / degraded / down）。
+type ProviderState = provider.State
+
+// NewHealthTracker 在注册表上构造健康记录器。
+func NewHealthTracker(r *ProviderRegistry) *HealthTracker {
+	return provider.NewHealthTracker(r)
+}

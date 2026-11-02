@@ -695,6 +695,10 @@ func (p *Pipeline) deliverDigest(ctx *Context, step domain.Step, spec DigestSpec
 	if outcome.Candidates == 0 {
 		return false, outcome, fmt.Errorf("渠道 %s 未注册 provider，无法投递聚合卡片", spec.Channel)
 	}
+	// 聚合卡片也是一次投递，成败同样计入渠道健康。
+	if p.dispatch != nil {
+		p.dispatch.recordHealth(outcome)
+	}
 	if !outcome.Sent {
 		return false, outcome, errors.New("投递聚合卡片失败: " + outcome.Result.Reason)
 	}

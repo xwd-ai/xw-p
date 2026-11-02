@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -46,6 +47,16 @@ func (p *inAppProvider) ID() string {
 // 供 digest 步骤在同一份存储上原地改写聚合卡片。
 func (p *inAppProvider) InboxStore() InboxStore {
 	return p.store
+}
+
+// Probe 供健康检查调用：站内信没有外部网关，探的是收件箱存储还能不能写。
+//
+// 存储自己实现 Probe 时交给它判断（JSONL 存储检查文件句柄），否则视为可用。
+func (p *inAppProvider) Probe(context.Context) error {
+	if prober, ok := p.store.(interface{ Probe() error }); ok {
+		return prober.Probe()
+	}
+	return nil
 }
 
 // Send 把一条站内信写入订阅者收件箱。

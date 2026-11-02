@@ -111,6 +111,31 @@ func (p *Pipeline) ProviderRetries() RetryTable {
 	return p.dispatch.failover.Retries()
 }
 
+// WithHealth 换掉分发阶段使用的健康记录器，返回管线自身便于链式装配。
+//
+// 传 nil 表示重置为一份新的空记录器（仍然记录，只是不带历史）；要让管线
+// 完全不记健康，得在装配前就不创建分发阶段——正常装配下不需要这么做。
+func (p *Pipeline) WithHealth(t *HealthTracker) *Pipeline {
+	if p.dispatch == nil {
+		return p
+	}
+	if t == nil {
+		t = NewHealthTracker(p.registry)
+	}
+	p.dispatch.health = t
+	return p
+}
+
+// Health 返回分发阶段使用的健康记录器。
+//
+// 运维接口据此列出各实现的当前状态，也可以在外部主动写入探测结果。
+func (p *Pipeline) Health() *HealthTracker {
+	if p.dispatch == nil {
+		return nil
+	}
+	return p.dispatch.health
+}
+
 // WithDigestStore 注入聚合卡片存储（如多引擎实例共享的 Redis 实现），
 // 返回管线自身便于链式装配。传 nil 表示恢复默认内存存储。
 func (p *Pipeline) WithDigestStore(store DigestStore) *Pipeline {

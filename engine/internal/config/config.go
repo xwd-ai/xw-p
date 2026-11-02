@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/xwd-ai/xw-p/engine/internal/backoff"
+	"github.com/xwd-ai/xw-p/engine/internal/provider"
 	"github.com/xwd-ai/xw-p/engine/internal/queue"
 	"github.com/xwd-ai/xw-p/engine/internal/schedule"
 	"github.com/xwd-ai/xw-p/engine/internal/webhook"
@@ -62,6 +63,10 @@ type Config struct {
 	// ProvidersFile 是渠道配置文件（JSON）的路径：声明每个渠道用哪种实现、
 	// 优先级、开关与凭据。为空表示使用内置的 console 实现。
 	ProvidersFile string
+	// ProviderProbeInterval / ProviderProbeTimeout 是渠道健康探测的周期与
+	// 单次超时。间隔 <=0 表示不做周期探测（运维接口仍可手动触发）。
+	ProviderProbeInterval time.Duration
+	ProviderProbeTimeout  time.Duration
 	// ExecutionFile 是投递结果回写的执行明细文件路径。引擎与 API 共用同一份
 	// 数据目录，默认指向 api/data/executions.jsonl；写 off/disabled/none/- 表示
 	// 不回写（只保留日志与执行汇总）。
@@ -125,14 +130,16 @@ func Load() Config {
 		RetryJitter:      envFloat("XW_RETRY_JITTER", queue.DefaultRetryJitter),
 		RetryInterval:    envDuration("XW_RETRY_INTERVAL", worker.DefaultRetryInterval),
 
-		WorkflowsFile:   strings.TrimSpace(os.Getenv("XW_WORKFLOWS_FILE")),
-		ProvidersFile:   strings.TrimSpace(os.Getenv("XW_PROVIDERS_FILE")),
-		ExecutionFile:   strings.TrimSpace(envOr("XW_EXECUTION_FILE", defaultExecutionFile)),
-		CallbackURL:     strings.TrimSpace(os.Getenv("XW_CALLBACK_URL")),
-		CallbackTimeout: envDuration("XW_CALLBACK_TIMEOUT", webhook.DefaultTimeout),
-		CallbackWorkers: envInt("XW_CALLBACK_WORKERS", webhook.DefaultWorkers),
-		CallbackQueue:   envInt("XW_CALLBACK_QUEUE", webhook.DefaultQueueSize),
-		CallbackSecret:  strings.TrimSpace(os.Getenv("XW_CALLBACK_SECRET")),
+		WorkflowsFile:         strings.TrimSpace(os.Getenv("XW_WORKFLOWS_FILE")),
+		ProvidersFile:         strings.TrimSpace(os.Getenv("XW_PROVIDERS_FILE")),
+		ProviderProbeInterval: probeInterval(),
+		ProviderProbeTimeout:  envDuration("XW_PROVIDER_PROBE_TIMEOUT", provider.DefaultProbeTimeout),
+		ExecutionFile:         strings.TrimSpace(envOr("XW_EXECUTION_FILE", defaultExecutionFile)),
+		CallbackURL:           strings.TrimSpace(os.Getenv("XW_CALLBACK_URL")),
+		CallbackTimeout:       envDuration("XW_CALLBACK_TIMEOUT", webhook.DefaultTimeout),
+		CallbackWorkers:       envInt("XW_CALLBACK_WORKERS", webhook.DefaultWorkers),
+		CallbackQueue:         envInt("XW_CALLBACK_QUEUE", webhook.DefaultQueueSize),
+		CallbackSecret:        strings.TrimSpace(os.Getenv("XW_CALLBACK_SECRET")),
 
 		CallbackRetryAttempts: envInt("XW_CALLBACK_RETRY_ATTEMPTS", webhook.DefaultRetryAttempts),
 		CallbackRetryBase:     envDuration("XW_CALLBACK_RETRY_BASE", webhook.DefaultRetryBase),
@@ -177,6 +184,39 @@ func (c Config) ExecutionDisabled() bool {
 		return true
 	}
 	return false
+}
+
+// probeInterval 解析渠道探测间隔。
+//
+// off / disabled / 0 都表示关闭周期探测：健康状态仍由投递结果更新，运维接口
+// 也还能手动探一次。写错的值回退默认而不是静默停摆——一个拼写错误让探测
+// 再也不跑，比探测间隔变成 30 秒要难发现得多。
+func probeInterval() time.Duration {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv("XW_PROVIDER_PROBE_INTERVAL")))
+	switch raw {
+	case "off", "disabled", "none", "-":
+		return 0
+	}
+	return envDuration("XW_PROVIDER_PROBE_INTERVAL", provider.DefaultProbeInterval)
+}
+
+// ProviderProbeEnabled 判断是否开启周期探测。
+func (c Config) ProviderProbeEnabled() bool { return c.ProviderProbeInterval > 0 }
+
+// ProviderProbeIntervalOrDefault 返回生效的探测间隔。
+func (c Config) ProviderProbeIntervalOrDefault() time.Duration {
+	if c.ProviderProbeInterval > 0 {
+		return c.ProviderProbeInterval
+	}
+	return provider.DefaultProbeInterval
+}
+
+// ProviderProbeTimeoutOrDefault 返回生效的单次探测超时。
+func (c Config) ProviderProbeTimeoutOrDefault() time.Duration {
+	if c.ProviderProbeTimeout > 0 {
+		return c.ProviderProbeTimeout
+	}
+	return provider.DefaultProbeTimeout
 }
 
 // adminListenAddr 解析运维接口的监听地址。
