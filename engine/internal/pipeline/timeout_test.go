@@ -20,13 +20,21 @@ type blockingProvider struct {
 	channel domain.Channel
 	called  chan struct{}
 	once    sync.Once
+	// finished 在观察结果写完之后关闭：管线在超时那一刻就返回，provider 的
+	// goroutine 还要过一会儿才走到写回，用例读状态前必须等这一下。
+	finished chan struct{}
+	doneOnce sync.Once
 
 	mu       sync.Mutex
 	observed error
 }
 
 func newBlockingProvider(ch domain.Channel) *blockingProvider {
-	return &blockingProvider{channel: ch, called: make(chan struct{})}
+	return &blockingProvider{
+		channel:  ch,
+		called:   make(chan struct{}),
+		finished: make(chan struct{}),
+	}
 }
 
 func (b *blockingProvider) Channel() domain.Channel { return b.channel }
@@ -39,6 +47,7 @@ func (b *blockingProvider) Send(Delivery) SendResult {
 func (b *blockingProvider) SendContext(ctx context.Context, _ Delivery) SendResult {
 	b.once.Do(func() { close(b.called) })
 	<-ctx.Done()
+	defer b.doneOnce.Do(func() { close(b.finished) })
 
 	b.mu.Lock()
 	b.observed = ctx.Err()
@@ -51,6 +60,16 @@ func (b *blockingProvider) observedErr() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.observed
+}
+
+// waitFinished 等待 provider 走完一次 SendContext（写完观察结果）。
+func (b *blockingProvider) waitFinished(timeout time.Duration) bool {
+	select {
+	case <-b.finished:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
 }
 
 // sleepProvider 不感知取消，只按固定时长睡眠后返回成功：
@@ -192,6 +211,9 @@ func TestStepTimeoutCancelsSlowStep(t *testing.T) {
 	case <-provider.called:
 	default:
 		t.Fatalf("provider 未收到投递调用")
+	}
+	if !provider.waitFinished(2 * time.Second) {
+		t.Fatalf("provider 未在超时后收尾")
 	}
 	if observed := provider.observedErr(); observed == nil {
 		t.Errorf("provider 未观察到 context 取消，超时没有传下去")
