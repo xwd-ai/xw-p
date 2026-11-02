@@ -6,7 +6,8 @@
 // 退出时等待在途消息处理完毕；消费到的消息按自带步骤快照执行整条工作流
 // （filter → transform → render → dispatch，delay 步骤交给调度器续跑），
 // 同时运行延迟调度器，按时唤醒 delay 步骤之后的续跑步骤，未到期任务
-// 存放在 Redis 里，重启或换实例都能接上；
+// 存放在 Redis 里，重启或换实例都能接上；每个渠道的投递结果写入执行明细，
+// 配置了回调地址时再异步推给接入方；
 // 另起一个本地管理接口，供运维查询、重放与丢弃死信。
 package main
 
@@ -29,6 +30,7 @@ import (
 	"github.com/xwd-ai/xw-p/engine/internal/queue"
 	"github.com/xwd-ai/xw-p/engine/internal/runner"
 	"github.com/xwd-ai/xw-p/engine/internal/schedule"
+	"github.com/xwd-ai/xw-p/engine/internal/webhook"
 	"github.com/xwd-ai/xw-p/engine/internal/worker"
 )
 
@@ -80,9 +82,14 @@ func main() {
 	recorder, closeExecution := newExecutionRecorder(logger, cfg)
 	defer closeExecution()
 
+	// 投递结果回调：接入方不必轮询执行明细，每次执行结束后把各渠道结果
+	// 推到它自己的端点。发送在独立 goroutine 里进行，不占用消费路径。
+	callback, closeCallback := newCallbackDispatcher(logger, cfg)
+	defer closeCallback()
+
 	// 延迟调度器：到期任务 → 管线续跑。delay 步骤到期后把剩余步骤跑完。
 	// 未到期任务存在 Redis，重启或换实例都不会丢。
-	scheduler, closeDelayStore := newDelayScheduler(logger, pipe, cfg, recorder)
+	scheduler, closeDelayStore := newDelayScheduler(logger, pipe, cfg, recorder, callback)
 	defer closeDelayStore()
 
 	// 把调度器接成管线的延迟出口：没有这一句，delay 步骤会以「未配置调度器」
@@ -91,7 +98,9 @@ func main() {
 
 	// 执行器：把队列消息还原成工作流并跑完步骤。工作流定义优先取消息自带
 	// 的快照，快照缺失时回退到启动时加载的定义表。
-	exec := runner.New(pipe, loadWorkflowSource(logger, cfg), logger).WithRecorder(recorder)
+	exec := runner.New(pipe, loadWorkflowSource(logger, cfg), logger).
+		WithRecorder(recorder).
+		WithNotifier(callback)
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -172,7 +181,7 @@ func main() {
 //
 // in_app 渠道写入默认收件箱存储，其余渠道走 console mock，
 // 与本进程的投递语义保持一致。返回值里的函数用于释放存储连接。
-func newDelayScheduler(logger *slog.Logger, pipe *pipeline.Pipeline, cfg config.Config, recorder *execution.Recorder) (*schedule.Scheduler, func()) {
+func newDelayScheduler(logger *slog.Logger, pipe *pipeline.Pipeline, cfg config.Config, recorder *execution.Recorder, notifier runner.Notifier) (*schedule.Scheduler, func()) {
 	handler := func(ctx context.Context, item schedule.Item) error {
 		deferral, results, err := pipe.Resume(item.Payload)
 		if err != nil {
@@ -195,6 +204,8 @@ func newDelayScheduler(logger *slog.Logger, pipe *pipeline.Pipeline, cfg config.
 		// 续跑同样是一次投递：不写执行明细的话，delay 之后的渠道在后台
 		// 就查不到结果（触发时刻只有前半程的明细）。
 		recorded := runner.RecordResults(recorder, logger, deferral.Message, results)
+		// 回调同理：接入方先前只拿到前半程的结果，续跑的这一段要补推。
+		notified := runner.NotifyResults(notifier, deferral.Message, results)
 		logger.Info("[engine] 延迟任务已续跑",
 			"workflow", deferral.WorkflowName,
 			"delayStep", deferral.StepID,
@@ -202,6 +213,7 @@ func newDelayScheduler(logger *slog.Logger, pipe *pipeline.Pipeline, cfg config.
 			"steps", len(results),
 			"sent", sent,
 			"recorded", recorded,
+			"notified", notified,
 		)
 		return nil
 	}
@@ -236,6 +248,66 @@ func newExecutionRecorder(logger *slog.Logger, cfg config.Config) (*execution.Re
 		if err := store.Close(); err != nil {
 			logger.Warn("[engine] 关闭执行明细文件失败", "file", store.Path(), "error", err)
 		}
+	}
+}
+
+// newCallbackDispatcher 装配投递结果的回调。
+//
+// 三种情况：未配置（回调关闭）、地址不合法（记错误并关闭）、正常装配。
+// 地址写错不让进程起不来——回调是旁路，投递本身仍应继续；但必须在启动
+// 日志里说清楚，否则「接入方一直收不到回调」会被当成引擎没发结果。
+func newCallbackDispatcher(logger *slog.Logger, cfg config.Config) (*webhook.Dispatcher, func()) {
+	if cfg.CallbackDisabled() {
+		logger.Info("[engine] 投递结果回调未启用", "reason", "XW_CALLBACK_URL 为空")
+		return nil, func() {}
+	}
+
+	target, err := webhook.ParseTarget(cfg.CallbackURL)
+	if err != nil {
+		logger.Error("[engine] 回调地址不合法，本次不回调", "error", err)
+		return nil, func() {}
+	}
+
+	opts := webhook.Options{
+		Workers:   cfg.CallbackWorkers,
+		QueueSize: cfg.CallbackQueue,
+		Timeout:   cfg.CallbackTimeout,
+		Logger:    logger,
+	}.Normalized()
+
+	dispatcher := webhook.NewDispatcher(target, webhook.NewClient(opts.Timeout), opts)
+	if dispatcher == nil {
+		return nil, func() {}
+	}
+
+	logger.Info("[engine] 投递结果将回调给接入方",
+		"target", target.String(),
+		"timeout", opts.Timeout,
+		"workers", opts.Workers,
+		"queue", opts.QueueSize,
+	)
+
+	return dispatcher, func() {
+		// 退出时把队列里剩下的事件发完：这些回执对应的消息已经确认，
+		// 丢掉就再也没有第二次机会。最多等到退出宽限，避免被不响应的
+		// 接收方拖住整个进程。
+		ctx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownGraceOrDefault())
+		defer cancel()
+		stats := dispatcher.Stats()
+		if err := dispatcher.Close(ctx); err != nil {
+			logger.Warn("[engine] 回调分发器未能在宽限内排空",
+				"error", err,
+				"delivered", stats.Delivered,
+				"failed", stats.Failed,
+			)
+			return
+		}
+		logger.Info("[engine] 回调分发器已关闭",
+			"enqueued", stats.Enqueued,
+			"delivered", stats.Delivered,
+			"failed", stats.Failed,
+			"dropped", stats.Dropped,
+		)
 	}
 }
 

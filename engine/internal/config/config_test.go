@@ -7,6 +7,7 @@ import (
 
 	"github.com/xwd-ai/xw-p/engine/internal/queue"
 	"github.com/xwd-ai/xw-p/engine/internal/schedule"
+	"github.com/xwd-ai/xw-p/engine/internal/webhook"
 	"github.com/xwd-ai/xw-p/engine/internal/worker"
 )
 
@@ -188,6 +189,63 @@ func TestExecutionDisabled(t *testing.T) {
 	for value, want := range cases {
 		if got := (Config{ExecutionFile: value}).ExecutionDisabled(); got != want {
 			t.Errorf("ExecutionFile=%q 的关闭判定 = %v，期望 %v", value, got, want)
+		}
+	}
+}
+
+// 回调配置：地址去空白，超时/并发/队列有可用默认值，写 off 系列值表示关闭。
+func TestLoadReadsCallbackEnv(t *testing.T) {
+	t.Setenv("XW_CALLBACK_URL", "")
+	t.Setenv("XW_CALLBACK_TIMEOUT", "")
+	t.Setenv("XW_CALLBACK_WORKERS", "")
+	t.Setenv("XW_CALLBACK_QUEUE", "")
+	cfg := Load()
+	if !cfg.CallbackDisabled() {
+		t.Error("未配置地址时应视为关闭")
+	}
+	if cfg.CallbackTimeout != webhook.DefaultTimeout {
+		t.Errorf("超时默认值应为 %v，实际 %v", webhook.DefaultTimeout, cfg.CallbackTimeout)
+	}
+	if cfg.CallbackWorkers != webhook.DefaultWorkers {
+		t.Errorf("并发默认值应为 %d，实际 %d", webhook.DefaultWorkers, cfg.CallbackWorkers)
+	}
+	if cfg.CallbackQueue != webhook.DefaultQueueSize {
+		t.Errorf("队列默认值应为 %d，实际 %d", webhook.DefaultQueueSize, cfg.CallbackQueue)
+	}
+
+	t.Setenv("XW_CALLBACK_URL", "  https://community.example.com/hooks/xw  ")
+	t.Setenv("XW_CALLBACK_TIMEOUT", "3s")
+	t.Setenv("XW_CALLBACK_WORKERS", "4")
+	t.Setenv("XW_CALLBACK_QUEUE", "128")
+	cfg = Load()
+	if cfg.CallbackURL != "https://community.example.com/hooks/xw" {
+		t.Errorf("XW_CALLBACK_URL 应去空白，实际 %q", cfg.CallbackURL)
+	}
+	if cfg.CallbackDisabled() {
+		t.Error("配置了地址时不应判定为关闭")
+	}
+	if cfg.CallbackTimeout != 3*time.Second {
+		t.Errorf("超时应解析为 3s，实际 %v", cfg.CallbackTimeout)
+	}
+	if cfg.CallbackWorkers != 4 || cfg.CallbackQueue != 128 {
+		t.Errorf("并发与队列配置未生效: %d / %d", cfg.CallbackWorkers, cfg.CallbackQueue)
+	}
+}
+
+func TestCallbackDisabled(t *testing.T) {
+	cases := map[string]bool{
+		"":                               true,
+		"off":                            true,
+		"OFF":                            true,
+		" disabled ":                     true,
+		"none":                           true,
+		"-":                              true,
+		"https://community.example/cb":   false,
+		"http://127.0.0.1:8099/callback": false,
+	}
+	for value, want := range cases {
+		if got := (Config{CallbackURL: value}).CallbackDisabled(); got != want {
+			t.Errorf("CallbackURL=%q 的关闭判定 = %v，期望 %v", value, got, want)
 		}
 	}
 }

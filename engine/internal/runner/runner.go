@@ -4,6 +4,7 @@
 //   - 决定这条消息该执行哪份步骤定义（消息自带的快照优先，其次按名称回退查找）；
 //   - 调用 pipeline 执行，并把结果汇总成一条可读的执行报告；
 //   - 把每个渠道的投递结果回写成执行明细（见 writeback.go）；
+//   - 把同一次执行的结果投给回调队列（见 callback.go）；
 //   - 区分「不可修复」与「暂时性」失败：前者记日志后由消费方确认丢弃，后者
 //     交由消费方保留在途记录等待重投。
 //
@@ -50,6 +51,9 @@ type Report struct {
 	Rejected string
 	// Recorded 是回写到执行明细的条数（未启用回写时为 0）。
 	Recorded int
+	// Notified 表示本次执行的结果事件已交给回调队列（未配置回调、
+	// 没有投递动作或队列已满时为 false）。
+	Notified bool
 	// Duration 是这次执行耗时。
 	Duration time.Duration
 }
@@ -60,6 +64,7 @@ type Runner struct {
 	source   Source
 	logger   *slog.Logger
 	recorder *execution.Recorder
+	notifier Notifier
 }
 
 // New 创建 Runner。source 可为 nil（只接受自带步骤快照的消息）；
@@ -74,6 +79,12 @@ func New(pipe *pipeline.Pipeline, source Source, logger *slog.Logger) *Runner {
 // WithRecorder 接上执行明细回写；recorder 为 nil 时只执行不记账。
 func (r *Runner) WithRecorder(recorder *execution.Recorder) *Runner {
 	r.recorder = recorder
+	return r
+}
+
+// WithNotifier 接上投递结果的回调；notifier 为 nil 时不回调。
+func (r *Runner) WithNotifier(notifier Notifier) *Runner {
+	r.notifier = notifier
 	return r
 }
 
@@ -127,6 +138,10 @@ func (r *Runner) Run(msg queue.QueuedMessage) (Report, error) {
 	// 投递结果回写执行明细：引擎是 Redis 队列的实际消费方，不写这一份，
 	// 后台「执行详情」就只能看到触发、看不到每个渠道最后有没有发出去。
 	rep.Recorded = RecordResults(r.recorder, r.logger, msg, results)
+
+	// 回调与明细同源：接入方不必轮询执行明细接口就能拿到结果。
+	// 入队即返回，HTTP 提交在回调侧异步完成。
+	rep.Notified = NotifyResults(r.notifier, msg, results)
 
 	r.logReport(&rep)
 	return rep, nil
@@ -187,6 +202,7 @@ func (r *Runner) logReport(rep *Report) {
 		"shortCircuited", rep.ShortCircuited,
 		"deferred", rep.Deferred,
 		"recorded", rep.Recorded,
+		"notified", rep.Notified,
 		"duration", rep.Duration,
 	}
 	if rep.Failed > 0 || rep.ShortCircuited > 0 {

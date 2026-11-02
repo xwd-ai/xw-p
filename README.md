@@ -112,6 +112,10 @@ API 侧：
 | `XW_WORKFLOWS_FILE` | 空 | 工作流定义快照文件（JSON 数组）；仅用于给没有携带步骤的消息按名称回退查找 |
 | `XW_PROVIDERS_FILE` | 空 | 渠道配置文件（JSON）；为空时使用内置的 console 实现 |
 | `XW_EXECUTION_FILE` | `api/data/executions.jsonl` | 投递结果回写的执行明细文件，与 API 共用同一份；写 `off` 表示不回写 |
+| `XW_CALLBACK_URL` | 空 | 投递结果回调地址（只接受 https，本机回环可用 http）；为空表示不回调 |
+| `XW_CALLBACK_TIMEOUT` | `5s` | 单次回调的超时 |
+| `XW_CALLBACK_WORKERS` | `2` | 回调的发送并发数，取值 `1`–`16` |
+| `XW_CALLBACK_QUEUE` | `256` | 回调事件的缓冲队列长度，满了丢弃事件而不阻塞投递 |
 | `XW_ADMIN_ADDR` | `127.0.0.1:<ENGINE_PORT>` | 管理接口监听地址（死信查询/重放）；`off` 表示不启动 |
 
 超时是链路兜底：渠道卡住时管线不再无限等待，超时的步骤与后续步骤都会被记为失败/短路并写进执行明细。超时值应大于下游的正常延迟（例如设为渠道 P99 的数倍），而不是贴着平均值设置。
@@ -524,6 +528,31 @@ psql "$XW_DATABASE_URL" -f scripts/migrations/006_execution_indexes.sql
 仪表盘统计（`GET /v1/dashboard/stats`）同样不保留原始记录：Postgres 侧用 `count(*) FILTER` / `jsonb_array_elements_text` / `date_trunc` 三条聚合查询直接出结果，JSONL 后端逐行流式累加，内存占用与记录条数无关。
 
 收件箱（`GET /v1/inbox`）的未读计数不重复扫描：每个订阅者的快照（消息列表、未读条数、消息总数）按「收件箱来源版本 + 该订阅者已读版本」缓存，版本没变时直接返回缓存，既不读收件箱文件也不把投递记录读进内存。版本探测本身很廉价——收件箱文件取 `stat`，JSONL 投递存储取 `stat`（大小 + 修改时刻），Postgres 取 `pg_stat_user_tables` 的写入计数并叠加进程内写入计数补齐统计延迟；标记已读会让该订阅者的版本自增。缓存按最近使用淘汰，最多保留 256 个订阅者、每人 200 条消息（与接口 `limit` 上限一致），未读条数与消息总数仍按全部消息统计，不会被 `limit` 截断。自定义存储后端若没有实现 `revision()`，缓存退化为每次都重算——正确性优先于命中率。
+
+### 投递结果的回调
+
+执行明细是拉取式的：接入方想知道结果就得来查。配置 `XW_CALLBACK_URL` 后，每次执行结束引擎会把这条触发的各渠道结果推到接入方自己的端点（`engine/internal/webhook`），事件名 `delivery.result`：
+
+```json
+{"id":"52df32f02e7ff121a097f706b17c8e03","event":"delivery.result",
+ "occurred_at":"2026-11-02T02:40:53.537140+00:00","trigger_id":"smoke-cb-1",
+ "transaction_id":"tx-cb-1","workflow":"post_liked","subscriber_id":"creator_1",
+ "status":"sent","summary":{"total":2,"sent":2,"failed":0},
+ "deliveries":[{"step_id":"notify","channel":"in_app","status":"sent",
+                "provider":"console-in-app","attempts":["console-in-app"],"duration_ms":0},
+               {"step_id":"mail","channel":"email","status":"sent",
+                "provider":"console-email","attempts":["console-email"],"duration_ms":0}]}
+```
+
+- **整体状态分三档**：`sent` / `failed` / `partial`。一次触发会落到多个渠道，三条里两条成功既不算成功也不算失败，分开报，由接入方按自己的容忍度决定告警还是重试。
+- **只报投递过的步骤**：被过滤、条件不满足、上游短路、仅登记延迟的步骤不进 `deliveries`；一条都没有时不发回调——「没发」不是「发失败」，拿它去回调只会让接收方以为出了故障。
+- **异步且有界**：事件先进缓冲队列（`XW_CALLBACK_QUEUE`，默认 256），由 `XW_CALLBACK_WORKERS`（默认 2）个 goroutine 提交，单次超时 `XW_CALLBACK_TIMEOUT`（默认 5s）。队列满时丢弃并计数，不阻塞消费路径——接收方变慢不该让通知投递停摆。
+- **退出时排空**：收到退出信号后停止收新事件，等队列里的事件发完，最多等到 `XW_SHUTDOWN_GRACE`；没发完的记为丢弃并写日志，不会让一个不响应的接收方拖住进程。
+- **地址约束**：只接受 https，http 仅放行本机回环（本地联调）；带用户名口令或 `#` 片段的地址在装配期就被拒绝。日志和错误信息里只出现协议与主机，路径与查询串里的令牌不会落盘。
+- **与明细同源**：`delay` 之后的续跑同样补推一条，否则接入方只拿得到前半程。字段与执行明细一致（`provider` / `attempts` / `fallback` / `duration_ms` 都在），接入方不必再查一次 `GET /v1/executions`。
+- **失败分级**：4xx 视为报文或鉴权问题，除 429 外不再尝试；5xx、429、连接失败与超时标为可重试。当前每次执行只提交一次回调，`retryable` 随日志与统计给出，作为后续重试策略的依据。
+
+报文里两个头部让接收方在读完正文之前就能路由与去重：`X-XW-Event`（事件名）与 `X-XW-Event-Id`（与报文里的 `id` 相同）。
 
 ## 压测
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/xwd-ai/xw-p/engine/internal/queue"
 	"github.com/xwd-ai/xw-p/engine/internal/schedule"
+	"github.com/xwd-ai/xw-p/engine/internal/webhook"
 	"github.com/xwd-ai/xw-p/engine/internal/worker"
 )
 
@@ -64,6 +65,17 @@ type Config struct {
 	// 数据目录，默认指向 api/data/executions.jsonl；写 off/disabled/none/- 表示
 	// 不回写（只保留日志与执行汇总）。
 	ExecutionFile string
+
+	// CallbackURL 是投递结果回调的目标地址，为空表示不回调。回调走独立的
+	// 有界队列异步发送，不占用消费路径；地址里通常带接入方签发的令牌，
+	// 因此日志只出现协议与主机名。
+	CallbackURL string
+	// CallbackTimeout 是单次回调的超时，CallbackWorkers 是发送并发数，
+	// CallbackQueue 是排队上限（满了丢弃事件并计数，不阻塞投递）。
+	CallbackTimeout time.Duration
+	CallbackWorkers int
+	CallbackQueue   int
+
 	// AdminAddr 是运维接口（死信查询/重放）的监听地址。
 	// 空字符串表示不启动；未配置 XW_ADMIN_ADDR 时沿用 ENGINE_PORT。
 	AdminAddr string
@@ -103,11 +115,24 @@ func Load() Config {
 		RetryJitter:      envFloat("XW_RETRY_JITTER", queue.DefaultRetryJitter),
 		RetryInterval:    envDuration("XW_RETRY_INTERVAL", worker.DefaultRetryInterval),
 
-		WorkflowsFile: strings.TrimSpace(os.Getenv("XW_WORKFLOWS_FILE")),
-		ProvidersFile: strings.TrimSpace(os.Getenv("XW_PROVIDERS_FILE")),
-		ExecutionFile: strings.TrimSpace(envOr("XW_EXECUTION_FILE", defaultExecutionFile)),
-		AdminAddr:     adminListenAddr(),
+		WorkflowsFile:   strings.TrimSpace(os.Getenv("XW_WORKFLOWS_FILE")),
+		ProvidersFile:   strings.TrimSpace(os.Getenv("XW_PROVIDERS_FILE")),
+		ExecutionFile:   strings.TrimSpace(envOr("XW_EXECUTION_FILE", defaultExecutionFile)),
+		CallbackURL:     strings.TrimSpace(os.Getenv("XW_CALLBACK_URL")),
+		CallbackTimeout: envDuration("XW_CALLBACK_TIMEOUT", webhook.DefaultTimeout),
+		CallbackWorkers: envInt("XW_CALLBACK_WORKERS", webhook.DefaultWorkers),
+		CallbackQueue:   envInt("XW_CALLBACK_QUEUE", webhook.DefaultQueueSize),
+		AdminAddr:       adminListenAddr(),
 	}
+}
+
+// CallbackDisabled 判断是否关闭了投递结果回调。
+func (c Config) CallbackDisabled() bool {
+	switch strings.ToLower(strings.TrimSpace(c.CallbackURL)) {
+	case "", "off", "disabled", "none", "-":
+		return true
+	}
+	return false
 }
 
 // defaultExecutionFile 是执行明细回写的默认路径。
