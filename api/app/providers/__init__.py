@@ -10,6 +10,7 @@
 - :mod:`.push_mock`：推送的 mock 实现，按同一套契约校验后只留痕、不联网；
 - :mod:`.registry`：按渠道索引实现，按优先级取用，支持启停与原地替换；
 - :mod:`.health`：渠道实现的健康检查（配置检查与可选的在线探测）；
+- :mod:`.manage`：运行期渠道配置的增删改（校验、构造、登记、凭据脱敏与写回配置）；
 - :mod:`.factory`：读取与引擎共用的渠道配置，校验后装配注册表，并支持把启停写回配置。
 
 投递结果的两种形态（成功 / 带原因的失败）由 :class:`DeliveryResult` 表达，
@@ -31,15 +32,21 @@ from .factory import (
     KIND_SPECS,
     SUPPORTED_KINDS,
     BuildReport,
+    ConfigBook,
+    ConfigRecord,
     KindSpec,
     ProviderConfig,
     ProviderConfigError,
+    build_provider,
     build_registry,
     create_registry,
     default_configs,
+    get_book,
     get_registry,
     load_configs,
     parse_configs,
+    persist_config,
+    set_book,
     set_registry,
     validate_config,
 )
@@ -79,6 +86,8 @@ __all__ = [
     "KIND_SPECS",
     "SUPPORTED_KINDS",
     "BuildReport",
+    "ConfigBook",
+    "ConfigRecord",
     "ConsoleProvider",
     "ConsoleSMSProvider",
     "Delivery",
@@ -108,15 +117,19 @@ __all__ = [
     "SMTP_DEFAULT_TIMEOUT",
     "TwilioConfigError",
     "TwilioSMSProvider",
+    "build_provider",
     "build_registry",
     "create_registry",
     "default_configs",
+    "get_book",
     "get_registry",
     "get_monitor",
     "load_configs",
     "normalize_phone",
     "parse_configs",
+    "persist_config",
     "probe_provider",
+    "set_book",
     "set_monitor",
     "set_registry",
     "sms_segments",

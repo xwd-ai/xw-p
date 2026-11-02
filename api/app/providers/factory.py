@@ -29,7 +29,7 @@ import os
 import shutil
 import tempfile
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, Optional
 
@@ -124,6 +124,64 @@ class ProviderConfig:
     def label(self) -> str:
         """日志与错误信息里的称呼：优先用显式标识，否则 ``kind:channel``。"""
         return self.id or f"{self.kind}:{self.channel.value}"
+
+
+@dataclass(frozen=True)
+class ConfigRecord:
+    """配置簿里的一条：配置本身 + 它从哪来。"""
+
+    id: str
+    config: ProviderConfig
+    #: ``file``（启动时从渠道配置文件读出）、``default``（未配置时按渠道生成的
+    #: console 实现）、``runtime``（运行期增改）。
+    source: str = "file"
+
+
+class ConfigBook:
+    """按标识保存渠道配置（含凭据），供管理接口回显与局部修改。
+
+    注册表里只有实现对象，凭据在构造时就被各实现消化掉了；要支持「改一项、
+    其余不动」的更新与脱敏回显，就得另存一份原始配置。凭据因此只留在这一层，
+    既不出现在日志里，也不出现在接口响应里（响应只给出键名与掩码）。
+
+    写入用一把锁串行化，读出的条目列表是快照，不会读到改了一半的配置。
+    """
+
+    def __init__(self) -> None:
+        self._mu = threading.RLock()
+        self._records: dict[str, ConfigRecord] = {}
+
+    def replace_all(self, pairs: Iterable[tuple[str, ProviderConfig]], *, source: str) -> None:
+        """用一次装配的结果整体替换（启动时调用）。"""
+        with self._mu:
+            self._records = {
+                identifier: ConfigRecord(identifier, cfg, source) for identifier, cfg in pairs
+            }
+
+    def put(self, identifier: str, cfg: ProviderConfig, *, source: str = "runtime") -> ConfigRecord:
+        """写入或覆盖一条。"""
+        record = ConfigRecord(identifier, replace(cfg, id=identifier), source)
+        with self._mu:
+            self._records[identifier] = record
+        return record
+
+    def drop(self, identifier: str) -> Optional[ConfigRecord]:
+        """移除一条并返回它（不存在时返回 ``None``）。"""
+        with self._mu:
+            return self._records.pop(identifier, None)
+
+    def get(self, identifier: str) -> Optional[ConfigRecord]:
+        with self._mu:
+            return self._records.get(identifier)
+
+    def items(self) -> list[ConfigRecord]:
+        """按写入顺序返回全部记录的快照。"""
+        with self._mu:
+            return list(self._records.values())
+
+    def __len__(self) -> int:
+        with self._mu:
+            return len(self._records)
 
 
 def _build_console(cfg: ProviderConfig) -> Provider:
@@ -357,6 +415,8 @@ class BuildReport:
     bound: tuple[Entry, ...] = ()
     skipped: tuple[tuple[str, str], ...] = ()
     unbound_channels: tuple[Channel, ...] = ()
+    #: 实际登记的条目标识与当时使用的配置，用于把凭据留在装配层（注册表只存实现）。
+    configs: tuple[tuple[str, ProviderConfig], ...] = ()
 
     def describe(self) -> str:
         lines = [f"已登记 {len(self.bound)} 个渠道实现"]
@@ -368,6 +428,22 @@ class BuildReport:
             names = "、".join(channel.value for channel in self.unbound_channels)
             lines.append(f"以下渠道没有启用的实现，投递会失败：{names}")
         return "\n".join(lines)
+
+
+def build_provider(cfg: ProviderConfig) -> Provider:
+    """按一条配置构造实现；配置不合法或实现尚未接入时抛 :class:`ProviderConfigError`。
+
+    与 :func:`build_registry` 的区别在「未接入的种类」：装配整个注册表时可以
+    跳过它、让其它渠道照常起来，而只增改一条配置时必须如实拒绝——登记一个
+    永远投不出去的条目，比直接报错更容易让人以为配好了。
+    """
+    problems = validate_config(cfg)
+    if problems:
+        raise ProviderConfigError(f"{cfg.label}：" + "；".join(problems))
+    builder = BUILDERS.get(cfg.kind)
+    if builder is None:
+        raise ProviderConfigError(f"{cfg.label}：种类 {cfg.kind} 的实现尚未接入")
+    return builder(cfg)
 
 
 def build_registry(configs: Optional[Iterable[ProviderConfig]] = None) -> BuildReport:
@@ -387,6 +463,7 @@ def build_registry(configs: Optional[Iterable[ProviderConfig]] = None) -> BuildR
     registry = ProviderRegistry()
     bound: list[Entry] = []
     skipped: list[tuple[str, str]] = []
+    pairs: list[tuple[str, ProviderConfig]] = []
     for cfg in items:
         builder = BUILDERS.get(cfg.kind)
         if builder is None:
@@ -399,12 +476,15 @@ def build_registry(configs: Optional[Iterable[ProviderConfig]] = None) -> BuildR
             enabled=cfg.enabled,
         )
         bound.append(entry)
+        # 自动编号的标识由注册表决定，Book 里存的是落表后的标识。
+        pairs.append((entry.id, replace(cfg, id=entry.id)))
 
     return BuildReport(
         registry=registry,
         bound=tuple(bound),
         skipped=tuple(skipped),
         unbound_channels=tuple(registry.missing_channels()),
+        configs=tuple(pairs),
     )
 
 
@@ -412,7 +492,9 @@ def create_report() -> BuildReport:
     """按 ``XW_PROVIDERS_FILE`` 装配；未配置时使用默认 console 实现。"""
     path = config.PROVIDERS_FILE
     configs = load_configs(path) if path else None
-    return build_registry(configs)
+    report = build_registry(configs)
+    get_book().replace_all(report.configs, source="file" if path else "default")
+    return report
 
 
 def create_registry() -> ProviderRegistry:
@@ -422,26 +504,43 @@ def create_registry() -> ProviderRegistry:
     return report.registry
 
 
-def persist_enabled(
-    identifier: str,
-    enabled: bool,
-    *,
-    path: Optional[Path | str] = None,
-) -> Path:
-    """把某个条目的启停写回渠道配置文件，返回被写入的路径。
-
-    运行期启停默认只作用于当前进程；要让下次启动也生效，就把改动写回配置文件。
-    写入按「读原文 → 改一项 → 临时文件 + ``rename``」进行：顶层其它字段（如
-    ``retries``）与条目里的凭据原样保留，写一半就崩溃也不会留下半份配置。
-
-    只按显式 ``id`` 定位条目：自动编号的标识是注册表算出来的，配置文件里没有
-    对应写处，硬猜会改错项。找不到条目、没有配置来源或写入失败都抛
-    :class:`ProviderConfigError`，由调用方决定如何告知请求方。
-    """
+def _config_path(path: Optional[Path | str]) -> Path:
+    """确定要写回的配置文件路径；没有配置来源时抛配置错误。"""
     target = Path(path) if path is not None else (Path(config.PROVIDERS_FILE) if config.PROVIDERS_FILE else None)
     if target is None:
-        raise ProviderConfigError("未配置 XW_PROVIDERS_FILE，启停改动只作用于当前进程")
+        raise ProviderConfigError("未配置 XW_PROVIDERS_FILE，配置改动只作用于当前进程")
+    return target
 
+
+def _items_of(raw: object, target: Path) -> list:
+    """取出配置文件里的条目数组（容忍顶层数组与 ``{"providers": [...]}``）。"""
+    items = raw.get("providers") if isinstance(raw, dict) else raw
+    if not isinstance(items, list):
+        raise ProviderConfigError(f"渠道配置不是数组：{target}")
+    return items
+
+
+def _locate(items: list, identifier: str) -> list[dict]:
+    """按显式 ``id`` 找出配置项；自动编号的标识在文件里没有对应写处。"""
+    return [
+        item
+        for item in items
+        if isinstance(item, dict) and str(item.get("id", "")).strip() == identifier
+    ]
+
+
+def _rewrite_config(
+    mutate: Callable[[object, Path], object],
+    *,
+    path: Optional[Path | str] = None,
+) -> tuple[Path, object]:
+    """读原文 → 交给 ``mutate`` 改 → 临时文件 + ``rename`` 写回。
+
+    顶层其它字段（如引擎读取的 ``retries``）与未涉及的条目原样保留，写一半就
+    崩溃也不会留下半份配置。``mutate`` 抛出的异常原样向上，此时文件不动。
+    返回（写入路径，``mutate`` 的返回值）。
+    """
+    target = _config_path(path)
     try:
         text = target.read_text(encoding="utf-8")
     except OSError as exc:
@@ -453,25 +552,7 @@ def persist_enabled(
             f"解析渠道配置失败：{target}（第 {exc.lineno} 行：{exc.msg}）"
         ) from exc
 
-    if isinstance(raw, dict):
-        items = raw.get("providers")
-    else:
-        items = raw
-    if not isinstance(items, list):
-        raise ProviderConfigError(f"渠道配置不是数组：{target}")
-
-    matched = 0
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        if str(item.get("id", "")).strip() != identifier:
-            continue
-        item["enabled"] = bool(enabled)
-        matched += 1
-    if not matched:
-        raise ProviderConfigError(
-            f"配置文件里没有 id 为 {identifier!r} 的条目，启停改动只作用于当前进程"
-        )
+    result = mutate(raw, target)
 
     payload = json.dumps(raw, ensure_ascii=False, indent=2) + "\n"
     tmp_path: Optional[Path] = None
@@ -494,13 +575,131 @@ def persist_enabled(
                 tmp_path.unlink()
             except OSError:
                 pass
+    return target, result
 
+
+def _item_of(cfg: ProviderConfig) -> dict:
+    """把一条配置写成配置文件里的形态（字段顺序固定，便于 diff）。"""
+    item: dict = {
+        "id": cfg.id,
+        "channel": cfg.channel.value,
+        "kind": cfg.kind,
+        "priority": cfg.priority,
+        "enabled": cfg.enabled,
+    }
+    if cfg.credentials:
+        item["credentials"] = dict(cfg.credentials)
+    return item
+
+
+def persist_enabled(
+    identifier: str,
+    enabled: bool,
+    *,
+    path: Optional[Path | str] = None,
+) -> Path:
+    """把某个条目的启停写回渠道配置文件，返回被写入的路径。
+
+    运行期启停默认只作用于当前进程；要让下次启动也生效，就把改动写回配置文件。
+    只按显式 ``id`` 定位条目：自动编号的标识是注册表算出来的，配置文件里没有
+    对应写处，硬猜会改错项。找不到条目、没有配置来源或写入失败都抛
+    :class:`ProviderConfigError`，由调用方决定如何告知请求方。
+    """
+
+    def mutate(raw: object, target: Path) -> int:
+        matched = _locate(_items_of(raw, target), identifier)
+        for item in matched:
+            item["enabled"] = bool(enabled)
+        return len(matched)
+
+    target, matched = _rewrite_config(mutate, path=path)
+    if not matched:
+        raise ProviderConfigError(
+            f"配置文件里没有 id 为 {identifier!r} 的条目，启停改动只作用于当前进程"
+        )
     logger.info("渠道配置已更新：%s（%s → enabled=%s）", target, identifier, enabled)
     return target
 
 
+def persist_config(
+    cfg: ProviderConfig,
+    *,
+    path: Optional[Path | str] = None,
+    upsert: bool = True,
+) -> Path:
+    """把一条完整的渠道配置写入配置文件（存在则整条改写，否则追加）。
+
+    与 :func:`persist_enabled` 共用同一条写入路径，因此顶层 ``retries`` 段与
+    其它条目不会被顺手清掉。凭据按原样写回——它们本就来自这份文件，或来自
+    一次显式的新增请求；接口层的响应会做脱敏，落盘不做。
+
+    ``upsert=False`` 时文件里必须已有同名条目，否则抛配置错误：启停这类
+    「只改一项」的操作不该顺手把一条运行期临时登记的配置固化下来。
+    """
+    identifier = cfg.id.strip()
+    if not identifier:
+        raise ProviderConfigError("写回配置文件需要显式 id")
+
+    def mutate(raw: object, target: Path) -> int:
+        items = _items_of(raw, target)
+        matched = _locate(items, identifier)
+        if not matched:
+            if not upsert:
+                raise ProviderConfigError(
+                    f"配置文件里没有 id 为 {identifier!r} 的条目，改动只作用于当前进程"
+                )
+            items.append(_item_of(cfg))
+            return 1
+        for item in matched:
+            item.update(_item_of(cfg))
+        return len(matched)
+
+    target, matched = _rewrite_config(mutate, path=path)
+    logger.info("渠道配置已写入：%s（%s，%d 项）", target, identifier, matched)
+    return target
+
+
+def persist_removal(identifier: str, *, path: Optional[Path | str] = None) -> tuple[Path, int]:
+    """从配置文件里删掉某个条目，返回（写入路径，删除条数）。
+
+    文件里没有这个标识不算失败：运行期新增的条目可能从未写回文件，此时
+    「删除时顺带写回」应当是一次空操作，而不是让整个删除请求失败。
+    """
+    stem = identifier.strip()
+
+    def mutate(raw: object, target: Path) -> int:
+        items = _items_of(raw, target)
+        doomed = _locate(items, stem)
+        for item in doomed:
+            items.remove(item)
+        return len(doomed)
+
+    target, removed = _rewrite_config(mutate, path=path)
+    logger.info("渠道配置已更新：%s（移除 %s，%d 项）", target, stem, removed)
+    return target, int(removed)
+
+
 _registry: Optional[ProviderRegistry] = None
 _registry_lock = threading.Lock()
+
+_book: Optional[ConfigBook] = None
+_book_lock = threading.Lock()
+
+
+def get_book() -> ConfigBook:
+    """获取全局配置簿（首次取用时构造）。"""
+    global _book
+    with _book_lock:
+        if _book is None:
+            _book = ConfigBook()
+        return _book
+
+
+def set_book(book: Optional[ConfigBook]) -> None:
+    """替换全局配置簿；传 ``None`` 表示下次取用时重新构造（供测试与热更新）。"""
+    global _book
+    with _book_lock:
+        _book = book
 
 
 def get_registry() -> ProviderRegistry:
@@ -524,17 +723,24 @@ __all__ = [
     "KIND_SPECS",
     "SUPPORTED_KINDS",
     "BuildReport",
+    "ConfigBook",
+    "ConfigRecord",
     "KindSpec",
     "ProviderConfig",
     "ProviderConfigError",
+    "build_provider",
     "build_registry",
     "create_registry",
     "create_report",
     "default_configs",
+    "get_book",
     "get_registry",
     "load_configs",
     "parse_configs",
+    "persist_config",
     "persist_enabled",
+    "persist_removal",
+    "set_book",
     "set_registry",
     "validate_config",
 ]
