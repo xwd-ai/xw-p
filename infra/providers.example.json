@@ -4,6 +4,18 @@
     {"id": "console-email", "channel": "email", "kind": "console", "priority": 100},
     {"id": "console-sms", "channel": "sms", "kind": "console", "priority": 100},
     {"id": "console-push", "channel": "push", "kind": "console", "priority": 100},
-    {"id": "console-chat", "channel": "chat", "kind": "console", "priority": 100}
+    {"id": "console-chat", "channel": "chat", "kind": "console", "priority": 100},
+    {
+      "id": "chat-slack",
+      "channel": "chat",
+      "kind": "slack",
+      "priority": 10,
+      "enabled": false,
+      "credentials": {
+        "webhook_url": "https://hooks.slack.com/services/T000/B000/XXXX",
+        "channel": "#ops",
+        "username": "互动播报"
+      }
+    }
   ]
 }

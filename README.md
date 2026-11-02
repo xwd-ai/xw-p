@@ -172,14 +172,16 @@ API 侧：
 | `push-mock` | `push` | — | `platform`、`project_id`、`topic`、`fail_with`、`capacity` |
 | `fcm` | `push` | `project_id`、`access_token` | `endpoint` |
 | `apns` | `push` | `key_id`、`team_id`、`private_key` | `bundle_id`、`sandbox`、`endpoint` |
-| `slack` | `chat` | `webhook_url` | — |
+| `slack` | `chat` | `webhook_url` | `channel`、`username`、`icon_emoji`、`timeout` |
 | `teams` | `chat` | `webhook_url` | — |
 
 校验在装配阶段完成并一次列全问题：未知渠道、`kind` 与渠道不匹配、标识重复、负优先级、缺少必填凭据、拼错的凭据项（例如把 `password` 写成 `Password`，错误信息会给出建议）都会让引擎启动失败，而不是等到投递那一刻才报认证错误。配置里出现的凭据值不会进日志，启动日志只打印标识、渠道、优先级与凭据名。
 
-`smtp` 与 `twilio` 已有真实实现，`push-mock` 是推送的校验型 mock（见下面的「推送投递」）；`inapp` 在两侧都已落地——引擎写 `pipeline.InboxEntry`、API 写 `app.message_center.Message`，共用同一份收件箱文件。`fcm` / `apns` 的报文契约已定义但真实提交尚未接入，`slack` / `teams` 亦未接入：配置里写了这些种类会被跳过并在启动日志逐条告警，其余渠道照常装配；如果某个投递渠道最终没有任何启用的实现，也会在启动日志里点出来——那种情况下分发阶段会退化成 mock 打印。
+`smtp`、`twilio`、`slack` 与 `push-mock` 已有真实实现（`push-mock` 是推送的校验型 mock，见下面的「推送投递」）；`inapp` 在两侧都已落地——引擎写 `pipeline.InboxEntry`、API 写 `app.message_center.Message`，共用同一份收件箱文件。`fcm` / `apns` 的报文契约已定义但真实提交尚未接入，`teams` 亦未接入：配置里写了这些种类会被跳过并在启动日志逐条告警，其余渠道照常装配；如果某个投递渠道最终没有任何启用的实现，也会在启动日志里点出来——那种情况下分发阶段会退化成 mock 打印。
 
 引擎侧的 `twilio` 条目目前仍按「实现尚未接入」跳过，短信在引擎路径上由 `console` 种类承担（`internal/pipeline/console_sms.go`，会校验号码并按 GSM-7 / UCS-2 计算段数）。接口契约与客户端实现在 API 侧的渠道集成层，见下面的「短信投递」。
+
+反过来，`slack` 目前接在引擎侧（消费链路是群播报的主路径），API 侧 `chat` 仍由 `console` 承担；两侧读同一份配置文件，因此 API 进程会把 `slack` 条目记进「实现尚未接入」的跳过列表，不影响其他渠道装配。
 
 #### 邮件投递（`kind: smtp`）
 
@@ -287,6 +289,41 @@ HTML 模板里的变量按 HTML 实体转义后再拼接，模板自身的标签
 
 真实提交（`kind: fcm` / `apns`）尚未接入：`fcm` 需要 `project_id` 与一枚有效约一小时的 OAuth2 访问令牌，`apns` 需要 `key_id`、`team_id` 与签名私钥换来的 provider token，两者都涉及凭据签发，留给实际接入时按部署方式补齐。引擎侧同一份配置里的 `push-mock` 条目同样按「实现尚未接入」跳过，推送在引擎路径上由 `console` 种类承担（`internal/pipeline/console_push.go`，会校验 token 并限制 4 KiB 载荷）。
 
+#### 群播报投递（`kind: slack`）
+
+chat 渠道的收件目标是群机器人而不是某个订阅者，因此没有「收件地址」这一步：webhook 地址本身就是凭据，签发与轮换在工作区一侧完成。引擎侧的实现分两层——`internal/chat` 定义报文契约与客户端，`internal/pipeline/slack_chat.go` 把它接成渠道实现：
+
+| 项目 | 约定 |
+| --- | --- |
+| 端点 | `POST {webhook_url}`，地址形如 `https://hooks.slack.com/services/T000/B000/XXXX` |
+| 请求体 | `application/json`：`text`（通知栏预览）+ `blocks`（消息主体），可选 `channel` / `username` / `icon_emoji` |
+| 成功响应 | `200` + 纯文本 `ok` |
+| 失败响应 | `4xx` / `5xx` + 纯文本错误码（`invalid_payload`、`channel_not_found`、`rate_limited` …） |
+
+- **报文形态**：只给 `blocks` 时通知栏不会带内容，因此 `text` 固定拼一份「标题 + 正文开头」的纯文本并截断到 4000 字符；`blocks` 才是主体——标题单独一段加粗，正文按 2900 字符切片，优先在换行处断开、单行超长才按字符硬切。切片与拼接可逆，长评论不会被悄悄截掉后半段。
+- **地址校验**：只接受 https，http 仅限本机回环地址（进程内测试服务器与内网代理）。webhook 路径末段就是令牌，日志、执行明细与失败原因里一律脱敏成 `scheme://host/…`，回执里也只出现脱敏形态。
+- **收件地址解析**：步骤配了 `config.webhook` 就用它（同一份工作流可以把点赞聚合播报到运营群、把评论播报到作者群），没配则回退渠道配置里的 `webhook_url`；两者都没有时如实判失败，而不是打印一行成功日志。
+- **失败映射**：`404` 指向「webhook 不存在或已被撤销」、`403` 指向「无权向该频道发消息」、`410` 指向频道已归档、`413` 指向长度上限、`429` 带上 `Retry-After`、`5xx` 记为「Slack 服务错误」；表里没有的错误码原样带出去，至少能拿去搜。限流与 5xx 在原因末尾标「可稍后重试」，地址与报文类问题不标——那类失败重试多少次都是同样的结果。
+- **本地校验**：正文为空、超过 4000 字符、地址不是 http(s) 或缺 host，都在发出请求之前判失败，与 `console` 实现同一口径，因此把 console 换成 slack 不会改变哪些消息会被拒。
+- **取消**：实现 `ContextSender`，步骤超时或引擎退出时请求立即中断，不会把连接留在后台继续跑。
+
+```json
+{
+  "id": "chat-slack",
+  "channel": "chat",
+  "kind": "slack",
+  "priority": 10,
+  "credentials": {
+    "webhook_url": "https://hooks.slack.com/services/T000/B000/XXXX",
+    "channel": "#ops",
+    "username": "互动播报",
+    "icon_emoji": ":bell:"
+  }
+}
+```
+
+不配凭据时 `chat` 渠道走的是 console 实现（`ConsoleChatProvider`）：同样校验 webhook 与长度，只把「推送到哪个群」打进日志而不发请求。
+
 ### API 侧的渠道装配
 
 API 进程读同一份 `XW_PROVIDERS_FILE`，校验规则与引擎一致（渠道约束、必填凭据、拼错的凭据项），装配分四层：
@@ -302,7 +339,7 @@ API 进程读同一份 `XW_PROVIDERS_FILE`，校验规则与引擎一致（渠�
 - `providers/registry.py`：按渠道索引实现，同一渠道按优先级取用（小的优先、同级按登记顺序），支持停用后回退、按标识原地替换、按标识摘除；读写由一把锁保护，取用返回快照。
 - `providers/factory.py`：解析并校验配置，装配成注册表，报告登记了哪些、跳过了哪些（实现尚未接入的种类）、还有哪些渠道空着。
 
-已接入 `console`、`inapp`、`smtp`、`twilio` 与 `push-mock`：`fcm` / `apns` / `slack` / `teams` 等尚未实现的种类会被跳过，其余渠道照常装配。
+已接入 `console`、`inapp`、`smtp`、`twilio` 与 `push-mock`：`fcm` / `apns` / `slack` / `teams` 等尚未实现的种类会被跳过，其余渠道照常装配。`chat` 渠道的真实实现在引擎侧（见上面的「群播报投递」），API 侧由 `console` 承担。
 
 ### 站内信与消息中心
 

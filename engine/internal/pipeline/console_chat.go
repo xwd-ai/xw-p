@@ -19,8 +19,8 @@ const chatMessageLimit = 4000
 // consoleChatProvider 是 chat 渠道的 console mock 实现（Slack / Teams webhook 风格）。
 //
 // 它不真正向 webhook 发 HTTP 请求，而是校验 webhook 地址与消息体后打印日志，
-// 模拟「已推送到群机器人」的过程；真实 HTTP 投递在 Phase 3 接入，届时作为
-// 另一实现注册进 ProviderRegistry，二者实现同一 Provider 接口。
+// 模拟「已推送到群机器人」的过程；真实投递由 slackChatProvider 承担，两者实现
+// 同一 Provider 接口，按渠道配置的 kind 选择。
 //
 // 社区场景下 chat 渠道用于把互动事件推到运营群（如「热门帖子互动播报」），
 // 收件目标是群机器人 webhook，而非订阅者本人，故 Delivery.To 承载 webhook 地址。

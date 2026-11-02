@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/xwd-ai/xw-p/engine/internal/chat"
 	"github.com/xwd-ai/xw-p/engine/internal/domain"
 	"github.com/xwd-ai/xw-p/engine/internal/mailer"
 	"github.com/xwd-ai/xw-p/engine/internal/provider"
@@ -11,11 +12,11 @@ import (
 
 // ProviderFactory 按渠道配置构造内置实现。
 //
-// 覆盖 console（打印日志的 mock）、inapp（写站内信收件箱）与 smtp（真实提交
-// 邮件）三种种类：console 用于本地跑通链路，inapp 与 smtp 是真实落地的实现。
-// twilio / fcm / apns / slack / teams 已经在配置模型里声明了凭据要求，但对应
-// 实现尚未接入，构造时返回 provider.ErrUnsupportedKind，由装配处跳过并告警，
-// 而不是让引擎起不来。
+// 覆盖 console（打印日志的 mock）、inapp（写站内信收件箱）、smtp（真实提交
+// 邮件）与 slack（提交群机器人的 incoming webhook）四种种类：console 用于
+// 本地跑通链路，其余是真实落地的实现。twilio / fcm / apns / teams 已经在配置
+// 模型里声明了凭据要求，但对应实现尚未接入，构造时返回
+// provider.ErrUnsupportedKind，由装配处跳过并告警，而不是让引擎起不来。
 func ProviderFactory(logger *slog.Logger) provider.Factory {
 	if logger == nil {
 		logger = slog.Default()
@@ -40,6 +41,17 @@ func ProviderFactory(logger *slog.Logger) provider.Factory {
 				return nil, fmt.Errorf("smtp 配置不可用（%s）：%w", cfg.ID, err)
 			}
 			return NewSMTPEmailProvider(logger, mailCfg)
+		case provider.KindSlack:
+			if cfg.Channel != domain.ChannelChat {
+				return nil, fmt.Errorf("%w: slack 只能用于 %s", provider.ErrUnsupportedKind, domain.ChannelChat)
+			}
+			// 同样在装配期校验：webhook 少了路径、写成 http 的远程地址、
+			// 表情名没带冒号，都在启动日志里指出来。
+			chatCfg, err := chat.ConfigFromCredentials(cfg.Credentials)
+			if err != nil {
+				return nil, fmt.Errorf("slack 配置不可用（%s）：%w", cfg.ID, err)
+			}
+			return NewSlackChatProvider(logger, chatCfg)
 		default:
 			return nil, fmt.Errorf("%w: %s", provider.ErrUnsupportedKind, cfg.Kind)
 		}

@@ -82,6 +82,7 @@ var kindSpecs = map[Kind]kindSpec{
 	KindSlack: {
 		channels: []domain.Channel{domain.ChannelChat},
 		required: []string{"webhook_url"},
+		optional: []string{"channel", "username", "icon_emoji", "timeout"},
 	},
 	KindTeams: {
 		channels: []domain.Channel{domain.ChannelChat},
