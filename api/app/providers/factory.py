@@ -15,11 +15,11 @@
 3. :func:`build_registry` 构造实现并登记。尚未接入的种类（短信网关、推送等）
    跳过并记进报告，其余照常装配；某个渠道最终没有任何启用实现时同样写进报告。
 
-当前接入的实现是 ``console``（含短信专用的号码校验版本）、``smtp``、``twilio``
-与 ``push-mock``：console 把所有渠道的投递打进行日志，smtp 把 email 提交到中继，
-twilio 按 Messages 资源契约提交短信，push-mock 按 FCM / APNs 的报文契约校验后
-只记录不联网。其余种类的配置会被识别、校验、跳过，等对应实现落地后只需往
-:data:`BUILDERS` 里加一项。
+当前接入的实现是 ``console``（含短信专用的号码校验版本）、``inapp``、``smtp``、
+``twilio`` 与 ``push-mock``：console 把所有渠道的投递打进行日志，inapp 把站内信
+写进订阅者的消息中心，smtp 把 email 提交到中继，twilio 按 Messages 资源契约提交
+短信，push-mock 按 FCM / APNs 的报文契约校验后只记录不联网。其余种类的配置会被
+识别、校验、跳过，等对应实现落地后只需往 :data:`BUILDERS` 里加一项。
 """
 from __future__ import annotations
 
@@ -31,9 +31,11 @@ from pathlib import Path
 from typing import Callable, Iterable, Mapping, Optional
 
 from .. import config
+from ..message_center import MessageError, create_store
 from ..models.channel import Channel
 from .base import DEFAULT_PRIORITY, Provider
 from .console import ConsoleProvider
+from .inapp import InAppProvider
 from .push_mock import DEFAULT_CAPACITY as PUSH_MOCK_CAPACITY
 from .push_mock import MockPushProvider
 from .push import PushConfigError
@@ -176,9 +178,28 @@ def _build_push_mock(cfg: ProviderConfig) -> Provider:
         raise ProviderConfigError(f"{cfg.label}：{exc}") from exc
 
 
+def _build_inapp(cfg: ProviderConfig) -> Provider:
+    """构造站内信实现：写入与引擎共用的消息中心文件。
+
+    存储位置由 ``XW_INBOX_FILE`` 决定（缺省 ``api/data/inbox.jsonl``），与引擎
+    侧的默认路径一致，因此 API 内置消费者写下的通知也能在收件箱里读到。
+    """
+    try:
+        store = create_store()
+    except MessageError as exc:
+        raise ProviderConfigError(f"{cfg.label}：{exc}") from exc
+    return InAppProvider(
+        cfg.channel,
+        store=store,
+        identifier=cfg.id,
+        priority=cfg.priority,
+    )
+
+
 #: 种类 → 构造函数。没列在这里的种类会在装配时跳过（实现尚未接入）。
 BUILDERS: dict[str, Callable[[ProviderConfig], Provider]] = {
     "console": _build_console,
+    "inapp": _build_inapp,
     "smtp": _build_smtp,
     "twilio": _build_twilio,
     "push-mock": _build_push_mock,

@@ -2,6 +2,7 @@
 
 - :mod:`.base`：:class:`Provider` 抽象基类，收口收件人寻址、结果结构与耗时打点；
 - :mod:`.console`：console mock 实现，把投递打印成结构化日志；
+- :mod:`.inapp`：站内信实现，把消息写进订阅者的消息中心（``app.message_center``）；
 - :mod:`.sms`：短信的号码规整、计费分段，以及会校验号码的 console 短信实现；
 - :mod:`.smtp`：SMTP 实现，把 email 真正提交到中继服务器；
 - :mod:`.twilio`：Twilio 风格的短信网关实现（Messages 资源契约）；
@@ -24,6 +25,7 @@ from .base import (
     Recipient,
 )
 from .console import ConsoleProvider
+from .inapp import InAppProvider
 from .factory import (
     KIND_SPECS,
     SUPPORTED_KINDS,
@@ -72,6 +74,7 @@ __all__ = [
     "DeliveryResult",
     "DeviceTokenError",
     "Entry",
+    "InAppProvider",
     "KindSpec",
     "MockPushProvider",
     "PayloadError",

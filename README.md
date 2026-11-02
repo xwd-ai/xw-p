@@ -143,7 +143,7 @@ API 侧：
 
 ### 渠道配置
 
-默认装配下五个投递渠道各有一个 console 实现（`in_app` 写收件箱，其余打印结构化日志）。要指定渠道用哪种实现、优先级与凭据，用 `XW_PROVIDERS_FILE` 指向一个 JSON 文件，示例见 [`infra/providers.example.json`](infra/providers.example.json)：
+默认装配下五个投递渠道各有一个 console 实现，投递只打印结构化日志。要让站内信真正写进订阅者的消息中心，把 `in_app` 配成 `kind: inapp`（见下面的「站内信与消息中心」）。要指定渠道用哪种实现、优先级与凭据，用 `XW_PROVIDERS_FILE` 指向一个 JSON 文件，示例见 [`infra/providers.example.json`](infra/providers.example.json)：
 
 ```json
 {
@@ -177,7 +177,7 @@ API 侧：
 
 校验在装配阶段完成并一次列全问题：未知渠道、`kind` 与渠道不匹配、标识重复、负优先级、缺少必填凭据、拼错的凭据项（例如把 `password` 写成 `Password`，错误信息会给出建议）都会让引擎启动失败，而不是等到投递那一刻才报认证错误。配置里出现的凭据值不会进日志，启动日志只打印标识、渠道、优先级与凭据名。
 
-`smtp` 与 `twilio` 已有真实实现，`push-mock` 是推送的校验型 mock（见下面的「推送投递」）；`fcm` / `apns` 的报文契约已定义但真实提交尚未接入，`slack` / `teams` 亦未接入：配置里写了这些种类会被跳过并在启动日志逐条告警，其余渠道照常装配；如果某个投递渠道最终没有任何启用的实现，也会在启动日志里点出来——那种情况下分发阶段会退化成 mock 打印。
+`smtp` 与 `twilio` 已有真实实现，`push-mock` 是推送的校验型 mock（见下面的「推送投递」）；`inapp` 在两侧都已落地——引擎写 `pipeline.InboxEntry`、API 写 `app.message_center.Message`，共用同一份收件箱文件。`fcm` / `apns` 的报文契约已定义但真实提交尚未接入，`slack` / `teams` 亦未接入：配置里写了这些种类会被跳过并在启动日志逐条告警，其余渠道照常装配；如果某个投递渠道最终没有任何启用的实现，也会在启动日志里点出来——那种情况下分发阶段会退化成 mock 打印。
 
 引擎侧的 `twilio` 条目目前仍按「实现尚未接入」跳过，短信在引擎路径上由 `console` 种类承担（`internal/pipeline/console_sms.go`，会校验号码并按 GSM-7 / UCS-2 计算段数）。接口契约与客户端实现在 API 侧的渠道集成层，见下面的「短信投递」。
 
@@ -293,6 +293,7 @@ API 进程读同一份 `XW_PROVIDERS_FILE`，校验规则与引擎一致（渠�
 
 - `providers/base.py`：`Provider` 抽象基类。收件人按渠道寻址（`in_app` → 订阅者标识、`email` → 邮箱、`sms` → 手机号、`push` → 设备 token，`chat` 的目标由实现自己的 webhook 决定），缺地址在进入实现之前就判失败；投递结果是 `sent` + `reason` 的固定结构，实现里抛出的异常由基类兜住转成失败结果，调用方不需要写 `try`。
 - `providers/console.py`：console 实现，把投递打成一行结构化日志，是所有渠道的兜底项。
+- `providers/inapp.py`：站内信实现。投递即落库——把消息写进订阅者的消息中心（`app/message_center.py`），写入按消息标识幂等，同一触发重放不会留下两条；正文优先取渲染结果，API 内置消费者不渲染模板时回落到载荷里的 `body` / `message`，两者都没有就如实判失败，不在收件箱里留一张点不动的空卡片。
 - `providers/sms.py`：短信的号码规整、E.164 补全与计费分段，以及 `ConsoleSMSProvider`——会真的校验号码格式的 console 短信实现。
 - `providers/smtp.py`：SMTP 实现，把 email 真正提交到中继；凭据校验（端口、加密方式、口令与连接方式的组合）在构造时就完成，投递失败按阶段给出原因。
 - `providers/twilio.py`：短信网关实现，按 Messages 资源契约提交；配置校验（账户标识、发送方、端点、超时）在构造时完成，投递失败按 HTTP 状态与网关错误码给出原因。
@@ -301,7 +302,22 @@ API 进程读同一份 `XW_PROVIDERS_FILE`，校验规则与引擎一致（渠�
 - `providers/registry.py`：按渠道索引实现，同一渠道按优先级取用（小的优先、同级按登记顺序），支持停用后回退、按标识原地替换、按标识摘除；读写由一把锁保护，取用返回快照。
 - `providers/factory.py`：解析并校验配置，装配成注册表，报告登记了哪些、跳过了哪些（实现尚未接入的种类）、还有哪些渠道空着。
 
-已接入 `console`、`smtp`、`twilio` 与 `push-mock`：`inapp` 等尚未实现的种类会被跳过——因此沿用 [`infra/providers.example.json`](infra/providers.example.json) 时，API 内置消费者下的 `in_app` 渠道没有可用实现（示例文件里的 `inapp` 条目服务于引擎），需要把该条改成 `console` 或另配一份。
+已接入 `console`、`inapp`、`smtp`、`twilio` 与 `push-mock`：`fcm` / `apns` / `slack` / `teams` 等尚未实现的种类会被跳过，其余渠道照常装配。
+
+### 站内信与消息中心
+
+站内信没有外部网关，投递动作本身就是一次落库；因此消息中心（`api/app/message_center.py`）要同时承担「数据模型」与「写入路径」两件事：
+
+- **模型**：`Message` 收口一条站内信需要的字段——`id`、`trigger_id`、`subscriber_id`、`workflow`、`step_id`、`title`、`body`、`created_at`、`updated_at`、`read`。字段名与引擎侧的 `pipeline.InboxEntry` 完全一致（snake_case），两个进程因此可以共用同一份收件箱文件：引擎渲染后写入，API 侧原样读取并渲染到收件箱界面。写入前统一裁剪空白、校验必填项，正文为空直接拒绝；`updated_at` 不会早于 `created_at`，否则「已读之后又被更新」的判断会失效。
+- **写入**：按消息标识幂等。普通站内信标识取 `trigger_id:step_id`，同一触发重放时 `write` 返回 `duplicate`、不新增条目；聚合卡片要原地累加计数时用 `replace=True`，返回 `updated`，目标不存在则返回 `missing` 而不是静默新建。两种存储实现：`MemoryMessageCenter` 用于测试，`JsonlMessageCenter` 落盘到 `api/data/inbox.jsonl`（`XW_INBOX_FILE` 可覆盖，与引擎同一默认路径）。
+- **文件共享的细节**：新消息走单次 `O_APPEND` 追加，改写走「同目录临时文件 + `rename`」，进程在写一半时被中断也不会留下半截文件；索引未命中时先比较文件大小，发现被其它进程追加过就重扫一遍再判断，避免在共享卷上把同一张卡片写出两份。损坏行在改写时原样保留，不为了改一条卡片丢掉别的数据。
+- **已读状态不在消息中心**：它属于订阅者维度、与消息内容分开演进，由 `app/inbox.py` 的 `ReadStateStore` 维护；消息中心写入的 `read` 字段固定为 `false`，与引擎侧一致。
+
+配置示例（`infra/providers.example.json` 里已有这一条）：
+
+```json
+{"id": "inapp", "channel": "in_app", "kind": "inapp", "priority": 100}
+```
 
 投递前先校验寻址信息，缺 `email` / `phone` / `deviceToken` 时该渠道直接记为失败：执行明细（`GET /v1/executions`）里是 `status=failed` 加具体原因，消息记录也为 `failed`，不会把「地址没配」记成已发送。配置本身写错（未知渠道、种类与渠道不匹配、缺必填凭据）会让 API 启动失败，与引擎的处理一致。
 
@@ -360,7 +376,7 @@ psql "$XW_DATABASE_URL" -f scripts/migrations/006_execution_indexes.sql
 
 生产环境（`XW_ENV=production`）如果仍是 `jsonl`，API 会在启动日志里直接告警并提示改用 `postgres`——文件后端没有跨进程写入协调，多实例部署下会出现计数与列表对不上的情况。选择后端不影响链路语义：队列的至少一次投递、聚合去重、收件箱按 `trigger_id:step_id` 去重都在上层完成。
 
-收件箱本身由引擎写入文件卷、API 读取同一份文件（默认 `api/data/inbox.jsonl`，可用 `XW_INBOX_FILE` 指定），已读状态单独记在 `api/data/read_state.jsonl`，这两者的定位与 `XW_STORAGE` 无关；跨机部署时需把该目录挂成共享卷，或自行替换为数据库实现。
+收件箱本身由引擎与 API 侧的站内信实现共同写入文件卷、API 读取同一份文件（默认 `api/data/inbox.jsonl`，可用 `XW_INBOX_FILE` 指定），已读状态单独记在 `api/data/read_state.jsonl`，这两者的定位与 `XW_STORAGE` 无关；跨机部署时需把该目录挂成共享卷，或自行替换为数据库实现。
 
 ### 活动流与统计的查询路径
 
