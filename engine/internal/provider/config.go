@@ -297,14 +297,15 @@ type Set struct {
 	source    string
 	configs   []Config
 	byChannel map[domain.Channel][]Config
+	retries   RetryTable
 }
 
-// NewSet 校验并归一化一组配置。
+// NewSet 校验并归一化一组配置（不带渠道级重试）。
 func NewSet(configs []Config) (*Set, error) {
-	return newSet("", configs)
+	return newSet("", configs, DefaultRetryTable())
 }
 
-func newSet(source string, configs []Config) (*Set, error) {
+func newSet(source string, configs []Config, retries RetryTable) (*Set, error) {
 	normalized := make([]Config, len(configs))
 	for i, cfg := range configs {
 		normalized[i] = cfg.normalized()
@@ -325,7 +326,7 @@ func newSet(source string, configs []Config) (*Set, error) {
 			return list[i].EffectivePriority() < list[j].EffectivePriority()
 		})
 	}
-	return &Set{source: source, configs: normalized, byChannel: byChannel}, nil
+	return &Set{source: source, configs: normalized, byChannel: byChannel, retries: retries}, nil
 }
 
 // validateConfigs 逐条校验并汇总问题；校验不改变输入。
@@ -452,9 +453,11 @@ func kindList() string {
 	return strings.Join(names, " / ")
 }
 
-// fileShape 是配置文件的完整对象形态：{"providers": [...]}。
+// fileShape 是配置文件的完整对象形态：{"providers": [...], "retries": {...}}。
 type fileShape struct {
 	Providers []Config `json:"providers"`
+	// Retries 是按渠道配置的投递重试策略，缺省表示不重试。
+	Retries json.RawMessage `json:"retries,omitempty"`
 }
 
 // ParseSet 解析配置内容，接受两种写法：顶层数组，或 {"providers": [...]}。
@@ -468,6 +471,7 @@ func ParseSet(raw []byte) (*Set, error) {
 	}
 
 	var configs []Config
+	retries := DefaultRetryTable()
 	dec := json.NewDecoder(bytes.NewReader(trimmed))
 	dec.DisallowUnknownFields()
 	if trimmed[0] == '[' {
@@ -483,12 +487,17 @@ func ParseSet(raw []byte) (*Set, error) {
 			return nil, errors.New("渠道配置缺少 providers 字段")
 		}
 		configs = shape.Providers
+		table, err := parseRetryTable(shape.Retries)
+		if err != nil {
+			return nil, err
+		}
+		retries = table
 	}
 	// 顶层数组后面还跟着内容（两个 JSON 文档拼在一起）同样视为格式错误。
 	if dec.More() {
 		return nil, errors.New("渠道配置存在多余内容，一个文件只接受一个 JSON 文档")
 	}
-	return NewSet(configs)
+	return newSet("", configs, retries)
 }
 
 // LoadSet 从文件读取并校验配置；来源路径会写进错误信息。
@@ -502,6 +511,10 @@ func LoadSet(path string) (*Set, error) {
 		var cfgErr *ConfigError
 		if errors.As(err, &cfgErr) {
 			cfgErr.Source = path
+		}
+		var retryErr *RetryError
+		if errors.As(err, &retryErr) {
+			retryErr.Source = path
 		}
 		return nil, err
 	}
@@ -574,6 +587,14 @@ func (s *Set) Channels() []domain.Channel {
 	return out
 }
 
+// Retries 返回渠道级重试策略表（配置文件未写 retries 段时为不重试）。
+func (s *Set) Retries() RetryTable {
+	if s == nil {
+		return DefaultRetryTable()
+	}
+	return s.retries
+}
+
 // Unbound 返回 given 中没有启用配置的渠道，保持传入顺序。
 //
 // 装配时用它确认「工作流会投递到的渠道都有人接」——缺一个渠道不会让进程
@@ -605,7 +626,11 @@ func (s *Set) String() string {
 		}
 		parts = append(parts, fmt.Sprintf("%s:[%s]", ch, strings.Join(ids, " ")))
 	}
-	return fmt.Sprintf("Set{providers=%d bindings={%s}}", len(s.configs), strings.Join(parts, " "))
+	out := fmt.Sprintf("Set{providers=%d bindings={%s}}", len(s.configs), strings.Join(parts, " "))
+	if s.retries.Enabled() {
+		out += fmt.Sprintf(" retries={%s}", s.retries.String())
+	}
+	return out
 }
 
 // clone 复制配置，避免调用方修改返回值里的凭据影响 Set。

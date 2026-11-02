@@ -312,11 +312,13 @@ func loadWorkflowSource(logger *slog.Logger, cfg config.Config) runner.Source {
 // 窗口靠键的 TTL 收敛。显式配置 XW_DIGEST_STORE=memory 或 Redis 不可用时
 // 回退进程内存储——那意味着多实例会各开一张卡，只在单实例部署下成立。
 func newPipeline(logger *slog.Logger, cfg config.Config) (*pipeline.Pipeline, func(), error) {
-	registry, err := buildRegistry(logger, cfg)
+	registry, retries, err := buildRegistry(logger, cfg)
 	if err != nil {
 		return nil, nil, err
 	}
-	pipe := pipeline.NewWithRegistry(logger, registry).WithTimeouts(timeoutPolicy(cfg))
+	pipe := pipeline.NewWithRegistry(logger, registry).
+		WithTimeouts(timeoutPolicy(cfg)).
+		WithProviderRetries(retries)
 
 	entries := registry.Entries()
 	ids := make([]string, 0, len(entries))
@@ -332,6 +334,13 @@ func newPipeline(logger *slog.Logger, cfg config.Config) (*pipeline.Pipeline, fu
 		// 同一渠道登记了多个实现时，启动日志把取用顺序写清楚：
 		// 第一个是默认实现，其后依次是失败时回退的备选。
 		logger.Info("[engine] 渠道取用序列（主备）", "chains", chains)
+	}
+	if retries.Enabled() {
+		// 重试是按渠道配的：把默认项与各渠道的实际参数都打出来，
+		// 排查「为什么这里重试了三次那里只打一次」时不必回头翻配置文件。
+		logger.Info("[engine] 渠道投递重试策略", "retries", retries.String())
+	} else {
+		logger.Info("[engine] 渠道投递重试未启用：失败即按主备切换")
 	}
 	logger.Info("[engine] 执行超时预算",
 		"step", pipe.Timeouts().Step,
@@ -381,27 +390,27 @@ func fallbackChains(registry *pipeline.ProviderRegistry) map[string][]string {
 	return out
 }
 
-// buildRegistry 组装渠道实现注册表。
+// buildRegistry 组装渠道实现注册表，并返回配置里的渠道级重试策略。
 //
 // 两种来源：未配置 XW_PROVIDERS_FILE 时使用内置的五个 console 实现（本地
-// 跑通链路用）；配置了文件则严格按文件装配——文件解析失败、校验不通过或
-// 实现构造失败都让进程起不来，避免「配置写错了但看起来在跑」。文件里声明
-// 但实现尚未接入的种类跳过并逐条告警，装配结果里仍缺实现的渠道也一并列出：
-// 那些渠道在运行期会退化为分发阶段的 mock 打印。
-func buildRegistry(logger *slog.Logger, cfg config.Config) (*pipeline.ProviderRegistry, error) {
+// 跑通链路用，不重试）；配置了文件则严格按文件装配——文件解析失败、校验
+// 不通过或实现构造失败都让进程起不来，避免「配置写错了但看起来在跑」。文件
+// 里声明但实现尚未接入的种类跳过并逐条告警，装配结果里仍缺实现的渠道也一并
+// 列出：那些渠道在运行期会退化为分发阶段的 mock 打印。
+func buildRegistry(logger *slog.Logger, cfg config.Config) (*pipeline.ProviderRegistry, pipeline.RetryTable, error) {
 	if cfg.ProvidersFile == "" {
-		return pipeline.DefaultProviderRegistry(logger), nil
+		return pipeline.DefaultProviderRegistry(logger), pipeline.DefaultRetryTable(), nil
 	}
 
 	set, err := provider.LoadSet(cfg.ProvidersFile)
 	if err != nil {
-		return nil, err
+		return nil, pipeline.DefaultRetryTable(), err
 	}
 
 	registry := pipeline.NewProviderRegistry()
 	report, err := set.Bind(registry, pipeline.ProviderFactory(logger))
 	if err != nil {
-		return nil, err
+		return nil, pipeline.DefaultRetryTable(), err
 	}
 	for _, skipped := range report.Skipped {
 		logger.Warn("[engine] 渠道实现尚未接入，配置已跳过",
@@ -422,7 +431,7 @@ func buildRegistry(logger *slog.Logger, cfg config.Config) (*pipeline.ProviderRe
 		"skipped", len(report.Skipped),
 		"configured", set.String(),
 	)
-	return registry, nil
+	return registry, set.Retries(), nil
 }
 
 // timeoutPolicy 组装超时策略：环境变量未配置时沿用管线默认值。

@@ -594,7 +594,7 @@ func (p *Pipeline) handleDigest(ctx *Context, step domain.Step) StepResult {
 	res.AggregateExpiresAt = card.ExpiresAt
 
 	deliverStarted := time.Now()
-	sent, deliverErr := p.deliverDigest(ctx, step, spec, card, outcome.Opened, title, body)
+	sent, delivery, deliverErr := p.deliverDigest(ctx, step, spec, card, outcome.Opened, title, body)
 	res.Duration = time.Since(deliverStarted)
 	if deliverErr != nil {
 		res.Error = deliverErr.Error()
@@ -604,6 +604,10 @@ func (p *Pipeline) handleDigest(ctx *Context, step domain.Step) StepResult {
 	// sent 表示本次是否真的投递出去：in_app 卡片总是写/改写成功即 true；
 	// 其他渠道窗口内命中既有卡片时不重复投递，为 false。
 	res.Sent = sent
+	res.UsedProvider = delivery.Provider.ID
+	res.ProviderAttempts = delivery.Attempted()
+	res.ProviderRetries = delivery.Retries()
+	res.ProviderFallback = delivery.FellBack()
 	ctx.Results[step.ID] = res
 
 	p.logger.Info("[digest] 聚合卡片已更新",
@@ -624,11 +628,12 @@ func (p *Pipeline) handleDigest(ctx *Context, step domain.Step) StepResult {
 // in_app：首次开卡写入收件箱，命中已有卡片则覆盖同 ID 条目（原地累加）；
 // 其他渠道：只在开卡时投递一次，窗口内的后续互动仅累计计数——邮件/短信
 // 这类渠道没有「原地改写」能力，窗口结束统一投递属于后续的定时冲刷能力。
-func (p *Pipeline) deliverDigest(ctx *Context, step domain.Step, spec DigestSpec, card DigestCard, opened bool, title, body string) (bool, error) {
+// deliverDigest 投递一张聚合卡片，返回是否真的发出去了、渠道链的尝试记录与错误。
+func (p *Pipeline) deliverDigest(ctx *Context, step domain.Step, spec DigestSpec, card DigestCard, opened bool, title, body string) (bool, Outcome, error) {
 	if spec.Channel == domain.ChannelInApp {
 		store, ok := p.inboxStore()
 		if !ok {
-			return false, errors.New("未注册 in_app provider，无法写入聚合卡片")
+			return false, Outcome{}, errors.New("未注册 in_app provider，无法写入聚合卡片")
 		}
 		entry := InboxEntry{
 			ID:           card.EntryID,
@@ -648,21 +653,21 @@ func (p *Pipeline) deliverDigest(ctx *Context, step domain.Step, spec DigestSpec
 		}
 		if opened {
 			if _, err := store.Save(entry); err != nil {
-				return false, fmt.Errorf("写入聚合卡片失败: %w", err)
+				return false, Outcome{}, fmt.Errorf("写入聚合卡片失败: %w", err)
 			}
-			return true, nil
+			return true, Outcome{}, nil
 		}
 		updated, err := store.Update(entry)
 		if err != nil {
-			return false, fmt.Errorf("更新聚合卡片失败: %w", err)
+			return false, Outcome{}, fmt.Errorf("更新聚合卡片失败: %w", err)
 		}
 		if !updated {
 			// 卡片已不在收件箱（文件被清理等）：按新条目落库，别把互动弄丢。
 			if _, err := store.Save(entry); err != nil {
-				return false, fmt.Errorf("补写聚合卡片失败: %w", err)
+				return false, Outcome{}, fmt.Errorf("补写聚合卡片失败: %w", err)
 			}
 		}
-		return true, nil
+		return true, Outcome{}, nil
 	}
 
 	// 其他渠道：只有开卡时投递，命中窗口内的既有卡片不重复发送。
@@ -673,13 +678,11 @@ func (p *Pipeline) deliverDigest(ctx *Context, step domain.Step, spec DigestSpec
 			"count", card.Count,
 			"channel", string(spec.Channel),
 		)
-		return false, nil
+		return false, Outcome{}, nil
 	}
-	provider, ok := p.registry.Lookup(spec.Channel)
-	if !ok {
-		return false, fmt.Errorf("渠道 %s 未注册 provider，无法投递聚合卡片", spec.Channel)
-	}
-	send := provider.Send(Delivery{
+	// 与普通步骤走同一条投递链：按渠道策略重试、失败时按优先级回退，
+	// 卡片和普通消息在渠道层不该有两套行为。
+	outcome := p.dispatch.failover.Send(ctx.Context(), Delivery{
 		Channel:      spec.Channel,
 		To:           deliveryRecipient(ctx, step, spec.Channel),
 		Subject:      title,
@@ -689,10 +692,13 @@ func (p *Pipeline) deliverDigest(ctx *Context, step domain.Step, spec DigestSpec
 		WorkflowName: workflowName(ctx),
 		SubscriberID: ctx.Msg.SubscriberID,
 	})
-	if !send.Sent {
-		return false, errors.New("投递聚合卡片失败: " + send.Reason)
+	if outcome.Candidates == 0 {
+		return false, outcome, fmt.Errorf("渠道 %s 未注册 provider，无法投递聚合卡片", spec.Channel)
 	}
-	return true, nil
+	if !outcome.Sent {
+		return false, outcome, errors.New("投递聚合卡片失败: " + outcome.Result.Reason)
+	}
+	return true, outcome, nil
 }
 
 // inboxStore 从 in_app provider 取回收件箱存储，保证「写收件箱」与

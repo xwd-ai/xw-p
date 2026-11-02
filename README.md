@@ -176,7 +176,7 @@ API 侧：
 | `slack` | `chat` | `webhook_url` | `channel`、`username`、`icon_emoji`、`timeout` |
 | `teams` | `chat` | `webhook_url` | — |
 
-校验在装配阶段完成并一次列全问题：未知渠道、`kind` 与渠道不匹配、标识重复、负优先级、缺少必填凭据、拼错的凭据项（例如把 `password` 写成 `Password`，错误信息会给出建议）都会让引擎启动失败，而不是等到投递那一刻才报认证错误。配置里出现的凭据值不会进日志，启动日志只打印标识、渠道、优先级与凭据名。
+校验在装配阶段完成并一次列全问题：未知渠道、`kind` 与渠道不匹配、标识重复、负优先级、缺少必填凭据、拼错的凭据项（例如把 `password` 写成 `Password`，错误信息会给出建议）都会让引擎启动失败，而不是等到投递那一刻才报认证错误。配置里出现的凭据值不会进日志，启动日志只打印标识、渠道、优先级与凭据名。文件顶层的 `retries` 段用于配置按渠道的投递重试，见下面的「渠道级重试」。
 
 `smtp`、`twilio`、`slack` 与 `push-mock` 已有真实实现（`push-mock` 是推送的校验型 mock，见下面的「推送投递」）；`inapp` 在两侧都已落地——引擎写 `pipeline.InboxEntry`、API 写 `app.message_center.Message`，共用同一份收件箱文件。`fcm` / `apns` 的报文契约已定义但真实提交尚未接入，`teams` 亦未接入：配置里写了这些种类会被跳过并在启动日志逐条告警，其余渠道照常装配；如果某个投递渠道最终没有任何启用的实现，也会在启动日志里点出来——那种情况下分发阶段会退化成 mock 打印。
 
@@ -199,7 +199,7 @@ API 侧：
 
 整条链共用一个 `ctx`：步骤超时或引擎退出后，不会再向后尝试备选，避免取消之后仍在链路末端发起网络请求。
 
-每次投递都会留痕：`StepResult.UsedProvider` 是实际完成投递的实现标识，`ProviderAttempts` 按尝试顺序记录全部实现，`ProviderFallback` 标出是否由备选完成。回退成功记 WARN 日志并带上被跳过实现的原因；整条链失败时，错误信息逐个列出实现与原因，例如：
+每次投递都会留痕：`StepResult.UsedProvider` 是实际完成投递的实现标识，`ProviderAttempts` 按尝试顺序记录每一次投递（同一实现重试时会重复出现），`ProviderFallback` 标出是否由备选完成。回退成功记 WARN 日志并带上被跳过实现的原因；整条链失败时，错误信息逐个列出实现与原因，例如：
 
 ```
 投递失败（email）: 尝试 2 个实现均失败：smtp-email：SMTP 连接 10.0.0.9:587 失败：i/o timeout；console-email：发件队列不可写
@@ -216,6 +216,48 @@ API 侧：
 ```
 
 启动日志会把存在备选的渠道及其取用顺序打出来，便于确认主备关系：`渠道取用序列（主备） chains="map[email:[smtp-email console-email]]"`。单实现渠道不会出现在这条日志里。
+
+#### 渠道级重试
+
+回退处理的是「这个实现对端不可用」，重试处理的是「同一个实现对端抖了一下」。两者叠在一起：先在同一个实现上按退避重试几次，次数用尽仍未成功，再换下一个实现。策略按渠道配置，写在配置文件顶层的 `retries` 段里：
+
+```json
+{
+  "providers": [
+    {"id": "smtp-email", "channel": "email", "kind": "smtp", "priority": 10,
+     "credentials": {"host": "smtp.example.com", "from": "互动提醒 <notify@example.com>"}},
+    {"id": "console-email", "channel": "email", "kind": "console", "priority": 100}
+  ],
+  "retries": {
+    "default": {"max_attempts": 1},
+    "email": {"max_attempts": 3, "base_delay": "500ms", "max_delay": "5s", "jitter": 0.3},
+    "chat": {"max_attempts": 3, "base_delay": "1s", "max_delay": "8s", "jitter": 0}
+  }
+}
+```
+
+| 字段 | 含义 |
+| --- | --- |
+| `max_attempts` | 单个实现最多尝试几次（含首次），上限 `10`；`0` 或 `1` 表示不重试。它同时是这条配置的开关 |
+| `base_delay` | 首次重试前的等待，逐次翻倍到 `max_delay` 封顶 |
+| `max_delay` | 等待上限，不能小于 `base_delay` |
+| `jitter` | 抖动比例 `0`–`1`，只向下抖动，因此上界始终可预期 |
+
+时长写带单位的字符串（`"500ms"`、`"2s"`）或毫秒数（`500`，数字一律按毫秒解释）。未写的字段沿用 `default` 段，`default` 段未写的沿用内置值（`500ms` 起、`5s` 封顶、抖动 `0.3`）。`default` 段缺省时所有渠道都不重试——渠道层之上还有队列层的消息重试，两层同时打开会让一次故障的请求量按乘积放大，因此这里的重试需要显式配置。
+
+`max_attempts`、`base_delay` 越界或写错渠道名都会让引擎启动失败，问题一次列全；`digest` / `delay` 这类编排步骤不是投递渠道，出现在 `retries` 里同样会被拒绝。
+
+重试只针对「值得再试」的失败：本地校验不过、服务器明确拒收（SMTP 5xx、Slack `403`/`404`/`410`/`413`）与回退表里的口径一致，重试只会把同一条必然被拒的消息多打几次。连接被拒、超时、限流 `429`、网关 5xx 才重试。退避等待同样感知 `ctx`：步骤超时或引擎退出时立即返回，不再发起下一次尝试。
+
+留痕与回退一致：`ProviderAttempts` 会列出每一次尝试（重试则同一标识重复出现），`ProviderRetries` 是首次之外多打的次数，`ProviderFallback` 仍然只表示「换过实现」。重试后成功记 WARN 日志并带上尝试序列；整条链失败时错误信息带上次数，便于区分「打了一次就挂」与「重试三次仍挂」：
+
+```
+投递失败（email）: smtp-email 先后尝试 3 次均失败：SMTP 连接 10.0.0.9:587 失败：i/o timeout
+投递失败（email）: 尝试 2 个实现（共 4 次）均失败：smtp-email（3 次）：i/o timeout；console-email：发件队列不可写
+```
+
+启动日志会打印实际生效的策略，例如 `渠道投递重试策略 retries="default=关闭 email=3 次 500ms→5s 抖动 0.30 chat=3 次 1s→8s"`；未配置时打印一行「渠道投递重试未启用：失败即按主备切换」。聚合卡片与普通步骤走同一条投递链，因此同样会重试与回退。
+
 
 #### 邮件投递（`kind: smtp`）
 
@@ -461,7 +503,7 @@ psql "$XW_DATABASE_URL" -f scripts/migrations/006_execution_indexes.sql
 
 ### 投递结果的回写
 
-执行明细由引擎在每次投递之后写入（`engine/internal/execution`）：分发阶段拿到的每个步骤结果折算成一行 `(trigger_id, channel)` 记录，`status` 为 `sent` / `failed`，`reason` 是失败原因，`duration_ms` 是这一次投递的耗时（含回退链上每一次失败的尝试）。除 API 侧约定的字段外还带四项排查信息：`step_id`（哪个步骤）、`provider`（实际完成投递的实现）、`attempts`（按顺序试过哪些实现）、`fallback`（是否由备选兜底）。
+执行明细由引擎在每次投递之后写入（`engine/internal/execution`）：分发阶段拿到的每个步骤结果折算成一行 `(trigger_id, channel)` 记录，`status` 为 `sent` / `failed`，`reason` 是失败原因，`duration_ms` 是这一次投递的耗时（含回退链上每一次失败的尝试与重试的退避等待）。除 API 侧约定的字段外还带四项排查信息：`step_id`（哪个步骤）、`provider`（实际完成投递的实现）、`attempts`（按顺序试过哪些实现，同一实现重试时会重复出现）、`fallback`（是否由备选兜底）。
 
 - **续跑也要记账**：`delay` 之后由调度器续跑的步骤同样写明细，否则触发时刻的明细只有前半程，后面的渠道查不到结果。
 - **没投递就不写**：被过滤、条件不满足、上游失败短路、只是登记了延迟的步骤不产生记录。「没发」和「发失败」混在同一张表里，会让失败原因变成噪音。

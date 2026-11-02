@@ -29,6 +29,7 @@ type Pipeline struct {
 	// 以下为编排步骤（digest）复用的阶段与依赖，单独持有引用避免重复构造。
 	logger    *slog.Logger
 	registry  *ProviderRegistry
+	dispatch  *dispatchStage
 	filter    *filterStage
 	transform *transformStage
 	renderer  *renderStage
@@ -70,16 +71,18 @@ func NewWithRegistry(logger *slog.Logger, registry *ProviderRegistry) *Pipeline 
 	filter := newFilterStage()
 	transform := newTransformStage()
 	renderer := newRenderStage()
+	dispatch := NewDispatchStage(logger, registry).(*dispatchStage)
 	return &Pipeline{
 		stages: []Stage{
 			filter,
 			NewBranchStage(),
 			transform,
 			renderer,
-			NewDispatchStage(logger, registry),
+			dispatch,
 		},
 		logger:    logger,
 		registry:  registry,
+		dispatch:  dispatch,
 		filter:    filter,
 		transform: transform,
 		renderer:  renderer,
@@ -87,6 +90,25 @@ func NewWithRegistry(logger *slog.Logger, registry *ProviderRegistry) *Pipeline 
 		now:       time.Now,
 		timeouts:  DefaultTimeoutPolicy(),
 	}
+}
+
+// WithProviderRetries 注入渠道级重试策略，返回管线自身便于链式装配。
+//
+// 策略按渠道生效，作用于回退链上「同一个实现的失败重试」，与队列层的
+// 消息重试互不影响：前者是「对端抖了一下」，后者是「这条消息没处理成」。
+func (p *Pipeline) WithProviderRetries(t RetryTable) *Pipeline {
+	if p.dispatch != nil {
+		p.dispatch.failover.WithRetries(t)
+	}
+	return p
+}
+
+// ProviderRetries 返回分发阶段当前生效的重试策略表。
+func (p *Pipeline) ProviderRetries() RetryTable {
+	if p.dispatch == nil {
+		return DefaultRetryTable()
+	}
+	return p.dispatch.failover.Retries()
 }
 
 // WithDigestStore 注入聚合卡片存储（如多引擎实例共享的 Redis 实现），

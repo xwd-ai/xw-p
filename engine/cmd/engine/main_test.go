@@ -108,12 +108,15 @@ func TestNewDelayStoreFallsBackWhenRedisDown(t *testing.T) {
 
 // buildRegistry 的默认路径：未配置渠道文件时登记内置的五个 console 实现。
 func TestBuildRegistryUsesBuiltinConsoleProviders(t *testing.T) {
-	registry, err := buildRegistry(discardLogger(), config.Config{})
+	registry, retries, err := buildRegistry(discardLogger(), config.Config{})
 	if err != nil {
 		t.Fatalf("默认装配失败：%v", err)
 	}
 	if registry.Len() != 5 {
 		t.Fatalf("登记条目数 = %d, 期望 5", registry.Len())
+	}
+	if retries.Enabled() {
+		t.Error("默认装配不带渠道级重试")
 	}
 	for _, ch := range domain.DeliveryChannels() {
 		if !registry.Has(ch) {
@@ -137,7 +140,7 @@ func TestBuildRegistryFromConfigFile(t *testing.T) {
 		t.Fatalf("写测试配置失败：%v", err)
 	}
 
-	registry, err := buildRegistry(discardLogger(), config.Config{ProvidersFile: path})
+	registry, _, err := buildRegistry(discardLogger(), config.Config{ProvidersFile: path})
 	if err != nil {
 		t.Fatalf("装配失败：%v", err)
 	}
@@ -167,7 +170,7 @@ func TestBuildRegistryRejectsInvalidConfig(t *testing.T) {
 		t.Fatalf("写测试配置失败：%v", err)
 	}
 
-	registry, err := buildRegistry(discardLogger(), config.Config{ProvidersFile: path})
+	registry, _, err := buildRegistry(discardLogger(), config.Config{ProvidersFile: path})
 	if err == nil {
 		t.Fatal("缺少凭据的配置应装配失败")
 	}

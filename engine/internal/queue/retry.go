@@ -6,10 +6,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"math/rand"
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"github.com/xwd-ai/xw-p/engine/internal/backoff"
 )
 
 // 失败重试的默认参数。
@@ -23,11 +24,11 @@ const (
 	// 不再安排重试，直接转死信——否则「重试 N 次」实际会被处理 N+1 次。
 	DefaultMaxAttempts = 5
 	// DefaultRetryBase 是第一次重试的等待时长。
-	DefaultRetryBase = 2 * time.Second
+	DefaultRetryBase = backoff.DefaultBase
 	// DefaultRetryMax 是重试等待的上限，指数增长到这里就不再翻倍。
-	DefaultRetryMax = time.Minute
+	DefaultRetryMax = backoff.DefaultMax
 	// DefaultRetryJitter 是抖动比例：实际等待在 [d*(1-jitter), d] 之间随机。
-	DefaultRetryJitter = 0.3
+	DefaultRetryJitter = backoff.DefaultJitter
 	// DefaultRetryBatch 限制单轮提升（把到期的重试写回主队列）的条数。
 	DefaultRetryBatch = 100
 )
@@ -60,55 +61,26 @@ func DefaultRetryPolicy() RetryPolicy {
 func (p RetryPolicy) Enabled() bool { return p.MaxAttempts > 0 }
 
 // Normalize 补全非法参数，避免 0 值把等待时间压成「立即重试」的忙循环。
+//
+// 补齐逻辑与渠道层共用 backoff.Policy，曲线只有一处定义。
 func (p RetryPolicy) Normalize() RetryPolicy {
-	if p.Base <= 0 {
-		p.Base = DefaultRetryBase
-	}
-	if p.Max <= 0 {
-		p.Max = DefaultRetryMax
-	}
-	if p.Max < p.Base {
-		p.Max = p.Base
-	}
-	if p.Jitter < 0 {
-		p.Jitter = 0
-	}
-	if p.Jitter > 1 {
-		p.Jitter = 1
-	}
+	n := backoff.Policy{Base: p.Base, Max: p.Max, Jitter: p.Jitter}.Normalize()
+	p.Base, p.Max, p.Jitter = n.Base, n.Max, n.Jitter
 	return p
 }
 
 // Delay 返回第 attempt 次重试前的等待时长（attempt 从 1 开始）。
 //
-// 指数增长：base、2*base、4*base……到 Max 封顶；随后按 Jitter 向下抖动，
+// 曲线见 backoff.Policy.Delay：指数增长到 Max 封顶，随后向下抖动，
 // 让同一批同时失败的消息不会在同一毫秒一起回到队列。
 func (p RetryPolicy) Delay(attempt int) time.Duration {
-	p = p.Normalize()
-	if attempt < 1 {
-		attempt = 1
-	}
-	d := p.Base
-	// attempt 很大时 2 的幂会溢出，超过 20 次直接取上限。
-	for i := 1; i < attempt && d < p.Max; i++ {
-		if d > p.Max/2 {
-			d = p.Max
-			break
-		}
-		d *= 2
-	}
-	if d > p.Max {
-		d = p.Max
-	}
-	if p.Jitter == 0 {
-		return d
-	}
-	r := p.rnd
-	if r == nil {
-		r = rand.Float64
-	}
-	// 只向下抖动：等待时间始终不超过理论值，退避上界仍然可预期。
-	return time.Duration(float64(d) * (1 - p.Jitter*r()))
+	return backoff.Policy{
+		MaxAttempts: p.MaxAttempts,
+		Base:        p.Base,
+		Max:         p.Max,
+		Jitter:      p.Jitter,
+		Rand:        p.rnd,
+	}.Delay(attempt)
 }
 
 // StateTTL 是重试计数等辅助键的存活时间。

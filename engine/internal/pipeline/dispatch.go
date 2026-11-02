@@ -72,6 +72,7 @@ func (d *dispatchStage) Apply(ctx *Context, step domain.Step) error {
 	}
 
 	res.ProviderAttempts = outcome.Attempted()
+	res.ProviderRetries = outcome.Retries()
 	res.UsedProvider = outcome.Provider.ID
 	res.ProviderFallback = outcome.FellBack()
 
@@ -82,6 +83,15 @@ func (d *dispatchStage) Apply(ctx *Context, step domain.Step) error {
 			"stepId", step.ID,
 			"channel", string(ch),
 			"provider", res.UsedProvider,
+		}
+		if res.ProviderRetries > 0 {
+			// 重试成功说明对端抖了一下：记 warn 级，便于看出这个渠道在靠重试兜底。
+			logArgs = append(logArgs,
+				"attempts", res.ProviderAttempts,
+				"retried", res.ProviderRetries,
+			)
+			d.logger.Warn("[dispatch] 投递经重试后成功", logArgs...)
+			return nil
 		}
 		if res.ProviderFallback {
 			// 回退成功说明默认实现当时不可用：记 warn 级，便于看出渠道在靠备选兜底。

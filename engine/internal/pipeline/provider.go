@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"github.com/xwd-ai/xw-p/engine/internal/domain"
 	"github.com/xwd-ai/xw-p/engine/internal/provider"
 )
 
@@ -50,4 +51,18 @@ type Failover = provider.Failover
 // NewFailover 在注册表上构造回退调度器。
 func NewFailover(r *ProviderRegistry) *Failover {
 	return provider.NewFailover(r)
+}
+
+// RetryPolicy 是渠道层的退避策略（最多尝试几次、每次失败后等多久）。
+type RetryPolicy = provider.RetryPolicy
+
+// RetryTable 按渠道保存退避策略，未单独配置的渠道沿用默认项。
+type RetryTable = provider.RetryTable
+
+// DefaultRetryTable 返回不做任何重试的空表。
+func DefaultRetryTable() RetryTable { return provider.DefaultRetryTable() }
+
+// NewRetryTable 校验并构造渠道级重试表。
+func NewRetryTable(defaults RetryPolicy, overrides map[domain.Channel]RetryPolicy) (RetryTable, error) {
+	return provider.NewRetryTable(defaults, overrides)
 }

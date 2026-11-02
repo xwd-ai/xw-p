@@ -40,6 +40,9 @@ type StepResult struct {
 	ProviderAttempts []string
 	// ProviderFallback 表示默认实现失败后由备选完成投递。
 	ProviderFallback bool
+	// ProviderRetries 是首次之外多打的尝试次数：同一实现按渠道策略重试、
+	// 以及回退到备选都计入，等于 len(ProviderAttempts) 减去用过的实现数。
+	ProviderRetries int
 	// Duration 是分发阶段的实际耗时，含回退链上每一次失败的尝试。
 	// 它只覆盖投递本身，不含过滤/渲染；执行明细里的 duration_ms 取自这里。
 	Duration time.Duration

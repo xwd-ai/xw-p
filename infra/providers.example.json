@@ -17,5 +17,10 @@
         "username": "互动播报"
       }
     }
-  ]
+  ],
+  "retries": {
+    "default": {"max_attempts": 1},
+    "email": {"max_attempts": 3, "base_delay": "500ms", "max_delay": "5s", "jitter": 0.3},
+    "chat": {"max_attempts": 3, "base_delay": "1s", "max_delay": "8s", "jitter": 0.3}
+  }
 }
