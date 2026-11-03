@@ -311,6 +311,8 @@ def test_list_subscribers_filters_by_channel(client):
 
 def test_list_subscribers_rejects_unknown_channel_and_cursor(client):
     assert client.get("/v1/subscribers", params={"channel": "pigeon"}).status_code == 422
+    # 编排步骤不会挂在订阅者身上，按它过滤会得到空页，不如直接指出取值不对。
+    assert client.get("/v1/subscribers", params={"channel": "digest"}).status_code == 422
     assert client.get("/v1/subscribers", params={"cursor": "ghost"}).status_code == 400
     assert client.get("/v1/subscribers", params={"limit": 0}).status_code == 422
 

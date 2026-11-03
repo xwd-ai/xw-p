@@ -92,6 +92,13 @@ def list_subscribers(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"未知渠道：{channel}",
         )
+    if selected is not None and not selected.is_delivery():
+        # 编排步骤不会出现在订阅者的渠道列表里，按它过滤只会得到空页，
+        # 让调用方以为「没人订阅」比直接指出取值不对更容易误导。
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"{selected.value} 是编排步骤，不能作为订阅者的投递渠道",
+        )
 
     try:
         items, next_cursor = get_subscriber_store().list(
