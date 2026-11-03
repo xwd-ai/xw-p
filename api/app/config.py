@@ -70,6 +70,10 @@ PROVIDERS_FILE = _env("XW_PROVIDERS_FILE", "")
 PROVIDER_HEALTH_TTL = _env_float("XW_PROVIDER_HEALTH_TTL", 30.0)
 PROVIDER_HEALTH_TIMEOUT = _env_float("XW_PROVIDER_HEALTH_TIMEOUT", 2.0, minimum=0.1)
 
+# 订阅者手机号的默认国家码：档案里写本地号码（13800000000）时按它补成 E.164。
+# 留空表示只接受自带 ``+`` 区号的号码——按位数猜国家码会把短信发到别人的号段上。
+SUBSCRIBER_COUNTRY_CODE = _env("XW_SUBSCRIBER_COUNTRY_CODE", "")
+
 # 幂等键缓存 TTL（秒）：超过该时长后同键请求视为新请求
 IDEMPOTENCY_TTL = int(_env("XW_IDEMPOTENCY_TTL", "86400"))
 

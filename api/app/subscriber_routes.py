@@ -1,12 +1,13 @@
 """订阅者 CRUD 接口。
 
 订阅者是触发的收件方：一条记录里既有身份，也有邮箱 / 手机号 / 设备 token
-与「启用了哪些渠道」。接口只做增删改查与渠道绑定的写入，发送前的偏好判定
-与地址格式校验属于后续阶段，届时在投递路径上统一收口。
+与「启用了哪些渠道」。地址的格式校验在请求模型里（422），唯一性在存储层
+（409）——邮箱与手机号都是「一个人一个」的身份信息，同一个地址绑两个订阅者
+会让一条通知投两遍、退信归不到人。
 
 约定：
 
-- 写操作走 ``require_env``，记录按请求头里的环境打标；
+- 写操作走 ``require_env``，记录按请求头里的环境打标，唯一性判定也按环境分隔；
 - 渠道列表整体替换而不是增量增删，避免「先查再改」在并发下丢更新；
 - 删除成功返回 204，重复删除返回 404 —— 让调用方知道这次是不是白跑一趟。
 """
@@ -30,6 +31,7 @@ from .subscriber_schemas import (
 from .subscriber_store import (
     DEFAULT_PAGE_SIZE,
     MAX_PAGE_SIZE,
+    SubscriberAddressConflictError,
     SubscriberConflictError,
     SubscriberCursorError,
     SubscriberNotFoundError,
@@ -58,7 +60,8 @@ def create_subscriber(
     """创建一个订阅者。
 
     标识可由调用方指定（把业务侧的用户 ID 带进来），留空则生成 UUID。
-    重复标识返回 409 而不是覆盖：订阅者的渠道绑定被悄悄换掉，比创建失败更难查。
+    标识重复、邮箱或手机号已被别人绑定时返回 409 而不是覆盖：订阅者的渠道
+    绑定被悄悄换掉，比创建失败更难查。邮箱统一存小写，手机号存 E.164。
     """
     stamp = _now()
     subscriber = Subscriber(
@@ -74,6 +77,8 @@ def create_subscriber(
     try:
         created = get_subscriber_store().create(subscriber)
     except SubscriberConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    except SubscriberAddressConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
     return to_subscriber_out(created)
 
@@ -135,6 +140,7 @@ def update_subscriber(
 
     只改请求里出现的字段：没写 ``phone`` 就保持原手机号，写空串才解绑。
     渠道列表整体替换，传空列表等同于把该订阅者的所有渠道关掉。
+    改成别人已占用的邮箱或手机号返回 409；把地址解绑之后再被别人认领是允许的。
     """
     store = get_subscriber_store()
     current = store.get(subscriber_id)
@@ -159,6 +165,8 @@ def update_subscriber(
     except SubscriberNotFoundError as exc:
         # 读到与写入之间被别的请求删掉了：按不存在处理，别把它「复活」。
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except SubscriberAddressConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
     return to_subscriber_out(saved)
 
 

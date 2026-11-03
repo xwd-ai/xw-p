@@ -275,7 +275,7 @@ def test_update_subscriber_clears_address_with_empty_string(client):
 
 
 def test_update_subscriber_missing_returns_404(client):
-    response = client.put("/v1/subscribers/ghost", json={"email": "a@b.c"})
+    response = client.put("/v1/subscribers/ghost", json={"email": "ghost@example.com"})
     assert response.status_code == 404
 
 
