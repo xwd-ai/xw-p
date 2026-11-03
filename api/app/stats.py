@@ -6,7 +6,9 @@
 - Postgres 后端由 SQL 直接聚合，只回传几行结果。
 
 统计口径与 ``/v1/dashboard/stats`` 的返回字段一一对应：``total`` 是记录条数，
-``success_rate`` 为 ``status == "sent"`` 的占比（无记录时按 100 计），
+``success_rate`` 为 ``status == "sent"`` 在**实际尝试投递的记录**中的占比，
+``skipped`` 是全部渠道都被偏好拦下的条数——它们没有尝试投递，放进成功率分母
+会让一次正确的用户设置看起来像一次故障；一条尝试记录都没有时按 100 计。
 ``channel_distribution`` 按渠道数组逐项计数，``trend`` 是最近 ``trend_days``
 天（含今天）的每日条数，窗口外的记录计入总数但不进趋势。
 """
@@ -41,12 +43,17 @@ def build_stats(
     per_day: dict[str, int],
     trend_days: int = TREND_DAYS,
     today: Optional[date] = None,
+    skipped: int = 0,
 ) -> dict[str, Any]:
     """把已聚合的计数拼成接口返回结构，补齐窗口内没有记录的天。"""
     days = recent_days(trend_days, today)
+    # 分母只算真正尝试过投递的条数：全部渠道被偏好拦下的消息既没成功也没
+    # 失败，计入分母会把成功率拉低，而那次投递根本没有发生。
+    attempted = max(0, total - skipped)
     return {
         "total": total,
-        "success_rate": round((sent / total) * 100, 1) if total else 100.0,
+        "skipped": skipped,
+        "success_rate": round((sent / attempted) * 100, 1) if attempted else 100.0,
         "channel_distribution": dict(channel_counts),
         "trend": [{"date": d.isoformat(), "count": per_day.get(d.isoformat(), 0)} for d in days],
     }
@@ -61,12 +68,16 @@ class StatsAccumulator:
         self._per_day: dict[str, int] = {d.isoformat(): 0 for d in recent_days(trend_days, today)}
         self.total = 0
         self.sent = 0
+        self.skipped = 0
         self.channel_counts: dict[str, int] = {}
 
     def add(self, record: dict[str, Any]) -> None:
         self.total += 1
-        if record.get("status") == "sent":
+        status = record.get("status")
+        if status == "sent":
             self.sent += 1
+        elif status == "skipped":
+            self.skipped += 1
         for ch in _channels_of(record):
             self.channel_counts[ch] = self.channel_counts.get(ch, 0) + 1
         dt = parse_dt(record.get("created_at"))
@@ -88,6 +99,7 @@ class StatsAccumulator:
             per_day=self._per_day,
             trend_days=self._trend_days,
             today=self._today,
+            skipped=self.skipped,
         )
 
 

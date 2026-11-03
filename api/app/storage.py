@@ -208,7 +208,8 @@ class PostgresStorage:
             totals = conn.execute(
                 text(
                     "SELECT count(*) AS total, "
-                    "count(*) FILTER (WHERE status = 'sent') AS sent FROM messages"
+                    "count(*) FILTER (WHERE status = 'sent') AS sent, "
+                    "count(*) FILTER (WHERE status = 'skipped') AS skipped FROM messages"
                 )
             ).mappings().one()
             channel_rows = conn.execute(
@@ -237,6 +238,7 @@ class PostgresStorage:
             channel_counts={str(r["channel"]): int(r["n"]) for r in channel_rows},
             per_day=per_day,
             trend_days=trend_days,
+            skipped=int(totals["skipped"]),
         )
 
 

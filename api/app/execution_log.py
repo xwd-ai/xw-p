@@ -18,7 +18,8 @@ JSONL 后端从文件尾部倒着读，取满一页即停；Postgres 后端拼 `
 - ``id``：明细记录标识（翻页次级键）。
 - ``trigger_id``：所属触发的唯一标识。
 - ``channel``：投递渠道（in_app / email / sms / push / chat）。
-- ``status``：投递结果（``sent`` / ``failed``）。
+- ``status``：投递结果（``sent`` / ``failed`` / ``skipped``）。``skipped`` 表示
+  订阅者偏好关闭了该渠道：没有取实现、没有发请求，``reason`` 给出命中的层级。
 - ``reason``：失败原因（成功时为空）。
 - ``duration_ms``：投递耗时（毫秒，mock 阶段为 0）。
 - ``created_at``：ISO 8601 时间戳。

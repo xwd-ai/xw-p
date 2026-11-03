@@ -606,6 +606,39 @@ curl 'localhost:8000/v1/subscribers/creator_42/preferences/resolve?workflow=post
 - 删除一条不存在的记录返回 `removed=0` 而不是 404：调用方的目的（这条记录不要存在）已经达成，报错反而要它自己分辨「本来就没有」与「删失败」。
 - `enabled=true` 是一条有意义的记录，不是「没设置」。它比更宽的层级具体，因此能把某个渠道或某类互动从全局关闭里单独放开。
 
+### 投递前的偏好判定
+
+偏好存下来之后要有人去问，`api/app/delivery_gate.py` 把这件事收在一处：拿订阅者、工作流、渠道三样东西跑一遍覆盖链，给出「这个渠道发不发」。消费路径（`api/app/worker.py`）在建投递请求之前先过这道判定。
+
+```python
+from app.delivery_gate import get_delivery_gate
+
+for decision in get_delivery_gate().check("creator_42", "post_commented", ["in_app", "email"]):
+    if not decision.allowed:
+        print(decision.channel, decision.skip_reason)
+```
+
+四条规则：
+
+- **一条消息只取一次快照**。一条消息往往发往多个渠道，逐渠道读存储会在同一个人身上读多次，还可能读到两个不同时刻的视图——「邮件关了、推送没关」应当来自同一份数据。
+- **读不到偏好时照常发送**。文件损坏、后端不可用都属于「不知道用户怎么设置」，不是「用户不想收」。通知的价值在于送达，静默丢消息比多发一条更难被发现，因此失败按默认接收处理并留一条告警日志。
+- **判定只做否决**。渠道没配实现、缺收件地址这类问题仍由投递路径报失败，不因为偏好允许就被绕过。
+- **不参与判定的输入不报错**。消息没带订阅者标识（系统通知）时连存储都不读；工作流名不合法时退化成「不按工作流层判定」，渠道层与全局层照常生效。
+
+被拦下的渠道不进投递，只留一条状态为 `skipped` 的执行明细：
+
+```bash
+curl 'localhost:8000/v1/executions?status=skipped'
+# {"channel":"email","status":"skipped","reason":"偏好跳过：渠道 email 已关闭", ...}
+```
+
+对消息记录有两处影响，都是为了让「没发」不要伪装成「发了」或「发失败」：
+
+- 全部渠道都被拦下时，消息记录的 `status` 是 `skipped`（不是 `failed`），`reason` 给出命中的层级；多个渠道被同一条偏好拦下时原因只写一遍。
+- 消息记录的 `channels` 只列**实际尝试投递**的渠道。收件箱按 `channels` 是否含 `in_app` 决定要不要给这个人显示站内信，如果被拦下的 `in_app` 还留在里面，用户会收到一张点开什么都没有的卡片，未读数也跟着涨。
+
+仪表盘统计因此分成三个数：`total` 是记录条数，`skipped` 是被全部拦下的条数，`success_rate` 的分母只算**实际尝试投递**的记录（`total - skipped`）。把没发出去的算进分母，一次正确的用户设置看起来就像一次故障。
+
 ### 死信运维接口
 
 引擎启动时会在 `XW_ADMIN_ADDR`（默认本机 `ENGINE_PORT`）上开一组管理接口，用于查看、重放与丢弃死信，查看渠道实现的健康状态与启停，以及读取投递指标。接口只绑定回环地址，需要跨机访问时显式改成 `0.0.0.0:8081` 之类的地址；`XW_ADMIN_ADDR=off` 则不启动。

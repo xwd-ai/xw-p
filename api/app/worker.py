@@ -8,6 +8,16 @@ redis 模式下队列由 Go 引擎消费，由引擎执行工作流步骤与渠�
 耗时）逐条写入执行明细。渠道没配实现、缺地址、实现内部报错都记为失败并保留
 原因，不再无条件写「已发送」；一条消息只要有渠道失败，整条记录即为失败。
 
+投递之前先过一遍订阅者偏好（``app.delivery_gate``）：被关闭的渠道不取实现、
+不发请求，直接以 ``skipped`` 写入执行明细并带上命中的层级。整条消息全部渠道
+都被拦下时，消息记录的状态也是 ``skipped``——「没发」与「发失败」是两件事，
+混进失败率会让一次正确的用户设置看起来像一次故障。
+
+消息记录里的 ``channels`` 只列**实际尝试投递**的渠道：被偏好拦下的渠道既不
+会进渠道分布，也不会让收件箱多出一张空卡片（收件箱按 ``channels`` 是否含
+``in_app`` 决定要不要给这个人显示一条站内信）。被拦下的渠道另有去处——执行
+明细里那条 ``skipped``。活动日志仍按触发时声明的渠道记录，两处口径互不干扰。
+
 落库后端由 ``XW_STORAGE`` 决定（jsonl / postgres），见 ``storage.py``。
 """
 from __future__ import annotations
@@ -18,6 +28,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from .bus import get_bus
+from .delivery_gate import GateDecision, get_delivery_gate, summarize
 from .execution_log import record_execution
 from .models.channel import Channel
 from .providers import Delivery, Recipient, get_registry
@@ -67,17 +78,54 @@ class Worker:
         )
         registry = get_registry()
         failures: list[str] = []
+        skipped: list[GateDecision] = []
+        sent = 0
+        # 实际尝试投递的渠道（按声明顺序）：被偏好拦下的不进这里。
+        attempted: list[str] = []
 
-        for raw in channels:
-            channel = _parse_channel(raw)
+        # 先解析渠道、再统一判定：一条消息的多个渠道共用同一份偏好快照，
+        # 既省掉重复读取，也保证「邮件关了、推送没关」这类结论来自同一时刻。
+        parsed = [_parse_channel(raw) for raw in channels]
+        decisions = {
+            decision.channel: decision
+            for decision in get_delivery_gate().check(
+                msg.subscriber_id,
+                msg.name,
+                [channel for channel in parsed if channel is not None],
+            )
+        }
+        if any(not decision.allowed for decision in decisions.values()):
+            logger.info(
+                "偏好判定: %s -> %s %s",
+                msg.name,
+                msg.subscriber_id,
+                summarize(decisions.values()),
+            )
+
+        for raw, channel in zip(channels, parsed):
             if channel is None:
                 reason = f"未知渠道：{raw!r}"
+                attempted.append(str(raw))
                 record_execution(
                     trigger_id=msg.trigger_id, channel=str(raw), status="failed", reason=reason
                 )
                 failures.append(reason)
                 continue
 
+            decision = decisions.get(channel.value)
+            if decision is not None and not decision.allowed:
+                # 被偏好拦下的渠道连实现都不取：既不发请求，也不该出现在
+                # 「实现不可用」之类的失败原因里——它压根没打算发。
+                skipped.append(decision)
+                record_execution(
+                    trigger_id=msg.trigger_id,
+                    channel=channel.value,
+                    status="skipped",
+                    reason=decision.skip_reason,
+                )
+                continue
+
+            attempted.append(channel.value)
             provider = registry.get(channel)
             if provider is None:
                 reason = f"渠道 {channel.value} 没有可用的渠道实现"
@@ -108,6 +156,7 @@ class Worker:
                 duration_ms=result.duration_ms,
             )
             if result.sent:
+                sent += 1
                 logger.info(
                     "已发送: %s -> %s (%s, %s, %dms)",
                     msg.name,
@@ -126,18 +175,31 @@ class Worker:
                     result.reason,
                 )
 
+        # 三种状态对应三种事实：有渠道失败、全部被偏好拦下、至少发出去一条。
+        # 把「全部拦下」记成 failed 会让成功率随用户设置波动，排查时也分不清
+        # 是渠道故障还是用户主动关闭。
+        if failures:
+            outcome = "failed"
+        elif skipped and sent == 0:
+            outcome = "skipped"
+        else:
+            outcome = "sent"
+
         record = {
             "trigger_id": msg.trigger_id,
             "transaction_id": msg.transaction_id,
             "workflow": msg.name,
             "subscriber_id": msg.subscriber_id,
-            "channels": channels,
+            "channels": attempted,
             "payload": msg.payload,
-            "status": "failed" if failures else "sent",
+            "status": outcome,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
-        if failures:
-            record["reason"] = "; ".join(failures)
+        # 同一条记录只说明原因，不按渠道重复：多个渠道被同一条偏好拦下时，
+        # 「全局总开关已关闭」写一遍就够了。
+        reasons = list(dict.fromkeys(failures or [d.skip_reason for d in skipped]))
+        if reasons:
+            record["reason"] = "; ".join(reasons)
         get_storage().save(record)
 
 

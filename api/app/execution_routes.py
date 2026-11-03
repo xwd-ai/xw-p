@@ -6,7 +6,7 @@
 过滤维度：
 - ``triggerId``：按触发唯一标识过滤。
 - ``channel``：按投递渠道过滤。
-- ``status``：按投递结果过滤（``sent`` / ``failed``）。
+- ``status``：按投递结果过滤（``sent`` / ``failed`` / ``skipped``）。
 - ``since`` / ``until``：按写入时间范围过滤（ISO 8601，含边界）。
 
 分页用游标而不是 offset：响应里的 ``nextCursor`` 原样回传即可取下一页。游标是
@@ -19,7 +19,9 @@
 - ``id``：明细记录标识。
 - ``trigger_id``：所属触发的唯一标识。
 - ``channel``：投递渠道。
-- ``status``：投递结果（``sent`` / ``failed``）。
+- ``status``：投递结果（``sent`` / ``failed`` / ``skipped``）。
+  ``skipped`` 表示该渠道被订阅者偏好关闭，未取实现也未发请求，``reason``
+  给出命中的层级与目标。
 - ``reason``：失败原因（成功时为空）。
 - ``duration_ms``：投递耗时（毫秒）。
 - ``created_at``：ISO 8601 时间戳。
@@ -79,7 +81,7 @@ def _cursor_of(item: dict) -> Optional[str]:
 def list_executions(
     trigger_id: Optional[str] = Query(default=None, alias="triggerId", description="按触发唯一标识过滤"),
     channel: Optional[str] = Query(default=None, description="按投递渠道过滤"),
-    status: Optional[str] = Query(default=None, description="按投递结果过滤（sent/failed）"),
+    status: Optional[str] = Query(default=None, description="按投递结果过滤（sent/failed/skipped）"),
     since: Optional[datetime] = Query(default=None, description="起始时间（ISO 8601，含）"),
     until: Optional[datetime] = Query(default=None, description="截止时间（ISO 8601，含）"),
     limit: int = Query(default=_DEFAULT_LIMIT, ge=1, le=_MAX_LIMIT, description="单页条数上限"),
