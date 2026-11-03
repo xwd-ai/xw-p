@@ -731,11 +731,13 @@ msg="[engine] 投递指标累计" attempted=2 sent=2 failed=0 timeouts=0 retried
 # API 与 Python 侧渠道实现
 api/.venv/bin/python -m pytest api/tests -q
 
-# Go 引擎；渠道与管线这两块并发路径多，单独跑一遍竞态检测
-cd engine && go test ./... && go test -race ./internal/provider/ ./internal/pipeline/
+# Go 引擎；渠道、管线与装配入口这几块并发路径多，单独跑一遍竞态检测
+cd engine && go test ./... && go test -race ./internal/provider/ ./internal/pipeline/ ./internal/runner/ ./internal/webhook/ ./cmd/engine/
 ```
 
 渠道实现除各自的细节测试外，还有一层跨实现的契约测试（`engine/internal/pipeline/provider_contract_test.go`），只验所有实现共有的部分：标识非空、互不重复且与服务渠道一致；本地就能判定的失败（缺地址、地址非法、正文为空、载荷超限）统一报成「失败 + 终态 + 原因」，避免回退链把一条必然被拒的消息试遍备选；零值投递不 panic 且失败原因可读；没有外部依赖时探测恒为可用、需要落盘或连网的实现如实报错；并发调用不出数据竞争。新增一个渠道实现时把它加进同一张表，这些约束即自动覆盖——细节规则仍由各自的实现测试负责。
+
+渠道层另有一条端到端用例（`engine/cmd/engine/phase3_integration_test.go`）：按启动路径装配渠道配置，邮件投到进程内的 SMTP 服务器、群播报投到进程内的 HTTP 接收端，再比对四处结论是否一致——执行明细里的实际实现与尝试序列、指标里的成败与回退计数、健康状态、回调报文。覆盖四个渠道全部投出、主实现故障后重试再回退、本地校验失败不回退，以及运行期停用全部实现时如实失败四条路径。
 
 ## 压测
 
