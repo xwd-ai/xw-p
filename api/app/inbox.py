@@ -1,7 +1,8 @@
 """In-app 收件箱（ROADMAP Phase S）。
 
 提供订阅者维度的 In-app 通知中心能力：
-- ``GET /v1/inbox``：返回某订阅者的 In-app 消息列表与未读计数。
+- ``GET /v1/inbox``：返回某订阅者的 In-app 消息列表与未读计数，支持游标翻页
+  与筛选（只未读、按工作流、按时间区间）。
 - ``POST /v1/inbox/read``：标记一条或多条消息为已读（未指定则全部已读）。
 
 数据来源：
@@ -23,9 +24,23 @@
 既不读收件箱文件、也不把投递记录读进内存；任一来源有新写入或该订阅者标记了
 已读，版本变化即重算。版本探测本身是廉价操作：收件箱文件取 ``stat``，
 JSONL 投递存储取文件 ``stat``，Postgres 取表的写入计数。
+
+翻页与筛选：
+- 排序键是 ``(排序时间, 消息 ID)``，倒序。排序时间优先取 ``updated_at``（聚合卡片
+  被新互动顶起来时应该往前排），回落到 ``created_at``；带上消息 ID 是为了定序——
+  同一秒内写入的多条消息若只按时间排，翻页时顺序会在两次请求之间漂移，
+  同一条消息可能出现在两页里。
+- 游标编码上一页最后一条的排序键，下一次请求从它的**严格后一条**继续。
+  这样即使翻页期间顶上来了新消息，也不会重复返回或漏掉后面的内容。
+- 未读与总数覆盖该订阅者的全部消息（与是否筛选、是否截断无关），
+  ``matched`` 是本页筛选命中的条数，``hasMore`` / ``nextCursor`` 用于继续翻页。
+- 首屏（无筛选、无游标）走缓存快照；筛选或深翻页要按全部消息算命中数，
+  因此改为整份汇总后过滤——缓存里只留最近 200 条，用它算筛选结果会得到错的数。
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import itertools
 import json
 import logging
@@ -54,6 +69,11 @@ _INBOX_FILE = Path(os.getenv("XW_INBOX_FILE") or _DATA_DIR / "inbox.jsonl")
 
 # In-app 渠道标识（后端落库用下划线命名）
 _INAPP_CHANNEL = "in_app"
+
+# 单页条数的默认值与上限。上限与缓存保留条数一致：再大的页也拿不到更早的消息，
+# 只会让人以为「消息就这么点」。
+DEFAULT_INBOX_LIMIT = 50
+MAX_INBOX_LIMIT = 200
 
 # 排序兜底时间：缺失/无法解析 created_at 的条目排在最后
 _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
@@ -527,7 +547,7 @@ def _collect_inbox(subscriber_id: str) -> list[dict]:
             )
         )
 
-    items.sort(key=lambda i: _sort_ts(i), reverse=True)
+    items.sort(key=_page_key, reverse=True)
     return items
 
 
@@ -536,27 +556,171 @@ def _sort_ts(item: dict) -> datetime:
     return _parse_dt(item.get("updated_at")) or _parse_dt(item.get("created_at")) or _EPOCH
 
 
+def _page_key(item: dict) -> tuple[datetime, str]:
+    """排序与游标共用的键：``(排序时间, 消息 ID)``。
+
+    时间只到秒级，同一秒内写入的消息若只按时间排，顺序取决于底层读取顺序；
+    翻页时两次请求各算出一种顺序，同一条消息就会出现在两页里，或者干脆漏掉。
+    补一个消息 ID 让顺序完全确定。
+    """
+    return (_sort_ts(item), str(item.get("message_id") or ""))
+
+
+class InboxCursorError(ValueError):
+    """翻页游标无法解析（抄错了，或者不是本接口返回的形态）。"""
+
+
+def encode_cursor(item: dict) -> str:
+    """把一条消息的排序键编码成游标：不透明字符串，调用方不必关心内容。"""
+    stamp, message_id = _page_key(item)
+    payload = f"{stamp.isoformat()}|{message_id}"
+    return base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def decode_cursor(raw: str) -> tuple[datetime, str]:
+    """还原游标；形态不对时抛 :class:`InboxCursorError`。"""
+    text = str(raw).strip()
+    padded = text + "=" * (-len(text) % 4)
+    try:
+        payload = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError, UnicodeEncodeError) as exc:
+        raise InboxCursorError("游标格式不正确，请原样传回上一页的 nextCursor") from exc
+    stamp_text, _, message_id = payload.partition("|")
+    stamp = _parse_dt(stamp_text)
+    if stamp is None:
+        raise InboxCursorError("游标里的时间戳无法解析，请从第一页重新翻")
+    return stamp, message_id
+
+
+def _filter_items(
+    items: list[dict],
+    *,
+    unread_only: bool = False,
+    workflow: Optional[str] = None,
+    since: Optional[datetime] = None,
+    until: Optional[datetime] = None,
+) -> list[dict]:
+    """按「只未读 / 工作流 / 时间区间」过滤，输入已是倒序列表。"""
+    selected: list[dict] = []
+    for item in items:
+        if unread_only and item.get("read"):
+            continue
+        if workflow is not None and str(item.get("workflow") or "") != workflow:
+            continue
+        stamp = _sort_ts(item)
+        if since is not None and stamp < since:
+            continue
+        if until is not None and stamp >= until:
+            continue
+        selected.append(item)
+    return selected
+
+
+def _page(
+    items: list[dict],
+    *,
+    limit: int,
+    cursor_key: Optional[tuple[datetime, str]] = None,
+) -> tuple[list[dict], bool]:
+    """从倒序列表里取一页，返回 ``(本页消息, 还有没有下一页)``。
+
+    游标指向上一页最后一条，本页从它的**严格后一条**开始：翻页期间顶上来了
+    新消息也不会重复返回，游标指向的消息被删掉也不会卡住。
+    """
+    start = 0
+    if cursor_key is not None:
+        for index, item in enumerate(items):
+            if _page_key(item) < cursor_key:
+                start = index
+                break
+        else:
+            return [], False
+    window = items[start : start + limit]
+    return window, start + len(window) < len(items)
+
+
 def _list_inbox(subscriber_id: str, limit: int) -> list[dict]:
     """按时间倒序返回某订阅者的 In-app 消息列表（最多 limit 条）。"""
-    return _snapshot(subscriber_id).items[:limit]
+    page, _ = _page(_snapshot(subscriber_id).items, limit=limit)
+    return page
+
+
+def _time_bound(raw: Optional[str], name: str) -> Optional[datetime]:
+    """解析时间筛选参数；空值返回 ``None``，写法不对直接 400。"""
+    if raw is None or not raw.strip():
+        return None
+    stamp = _parse_dt(raw)
+    if stamp is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{name} 不是合法的时间，请用 ISO 8601（如 2026-11-01T00:00:00Z）",
+        )
+    return stamp
 
 
 @router.get("")
 def get_inbox(
     subscriber_id: str = Query(alias="subscriberId", min_length=1, description="订阅者唯一标识"),
-    limit: int = Query(default=50, ge=1, le=200, description="返回条数上限"),
+    limit: int = Query(
+        default=DEFAULT_INBOX_LIMIT, ge=1, le=MAX_INBOX_LIMIT, description="每页条数"
+    ),
+    cursor: Optional[str] = Query(default=None, description="上一页返回的 nextCursor"),
+    unread: bool = Query(default=False, description="只看未读"),
+    workflow: Optional[str] = Query(
+        default=None, description="只看某个工作流的消息，如 post_liked"
+    ),
+    since: Optional[str] = Query(default=None, description="时间下界（含），ISO 8601"),
+    until: Optional[str] = Query(default=None, description="时间上界（不含），ISO 8601"),
 ) -> dict:
     """返回某订阅者的 In-app 收件箱消息与未读计数。
 
     未读数按消息条数统计：同一张聚合卡片无论被多少次互动改写，都只算一条。
-    未读与总数覆盖该订阅者的全部消息，不受 ``limit`` 截断影响；内容没变化时
-    直接复用缓存快照，不重新扫描收件箱文件与投递记录。
+    未读与总数覆盖该订阅者的全部消息，不受筛选与 ``limit`` 影响；``matched``
+    是本次筛选命中的条数，翻页时以它为准。内容没变化时直接复用缓存快照，
+    不重新扫描收件箱文件与投递记录。
     """
+    since_dt = _time_bound(since, "since")
+    until_dt = _time_bound(until, "until")
+    if since_dt is not None and until_dt is not None and since_dt >= until_dt:
+        raise HTTPException(status_code=400, detail="since 必须早于 until")
+
+    cursor_key: Optional[tuple[datetime, str]] = None
+    if cursor:
+        try:
+            cursor_key = decode_cursor(cursor)
+        except InboxCursorError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    workflow_filter = (workflow or "").strip() or None
+    narrowed = (
+        unread or workflow_filter is not None or since_dt is not None or until_dt is not None
+    )
+
     snapshot = _snapshot(subscriber_id)
+    if not narrowed and cursor_key is None:
+        # 首屏：直接用缓存快照，不额外扫描。
+        page, _ = _page(snapshot.items, limit=limit)
+        matched = snapshot.total
+        has_more = snapshot.total > len(page)
+    else:
+        # 筛选或深翻页要按全部消息算命中数，缓存里只有最近 200 条，不能拿来算。
+        selected = _filter_items(
+            _collect_inbox(subscriber_id),
+            unread_only=unread,
+            workflow=workflow_filter,
+            since=since_dt,
+            until=until_dt,
+        )
+        page, has_more = _page(selected, limit=limit, cursor_key=cursor_key)
+        matched = len(selected)
+
     return {
-        "items": snapshot.items[:limit],
+        "items": page,
         "unread": snapshot.unread,
         "total": snapshot.total,
+        "matched": matched,
+        "hasMore": has_more,
+        "nextCursor": encode_cursor(page[-1]) if has_more and page else None,
     }
 
 
@@ -592,17 +756,26 @@ def mark_read(req: ReadRequest) -> dict:
 
 
 __all__ = [
+    "DEFAULT_INBOX_LIMIT",
+    "MAX_INBOX_LIMIT",
     "router",
-    "ReadStateStore",
     "InboxCache",
+    "InboxCursorError",
     "InboxSnapshot",
-    "get_read_store",
+    "ReadStateStore",
+    "decode_cursor",
+    "encode_cursor",
     "get_inbox_cache",
-    "_is_inapp",
-    "_message_id",
-    "_to_inbox_item",
+    "get_read_store",
     "_collect_inbox",
+    "_filter_items",
+    "_is_inapp",
     "_list_inbox",
+    "_message_id",
+    "_page",
+    "_page_key",
     "_snapshot",
+    "_sort_ts",
+    "_to_inbox_item",
 ]
 

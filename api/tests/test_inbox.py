@@ -524,3 +524,175 @@ def test_inbox_cache_trims_items_but_keeps_counts():
     assert [i["message_id"] for i in cached.items] == ["m0", "m1"]
     assert (cached.unread, cached.total) == (3, 4)
     assert cache.get("u1", "r1").total == 4
+
+
+# ---------------------------------------------------------------------------
+# 游标翻页与筛选
+# ---------------------------------------------------------------------------
+
+
+def _feed(monkeypatch, tmp_path, count=5, subscriber="u1"):
+    """给收件箱灌一批按天递减的消息，返回存储桩（便于翻页途中再写一条）。"""
+    import app.inbox as inbox_mod
+
+    records = [
+        _record(trigger_id=f"t{i}", subscriber=subscriber, days_ago=i) for i in range(count)
+    ]
+    store = _VersionedStorage(records)
+    monkeypatch.setattr(inbox_mod, "get_storage", lambda: store)
+    monkeypatch.setattr(inbox_mod, "_INBOX_FILE", tmp_path / "inbox.jsonl")
+    return store
+
+
+def test_inbox_paginates_with_cursor(client, monkeypatch, tmp_path):
+    """按 (排序时间, 消息 ID) 倒序翻页：每页条数受 limit 约束，最后一页没有游标。"""
+    _feed(monkeypatch, tmp_path, count=5)
+
+    first = client.get("/v1/inbox", params={"subscriberId": "u1", "limit": 2}).json()
+    assert [i["trigger_id"] for i in first["items"]] == ["t0", "t1"]
+    assert first["hasMore"] is True
+    assert first["nextCursor"]
+    assert first["matched"] == first["total"] == 5
+
+    second = client.get(
+        "/v1/inbox",
+        params={"subscriberId": "u1", "limit": 2, "cursor": first["nextCursor"]},
+    ).json()
+    assert [i["trigger_id"] for i in second["items"]] == ["t2", "t3"]
+    assert second["hasMore"] is True
+
+    third = client.get(
+        "/v1/inbox",
+        params={"subscriberId": "u1", "limit": 2, "cursor": second["nextCursor"]},
+    ).json()
+    assert [i["trigger_id"] for i in third["items"]] == ["t4"]
+    assert third["hasMore"] is False
+    assert third["nextCursor"] is None
+
+
+def test_inbox_pagination_ignores_messages_arriving_between_pages(client, monkeypatch, tmp_path):
+    """翻页期间又来了新消息：游标从上一页之后继续，既不重复也不穿插。"""
+    store = _feed(monkeypatch, tmp_path, count=4)
+
+    first = client.get("/v1/inbox", params={"subscriberId": "u1", "limit": 2}).json()
+    assert [i["trigger_id"] for i in first["items"]] == ["t0", "t1"]
+
+    store.save(_record(trigger_id="fresh", days_ago=-1))
+
+    second = client.get(
+        "/v1/inbox",
+        params={"subscriberId": "u1", "limit": 2, "cursor": first["nextCursor"]},
+    ).json()
+    assert [i["trigger_id"] for i in second["items"]] == ["t2", "t3"]
+    assert "fresh" not in [i["trigger_id"] for i in second["items"]]
+
+
+def test_inbox_pagination_stable_for_same_timestamp(client, monkeypatch, tmp_path):
+    """同一秒写入的消息用消息 ID 定序，分两页取与一次取全的顺序一致。"""
+    import app.inbox as inbox_mod
+
+    stamp = datetime.now(timezone.utc).isoformat()
+    entries = []
+    for trigger in ("b", "a", "c"):
+        entry = _engine_entry(trigger)
+        entry["created_at"] = stamp
+        entries.append(entry)
+    path = tmp_path / "inbox.jsonl"
+    _write_engine_inbox(path, entries)
+    monkeypatch.setattr(inbox_mod, "_INBOX_FILE", path)
+    monkeypatch.setattr(inbox_mod, "get_storage", lambda: _VersionedStorage())
+
+    whole = client.get("/v1/inbox", params={"subscriberId": "u1"}).json()
+    assert [i["message_id"] for i in whole["items"]] == ["c:s1", "b:s1", "a:s1"]
+
+    walked, cursor = [], None
+    for _ in range(3):
+        params = {"subscriberId": "u1", "limit": 1}
+        if cursor:
+            params["cursor"] = cursor
+        page = client.get("/v1/inbox", params=params).json()
+        walked.extend(i["message_id"] for i in page["items"])
+        cursor = page["nextCursor"]
+    assert walked == ["c:s1", "b:s1", "a:s1"]
+
+
+def test_inbox_filters_unread_only(client, monkeypatch, tmp_path):
+    """只看未读：命中数按筛选算，未读与总数仍按全部消息统计。"""
+    _feed(monkeypatch, tmp_path, count=3)
+    client.post("/v1/inbox/read", json={"subscriberId": "u1", "triggerIds": ["t1"]})
+
+    data = client.get("/v1/inbox", params={"subscriberId": "u1", "unread": True}).json()
+    assert [i["trigger_id"] for i in data["items"]] == ["t0", "t2"]
+    assert data["matched"] == 2
+    assert data["total"] == 3
+    assert data["unread"] == 2
+
+
+def test_inbox_filters_by_workflow(client, monkeypatch, tmp_path):
+    """按工作流筛选：只看点赞聚合，评论通知不混进来。"""
+    store = _feed(monkeypatch, tmp_path, count=3)
+    store.records[1]["workflow"] = "post_liked"
+
+    data = client.get(
+        "/v1/inbox", params={"subscriberId": "u1", "workflow": "post_liked"}
+    ).json()
+    assert [i["trigger_id"] for i in data["items"]] == ["t1"]
+    assert data["matched"] == 1
+    assert data["total"] == 3
+
+    empty = client.get(
+        "/v1/inbox", params={"subscriberId": "u1", "workflow": "post_mentioned"}
+    ).json()
+    assert empty["items"] == [] and empty["matched"] == 0 and empty["hasMore"] is False
+
+
+def test_inbox_filters_by_time_range(client, monkeypatch, tmp_path):
+    """时间区间是左闭右开：since 当天算在内，until 当天不算。"""
+    _feed(monkeypatch, tmp_path, count=3)
+    now = datetime.now(timezone.utc)
+
+    since = (now - timedelta(days=1, hours=12)).isoformat()
+    recent = client.get("/v1/inbox", params={"subscriberId": "u1", "since": since}).json()
+    assert [i["trigger_id"] for i in recent["items"]] == ["t0", "t1"]
+
+    until = (now - timedelta(hours=12)).isoformat()
+    older = client.get("/v1/inbox", params={"subscriberId": "u1", "until": until}).json()
+    assert [i["trigger_id"] for i in older["items"]] == ["t1", "t2"]
+
+
+def test_inbox_rejects_bad_cursor_and_time(client, monkeypatch, tmp_path):
+    """游标与时间参数写错时如实报 400，而不是悄悄返回第一页。"""
+    _feed(monkeypatch, tmp_path, count=2)
+    now = datetime.now(timezone.utc)
+
+    assert (
+        client.get("/v1/inbox", params={"subscriberId": "u1", "cursor": "***"}).status_code
+        == 400
+    )
+    assert (
+        client.get("/v1/inbox", params={"subscriberId": "u1", "since": "昨天"}).status_code
+        == 400
+    )
+    reversed_range = client.get(
+        "/v1/inbox",
+        params={
+            "subscriberId": "u1",
+            "since": now.isoformat(),
+            "until": (now - timedelta(days=1)).isoformat(),
+        },
+    )
+    assert reversed_range.status_code == 400
+
+
+def test_cursor_roundtrip():
+    """游标里存的是排序键，编码后是不透明字符串。"""
+    from app.inbox import decode_cursor, encode_cursor
+
+    item = {"message_id": "digest-p1", "created_at": "2026-11-01T10:00:00+00:00"}
+    token = encode_cursor(item)
+    assert "digest-p1" not in token
+
+    stamp, message_id = decode_cursor(token)
+    assert message_id == "digest-p1"
+    assert stamp == datetime(2026, 11, 1, 10, tzinfo=timezone.utc)
+
