@@ -21,6 +21,7 @@ from .dashboard_routes import router as dashboard_router
 from .execution_routes import router as execution_router
 from .idempotency import get_idempotency_store
 from .inbox import router as inbox_router
+from .preference_routes import router as preference_router
 from .providers import factory as provider_factory
 from .provider_routes import router as provider_router
 from .schemas import (
@@ -82,6 +83,7 @@ app.include_router(execution_router)
 app.include_router(inbox_router)
 app.include_router(provider_router)
 app.include_router(subscriber_router)
+app.include_router(preference_router)
 
 
 def _env_mismatch(workflow_env, request_env: str) -> bool:

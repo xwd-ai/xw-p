@@ -578,6 +578,34 @@ API 进程读同一份 `XW_PROVIDERS_FILE`，校验规则与引擎一致（渠�
 
 三层都是覆盖写语义，因此文件后端每次写入整体重写（一个订阅者最多三条记录），不会在文件里攒下被覆盖的旧行。
 
+接口在 `api/app/preference_routes.py`，路径挂在订阅者下面——偏好属于某个人，离开归属就没有意义：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/v1/subscribers/{id}/preferences?scope=channel` | 列出该订阅者**显式设置过**的记录，按具体程度排序（渠道 → 工作流 → 全局），`counts` 给出各层级条数 |
+| `PUT` | `/v1/subscribers/{id}/preferences` | 写入一条 `{scope, target, enabled}`；回执里的 `created` 区分新建与覆盖 |
+| `DELETE` | `/v1/subscribers/{id}/preferences?scope=channel&target=email` | 删一条；不带 `scope` 则清空（等同恢复默认），回执 `removed` 是实际删掉的条数 |
+| `GET` | `/v1/subscribers/{id}/preferences/resolve?workflow=post_liked&channel=email` | 跑一遍覆盖链，返回 `allowed` / `scope` / `target` / `matched` / `reason` |
+
+```bash
+# 关掉邮件渠道，但保留邮箱地址
+curl -X PUT localhost:8000/v1/subscribers/creator_42/preferences \
+  -H 'Content-Type: application/json' \
+  -d '{"scope":"channel","target":"email","enabled":false}'
+
+# 这条评论通知会不会发？是哪一层决定的？
+curl 'localhost:8000/v1/subscribers/creator_42/preferences/resolve?workflow=post_commented&channel=email'
+# {"allowed":false,"scope":"channel","target":"email","matched":true,
+#  "reason":"渠道 email 已关闭"}
+```
+
+几处刻意的取舍：
+
+- 列表只返回显式记录。把默认值也铺成记录，数据里就看不出「用户关了这个渠道」与「用户没表过态」的区别，而后者在改了默认策略之后应当跟着变。
+- 写入前先按 `X-Environment` 取出订阅者，取不到或不属于本环境一律 404。订阅者标识在环境之间不共享，允许写一份孤儿记录只会让排查时多一个假线索。
+- 删除一条不存在的记录返回 `removed=0` 而不是 404：调用方的目的（这条记录不要存在）已经达成，报错反而要它自己分辨「本来就没有」与「删失败」。
+- `enabled=true` 是一条有意义的记录，不是「没设置」。它比更宽的层级具体，因此能把某个渠道或某类互动从全局关闭里单独放开。
+
 ### 死信运维接口
 
 引擎启动时会在 `XW_ADMIN_ADDR`（默认本机 `ENGINE_PORT`）上开一组管理接口，用于查看、重放与丢弃死信，查看渠道实现的健康状态与启停，以及读取投递指标。接口只绑定回环地址，需要跨机访问时显式改成 `0.0.0.0:8081` 之类的地址；`XW_ADMIN_ADDR=off` 则不启动。
