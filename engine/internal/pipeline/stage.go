@@ -11,10 +11,15 @@ type StepResult struct {
 	StepID   string
 	StepType domain.StepType
 	Channel  domain.Channel
-	// Skipped 表示该步骤被跳过（filter 过滤或条件分支不满足）。
+	// Skipped 表示该步骤被跳过（filter 过滤、条件分支不满足或订阅者偏好拦截）。
 	Skipped bool
-	// SkipReason 说明跳过原因：空=未跳过，"filter"=被过滤条件拦截，"condition"=条件分支不满足。
+	// SkipReason 是跳过原因的分类：空=未跳过，"filter"=被过滤条件拦截，
+	// "condition"=条件分支不满足，"preference"=订阅者偏好不允许发这个渠道。
 	SkipReason string
+	// SkipMessage 是跳过原因的自然语言说明（如「偏好跳过：渠道 email 已关闭」）。
+	//
+	// 与 SkipReason 分工：前者给人看、会写进执行明细的 reason，后者给代码判断。
+	SkipMessage string
 	// ShortCircuited 表示该步骤因上游步骤失败而未执行（失败短路）。
 	ShortCircuited bool
 	// TimedOut 表示该步骤因超时未完成：单步超时或整体执行预算耗尽。

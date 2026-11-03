@@ -593,6 +593,27 @@ func (p *Pipeline) handleDigest(ctx *Context, step domain.Step) StepResult {
 	res.AggregateOpened = outcome.Opened
 	res.AggregateExpiresAt = card.ExpiresAt
 
+	// 聚合卡片同样受偏好约束：计数已经累加（互动是既成事实），但卡片不该发到
+	// 用户关掉的渠道上。关掉 in_app 就不写收件箱，关掉邮件就不发汇总邮件。
+	if p.preferences != nil {
+		if decision := p.preferences.Decide(scope.Subscriber, scope.Workflow, string(spec.Channel)); !decision.Allowed {
+			res.Skipped = true
+			res.SkipReason = SkipReasonPreference
+			res.SkipMessage = decision.SkipMessage()
+			ctx.Results[step.ID] = res
+			p.logger.Info("[digest] 订阅者偏好跳过聚合卡片投递",
+				"workflow", scope.Workflow,
+				"subscriberId", scope.Subscriber,
+				"stepId", step.ID,
+				"key", key,
+				"channel", string(spec.Channel),
+				"count", card.Count,
+				"reason", decision.Reason,
+			)
+			return res
+		}
+	}
+
 	deliverStarted := time.Now()
 	sent, delivery, deliverErr := p.deliverDigest(ctx, step, spec, card, outcome.Opened, title, body)
 	res.Duration = time.Since(deliverStarted)

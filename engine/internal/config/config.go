@@ -72,6 +72,11 @@ type Config struct {
 	// 不回写（只保留日志与执行汇总）。
 	ExecutionFile string
 
+	// PreferencesFile 是订阅者偏好文件路径。引擎在投递前按「订阅者 + 工作流 +
+	// 渠道」解析这份文件，与 API 共用同一份数据目录；写 off/disabled/none/- 表示
+	// 完全不做偏好判定（所有渠道按接收处理）。
+	PreferencesFile string
+
 	// CallbackURL 是投递结果回调的目标地址，为空表示不回调。回调走独立的
 	// 有界队列异步发送，不占用消费路径；地址里通常带接入方签发的令牌，
 	// 因此日志只出现协议与主机名。
@@ -135,6 +140,7 @@ func Load() Config {
 		ProviderProbeInterval: probeInterval(),
 		ProviderProbeTimeout:  envDuration("XW_PROVIDER_PROBE_TIMEOUT", provider.DefaultProbeTimeout),
 		ExecutionFile:         strings.TrimSpace(envOr("XW_EXECUTION_FILE", defaultExecutionFile)),
+		PreferencesFile:       strings.TrimSpace(envOr("XW_PREFERENCES_FILE", defaultPreferencesFile)),
 		CallbackURL:           strings.TrimSpace(os.Getenv("XW_CALLBACK_URL")),
 		CallbackTimeout:       envDuration("XW_CALLBACK_TIMEOUT", webhook.DefaultTimeout),
 		CallbackWorkers:       envInt("XW_CALLBACK_WORKERS", webhook.DefaultWorkers),
@@ -176,6 +182,21 @@ func (c Config) CallbackDisabled() bool {
 // 与收件箱（api/data/inbox.jsonl）同理：引擎写、API 读，两个进程共用一份
 // 数据目录，因此默认指向 API 侧的执行明细文件。
 const defaultExecutionFile = "api/data/executions.jsonl"
+
+// defaultPreferencesFile 是订阅者偏好文件的默认路径。
+//
+// 偏好由 API 写入、引擎读取，两个进程共用同一份数据目录，因此默认值与 API 侧
+// 的 XW_PREFERENCES_FILE 保持一致。
+const defaultPreferencesFile = "api/data/preferences.jsonl"
+
+// PreferencesDisabled 判断是否关闭了投递前的偏好判定。
+func (c Config) PreferencesDisabled() bool {
+	switch strings.ToLower(strings.TrimSpace(c.PreferencesFile)) {
+	case "", "off", "disabled", "none", "-":
+		return true
+	}
+	return false
+}
 
 // ExecutionDisabled 判断是否关闭了执行明细回写。
 func (c Config) ExecutionDisabled() bool {

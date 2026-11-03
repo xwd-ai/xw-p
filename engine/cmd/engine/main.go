@@ -29,6 +29,7 @@ import (
 	"github.com/xwd-ai/xw-p/engine/internal/execution"
 	"github.com/xwd-ai/xw-p/engine/internal/metrics"
 	"github.com/xwd-ai/xw-p/engine/internal/pipeline"
+	"github.com/xwd-ai/xw-p/engine/internal/preference"
 	"github.com/xwd-ai/xw-p/engine/internal/provider"
 	"github.com/xwd-ai/xw-p/engine/internal/queue"
 	"github.com/xwd-ai/xw-p/engine/internal/runner"
@@ -501,6 +502,16 @@ func newPipeline(logger *slog.Logger, cfg config.Config) (*pipeline.Pipeline, fu
 		"step", pipe.Timeouts().Step,
 		"workflow", pipe.Timeouts().Workflow,
 	)
+
+	// 订阅者偏好：消息可能在队列里停留、被延迟续跑或被重投，因此判定放在
+	// 投递那一刻，读到的是用户此刻的设置。偏好文件由 API 写入，两个进程
+	// 共用同一份数据目录。
+	if cfg.PreferencesDisabled() {
+		logger.Info("[engine] 订阅者偏好判定已关闭", "reason", "XW_PREFERENCES_FILE=off")
+	} else {
+		pipe.WithPreferences(preference.NewGate(preference.NewFile(cfg.PreferencesFile), logger))
+		logger.Info("[engine] 订阅者偏好判定已启用", "file", cfg.PreferencesFile)
+	}
 
 	closeDigest := func() {}
 	if strings.EqualFold(strings.TrimSpace(cfg.DigestStore), "memory") {

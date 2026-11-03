@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/xwd-ai/xw-p/engine/internal/domain"
+	"github.com/xwd-ai/xw-p/engine/internal/preference"
 )
 
 // dispatchStage 是管线第四阶段：按步骤绑定渠道分发。
@@ -20,6 +21,8 @@ type dispatchStage struct {
 	failover *Failover
 	// health 记录每次投递的成败，供运维接口观察渠道当前是否可用。
 	health *HealthTracker
+	// preferences 是投递前的偏好判定，为空表示不做判定。
+	preferences *preference.Gate
 }
 
 // NewDispatchStage 创建分发阶段。
@@ -46,6 +49,25 @@ func (d *dispatchStage) Apply(ctx *Context, step domain.Step) error {
 	res.Channel = step.Type
 
 	ch := domain.Channel(step.Type)
+
+	// 偏好判定放在投递之前：被拦下的渠道既不取实现也不发请求，但仍要留一条
+	// 「为什么没发」的结论——回写阶段据此写一条 skipped 明细，回答「这个人
+	// 为什么没收到这封邮件」时不必再让人去翻偏好文件。
+	if decision := d.gateDecision(ctx, ch); !decision.Allowed {
+		res.Skipped = true
+		res.SkipReason = SkipReasonPreference
+		res.SkipMessage = decision.SkipMessage()
+		ctx.Results[step.ID] = res
+		d.logger.Info("[dispatch] 订阅者偏好跳过该渠道",
+			"stepId", step.ID,
+			"channel", string(ch),
+			"workflow", workflowName(ctx),
+			"subscriberId", ctx.Msg.SubscriberID,
+			"reason", decision.Reason,
+		)
+		// 不是失败：后续步骤照常执行（关掉邮件不该连带跳过站内信）。
+		return errSkipStep
+	}
 
 	// 构造投递请求：收件人按渠道从消息契约取值，内容取渲染结果。
 	//
@@ -134,6 +156,17 @@ func (d *dispatchStage) Apply(ctx *Context, step domain.Step) error {
 	res.Error = outcome.Result.Reason
 	ctx.Results[step.ID] = res
 	return &deliveryError{channel: ch, reason: outcome.Result.Reason}
+}
+
+// gateDecision 在投递前问一次偏好。
+//
+// 未装配判定时直接放行；判定器自己负责「读不到偏好按接收处理」，这里不重复
+// 兜底，否则两处兜底会掩盖读取失败这件事。
+func (d *dispatchStage) gateDecision(ctx *Context, ch domain.Channel) preference.Decision {
+	if d == nil || d.preferences == nil {
+		return preference.Decision{Allowed: true, Reason: "未配置偏好判定，按默认接收"}
+	}
+	return d.preferences.Decide(ctx.Msg.SubscriberID, workflowName(ctx), string(ch))
 }
 
 // recordHealth 把一次投递的结果折算成健康观测。

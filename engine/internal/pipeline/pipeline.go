@@ -7,10 +7,18 @@ import (
 	"time"
 
 	"github.com/xwd-ai/xw-p/engine/internal/domain"
+	"github.com/xwd-ai/xw-p/engine/internal/preference"
 )
 
-// errSkipStep 是内部哨兵错误，表示该步骤被 filter 阶段或条件分支跳过。
-var errSkipStep = errors.New("pipeline: step skipped by filter or condition")
+// errSkipStep 是内部哨兵错误，表示该步骤被 filter 阶段、条件分支或订阅者偏好跳过。
+var errSkipStep = errors.New("pipeline: step skipped by filter, condition or preference")
+
+// SkipReasonPreference 是「因订阅者偏好未投递」的跳过原因分类。
+//
+// 它出现在 StepResult.SkipReason 里：与 filter / condition 的区别在于，这一类
+// 跳过仍值得留一条执行明细（状态 skipped），否则「这个人为什么没收到」只能靠
+// 猜；被过滤掉的步骤则完全没有投递意图，不记账才是对的。
+const SkipReasonPreference = "preference"
 
 // Pipeline 将 filter → transform → render → dispatch 四个阶段串成一条管线，
 // 对工作流的每个投递步骤依次执行。
@@ -34,6 +42,8 @@ type Pipeline struct {
 	transform *transformStage
 	renderer  *renderStage
 	digests   DigestStore
+	// preferences 是投递前的偏好判定；未注入时一律按接收处理。
+	preferences *preference.Gate
 }
 
 // New 创建默认管线（filter → transform → render → dispatch）。
@@ -134,6 +144,24 @@ func (p *Pipeline) Health() *HealthTracker {
 		return nil
 	}
 	return p.dispatch.health
+}
+
+// WithPreferences 注入投递前的偏好判定，返回管线自身便于链式装配。
+//
+// 判定放在引擎而不是触发侧：消息可能在队列里停留、被延迟续跑或被重投，
+// 真正决定「发不发」的时刻是投递那一刻，此时读到的是用户最新的设置。
+// 传 nil 表示关闭判定（全部按接收处理）。
+func (p *Pipeline) WithPreferences(gate *preference.Gate) *Pipeline {
+	p.preferences = gate
+	if p.dispatch != nil {
+		p.dispatch.preferences = gate
+	}
+	return p
+}
+
+// Preferences 返回当前生效的偏好判定；未装配时为 nil。
+func (p *Pipeline) Preferences() *preference.Gate {
+	return p.preferences
 }
 
 // WithDigestStore 注入聚合卡片存储（如多引擎实例共享的 Redis 实现），

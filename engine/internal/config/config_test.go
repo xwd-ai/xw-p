@@ -194,6 +194,41 @@ func TestExecutionDisabled(t *testing.T) {
 	}
 }
 
+// 订阅者偏好文件：默认与 API 共用同一份数据目录，写 off 系列值表示不做判定。
+func TestPreferencesFileConfig(t *testing.T) {
+	t.Setenv("XW_PREFERENCES_FILE", "")
+	if got := Load().PreferencesFile; got != defaultPreferencesFile {
+		t.Errorf("默认偏好文件应为 %q，实际 %q", defaultPreferencesFile, got)
+	}
+
+	t.Setenv("XW_PREFERENCES_FILE", "  /tmp/xw/preferences.jsonl  ")
+	cfg := Load()
+	if cfg.PreferencesFile != "/tmp/xw/preferences.jsonl" {
+		t.Errorf("XW_PREFERENCES_FILE 应去空白，实际 %q", cfg.PreferencesFile)
+	}
+	if cfg.PreferencesDisabled() {
+		t.Error("配置了路径时不应判定为关闭")
+	}
+}
+
+func TestPreferencesDisabled(t *testing.T) {
+	cases := map[string]bool{
+		"":                              true,
+		"off":                           true,
+		"OFF":                           true,
+		" disabled ":                    true,
+		"none":                          true,
+		"-":                             true,
+		"api/data/preferences.jsonl":    false,
+		"/var/lib/xw/preferences.jsonl": false,
+	}
+	for value, want := range cases {
+		if got := (Config{PreferencesFile: value}).PreferencesDisabled(); got != want {
+			t.Errorf("PreferencesFile=%q 的关闭判定 = %v，期望 %v", value, got, want)
+		}
+	}
+}
+
 // 回调配置：地址去空白，超时/并发/队列有可用默认值，写 off 系列值表示关闭。
 func TestLoadReadsCallbackEnv(t *testing.T) {
 	t.Setenv("XW_CALLBACK_URL", "")

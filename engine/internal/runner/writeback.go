@@ -14,6 +14,10 @@ import (
 // 只记录真正走到了分发阶段的步骤：被过滤、条件不满足、上游失败短路、
 // 已登记延迟续跑的步骤都没有投递动作，把它们也写成 failed 会让执行明细
 // 里的失败原因变成噪音（「没发」和「发失败」是两件事）。
+//
+// 一个例外是按订阅者偏好跳过的渠道：它的结论同样需要落账，写 “skipped“
+// 并带上命中的层级。被过滤的步骤没有投递意图，偏好跳过的步骤有——区别在于
+// 「本来要发，因为用户设置没发」，这个结论事后无法从别处推出来。
 func RecordResults(recorder *execution.Recorder, logger *slog.Logger, msg queue.QueuedMessage, results []pipeline.StepResult) int {
 	if recorder == nil {
 		return 0
@@ -60,6 +64,28 @@ func deliveryChannel(res pipeline.StepResult) (string, bool) {
 //
 // 第二个返回值为 false 表示这个步骤没有投递动作，不该产生明细。
 func buildRecord(msg queue.QueuedMessage, res pipeline.StepResult) (execution.Record, bool) {
+	// 偏好跳过单独一条路径：它没走到渠道层，因此不带 provider / attempts /
+	// 耗时，但需要 reason 说明是哪一层拦下的。
+	if res.Skipped && res.SkipReason == pipeline.SkipReasonPreference {
+		channel := strings.TrimSpace(string(res.Channel))
+		if channel == "" {
+			return execution.Record{}, false
+		}
+		reason := strings.TrimSpace(res.SkipMessage)
+		if reason == "" {
+			reason = "偏好跳过"
+		}
+		return execution.Record{
+			TriggerID:    msg.TriggerID,
+			Workflow:     msg.Name,
+			SubscriberID: msg.SubscriberID,
+			StepID:       res.StepID,
+			Channel:      channel,
+			Status:       execution.StatusSkipped,
+			Reason:       &reason,
+		}, true
+	}
+
 	channel, ok := deliveryChannel(res)
 	if !ok || res.TimedOut {
 		// 超时的步骤不落明细：投递可能已经在放弃等待之后真的发出去了，

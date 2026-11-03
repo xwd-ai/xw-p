@@ -4,6 +4,10 @@
 // 按「触发 × 渠道」记账，回答「这个渠道最后发出去没有、失败原因是什么、用了哪个
 // 实现」。分发阶段拿到的是每个步骤的结果，本包负责把它落成一行可查询的记录。
 //
+// 状态只有三种：“sent“ / “failed“ / “skipped“。“skipped“ 表示按订阅者
+// 偏好没有发（没有取实现、没有发请求），原因写命中的层级——「没发」与「发失败」
+// 是两件事，混在一个状态里会让失败率与排查方向都失真。
+//
 // 记录格式与 API 侧 api/app/execution_log.py 的行格式保持一致（snake_case），
 // 引擎写、API 读，因此字段名与取值都要按那边的约定来：
 //
@@ -31,11 +35,14 @@ const (
 	StatusSent Status = "sent"
 	// StatusFailed 表示该渠道的投递失败，原因写在 Record.Reason。
 	StatusFailed Status = "failed"
+	// StatusSkipped 表示该渠道按订阅者偏好跳过：没有取实现、没有发请求，
+	// 原因写在 Record.Reason（命中的层级与目标）。
+	StatusSkipped Status = "skipped"
 )
 
 // Valid 判断取值是否是已知的投递结果。
 func (s Status) Valid() bool {
-	return s == StatusSent || s == StatusFailed
+	return s == StatusSent || s == StatusFailed || s == StatusSkipped
 }
 
 // timestampLayout 是记录时间戳的序列化格式。
@@ -126,10 +133,12 @@ func (r Record) Validate() error {
 		problems = append(problems, "缺少 channel")
 	}
 	if !r.Status.Valid() {
-		problems = append(problems, fmt.Sprintf("status %q 不是 sent / failed", string(r.Status)))
+		problems = append(problems, fmt.Sprintf("status %q 不是 sent / failed / skipped", string(r.Status)))
 	}
-	if r.Status == StatusFailed && (r.Reason == nil || strings.TrimSpace(*r.Reason) == "") {
-		problems = append(problems, "失败的记录缺少 reason")
+	// failed 与 skipped 都必须带原因：前者用来排查「为什么没发出去」，后者用来
+	// 回答「哪一层偏好拦下的」。只有状态没有原因，两种记录都等于没写。
+	if r.Status != StatusSent && (r.Reason == nil || strings.TrimSpace(*r.Reason) == "") {
+		problems = append(problems, "状态 "+string(r.Status)+" 的记录缺少 reason")
 	}
 	if r.DurationMS < 0 {
 		problems = append(problems, fmt.Sprintf("duration_ms 不能为负：%d", r.DurationMS))
