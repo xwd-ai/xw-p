@@ -58,7 +58,7 @@ var kindSpecs = map[Kind]kindSpec{
 	KindSMTP: {
 		channels: []domain.Channel{domain.ChannelEmail},
 		required: []string{"host", "from"},
-		optional: []string{"port", "username", "password", "tls", "reply_to"},
+		optional: []string{"port", "username", "password", "tls", "reply_to", "pool_size", "idle_timeout"},
 	},
 	KindTwilio: {
 		channels: []domain.Channel{domain.ChannelSMS},

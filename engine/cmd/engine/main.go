@@ -14,6 +14,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -501,11 +502,28 @@ func newPipeline(logger *slog.Logger, cfg config.Config) (*pipeline.Pipeline, fu
 		"workflow", pipe.Timeouts().Workflow,
 	)
 
+	closeDigest := func() {}
 	if strings.EqualFold(strings.TrimSpace(cfg.DigestStore), "memory") {
 		logger.Info("[engine] 聚合卡片存储：进程内存（单实例语义）")
-		return pipe, func() {}, nil
+	} else if closer, err := newRedisDigest(logger, cfg, pipe); err != nil {
+		logger.Warn("[engine] 聚合卡片存储连接 Redis 失败，本次回退进程内存；多实例下计数会各算各的",
+			"redis", cfg.RedisAddr, "error", err)
+	} else {
+		closeDigest = closer
 	}
 
+	// 渠道实现可能持有需要显式释放的资源（SMTP 的空闲连接池），退出时
+	// 与聚合存储一起收掉，不留已认证的连接到对端超时回收。
+	return pipe, func() {
+		closeProviders(logger, registry)
+		closeDigest()
+	}, nil
+}
+
+// newRedisDigest 把聚合卡片存储接到 Redis 上，返回释放连接的函数。
+//
+// 失败时调用方回退进程内存，不影响管线其余部分。
+func newRedisDigest(logger *slog.Logger, cfg config.Config, pipe *pipeline.Pipeline) (func(), error) {
 	client := redis.NewClient(&redis.Options{
 		Addr:     cfg.RedisAddr,
 		Password: cfg.RedisPassword,
@@ -514,16 +532,30 @@ func newPipeline(logger *slog.Logger, cfg config.Config) (*pipeline.Pipeline, fu
 	pingCtx, cancel := context.WithTimeout(context.Background(), cfg.PollTimeoutDuration())
 	defer cancel()
 	if err := client.Ping(pingCtx).Err(); err != nil {
-		logger.Warn("[engine] 聚合卡片存储连接 Redis 失败，本次回退进程内存；多实例下计数会各算各的",
-			"redis", cfg.RedisAddr, "error", err)
 		_ = client.Close()
-		return pipe, func() {}, nil
+		return func() {}, err
 	}
 
 	store := pipeline.NewRedisDigestStoreWithPrefix(client, cfg.DigestPrefix)
 	pipe.WithDigestStore(store)
 	logger.Info("[engine] 聚合卡片存储：Redis", "redis", cfg.RedisAddr, "prefix", store.Prefix())
-	return pipe, func() { _ = client.Close() }, nil
+	return func() { _ = client.Close() }, nil
+}
+
+// closeProviders 关闭持有资源的渠道实现。
+//
+// 只认实现了 io.Closer 的实现：大多数 console 实现没有需要收尾的状态，
+// 强行给 Sender 接口加一个 Close 会逼所有实现写一个空方法。
+func closeProviders(logger *slog.Logger, registry *pipeline.ProviderRegistry) {
+	for _, entry := range registry.Entries() {
+		closer, ok := entry.Sender.(io.Closer)
+		if !ok {
+			continue
+		}
+		if err := closer.Close(); err != nil {
+			logger.Warn("[engine] 关闭渠道实现失败", "provider", entry.ID, "error", err)
+		}
+	}
 }
 
 // fallbackChains 汇总每个渠道的取用序列（标识按优先级从高到低），

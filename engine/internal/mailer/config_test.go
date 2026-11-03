@@ -189,3 +189,85 @@ func TestAddrSpecParsing(t *testing.T) {
 		}
 	}
 }
+
+func TestConfigPoolDefaults(t *testing.T) {
+	cfg, err := Config{Host: "smtp.example.com", From: "notify@example.com"}.Normalize()
+	if err != nil {
+		t.Fatalf("归一化失败：%v", err)
+	}
+	if cfg.PoolSize != DefaultPoolSize {
+		t.Errorf("池容量 = %d，期望默认值 %d", cfg.PoolSize, DefaultPoolSize)
+	}
+	if cfg.IdleTimeout != DefaultIdleTimeout {
+		t.Errorf("空闲时长 = %s，期望默认值 %s", cfg.IdleTimeout, DefaultIdleTimeout)
+	}
+	if text := cfg.String(); !strings.Contains(text, "pool=4") {
+		t.Errorf("摘要应写明池容量：%q", text)
+	}
+
+	disabled, err := Config{
+		Host: "smtp.example.com", From: "notify@example.com", PoolSize: -3,
+	}.Normalize()
+	if err != nil {
+		t.Fatalf("归一化失败：%v", err)
+	}
+	if disabled.PoolSize != -1 {
+		t.Errorf("负数池容量应归一为 -1，实际 %d", disabled.PoolSize)
+	}
+	if text := disabled.String(); !strings.Contains(text, "pool=off") {
+		t.Errorf("不复用时摘要应写明：%q", text)
+	}
+
+	if _, err := (Config{
+		Host: "smtp.example.com", From: "notify@example.com", PoolSize: MaxPoolSize + 1,
+	}).Normalize(); err == nil || !strings.Contains(err.Error(), "连接池") {
+		t.Errorf("超出上限应报错，实际 %v", err)
+	}
+}
+
+func TestConfigFromCredentialsPool(t *testing.T) {
+	cfg, err := ConfigFromCredentials(map[string]string{
+		"host":         "smtp.example.com",
+		"from":         "notify@example.com",
+		"pool_size":    "8",
+		"idle_timeout": "45s",
+	})
+	if err != nil {
+		t.Fatalf("解析凭据失败：%v", err)
+	}
+	if cfg.PoolSize != 8 || cfg.IdleTimeout != 45*time.Second {
+		t.Errorf("解析结果不正确：pool=%d idle=%s", cfg.PoolSize, cfg.IdleTimeout)
+	}
+
+	off, err := ConfigFromCredentials(map[string]string{
+		"host": "smtp.example.com", "from": "notify@example.com", "pool_size": "off",
+	})
+	if err != nil {
+		t.Fatalf("解析 off 失败：%v", err)
+	}
+	if off.PoolSize != -1 {
+		t.Errorf("off 应解析为不复用，实际 %d", off.PoolSize)
+	}
+
+	ms, err := ConfigFromCredentials(map[string]string{
+		"host": "smtp.example.com", "from": "notify@example.com", "idle_timeout": "250",
+	})
+	if err != nil {
+		t.Fatalf("解析毫秒失败：%v", err)
+	}
+	if ms.IdleTimeout != 250*time.Millisecond {
+		t.Errorf("毫秒写法应解析为 250ms，实际 %s", ms.IdleTimeout)
+	}
+
+	bad := []map[string]string{
+		{"host": "smtp.example.com", "from": "notify@example.com", "pool_size": "many"},
+		{"host": "smtp.example.com", "from": "notify@example.com", "pool_size": "999"},
+		{"host": "smtp.example.com", "from": "notify@example.com", "idle_timeout": "soon"},
+		{"host": "smtp.example.com", "from": "notify@example.com", "idle_timeout": "0s"},
+	}
+	for i, creds := range bad {
+		if _, err := ConfigFromCredentials(creds); err == nil {
+			t.Errorf("第 %d 组非法值应报错", i+1)
+		}
+	}
+}

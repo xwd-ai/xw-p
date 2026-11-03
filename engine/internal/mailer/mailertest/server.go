@@ -1,8 +1,11 @@
 // Package mailertest 提供一个只实现投递路径的进程内 SMTP 服务器。
 //
-// 它按行应答 EHLO / STARTTLS / AUTH PLAIN / MAIL / RCPT / DATA / QUIT，
-// 把收到的信封与报文原样留给调用方断言。用于在测试里验证客户端行为，
-// 不追求协议完备：没有队列、没有投递、也不解析邮件内容。
+// 它按行应答 EHLO / STARTTLS / AUTH PLAIN / MAIL / RCPT / DATA / NOOP /
+// RSET / QUIT，把收到的信封与报文原样留给调用方断言。用于在测试里验证客户端
+// 行为，不追求协议完备：没有队列、没有投递、也不解析邮件内容。
+//
+// 一条连接上可以完成多轮投递（DATA 结束后自动复位信封），这样「连接复用」
+// 的用例可以直接用 Accepted() 断言建连次数。
 package mailertest
 
 import (
@@ -138,6 +141,7 @@ func (s *Server) handle(conn net.Conn) {
 	send("220 fake.test ESMTP ready")
 
 	secure := false
+	authedUser := ""
 	current := Mail{}
 	for {
 		line, err := r.ReadString('\n')
@@ -203,11 +207,14 @@ func (s *Server) handle(conn net.Conn) {
 				send("535 5.7.8 authentication credentials invalid")
 				continue
 			}
+			authedUser = user
 			current.AuthUser = user
 			send("235 2.7.0 authentication successful")
 
 		case strings.HasPrefix(upper, "MAIL FROM:"):
-			if s.cfg.AuthUser != "" && current.AuthUser == "" {
+			// 认证按连接记录而不是按邮件：真实服务器同样如此，一条连接认证
+			// 一次就能连续投递多封，这也是客户端复用连接的前提。
+			if s.cfg.AuthUser != "" && authedUser == "" {
 				send("530 5.7.0 authentication required")
 				continue
 			}
@@ -251,11 +258,16 @@ func (s *Server) handle(conn net.Conn) {
 				body.WriteString(strings.TrimPrefix(raw, "."))
 			}
 			current.Data = body.String()
+			// 同一连接上第二封起不再发 AUTH，认证用户要延续下来。
+			current.AuthUser = authedUser
 			send("250 2.0.0 queued as FAKE123")
 			s.mu.Lock()
 			s.mails = append(s.mails, current)
 			s.mu.Unlock()
 			current = Mail{}
+
+		case upper == "NOOP":
+			send("250 2.0.0 ok")
 
 		case upper == "RSET":
 			current = Mail{}

@@ -24,6 +24,21 @@ const (
 // DefaultTimeout 是单次投递（连接 + 握手 + 提交）的默认超时。
 const DefaultTimeout = 10 * time.Second
 
+// DefaultPoolSize 是空闲连接池的默认容量。
+//
+// 一条连接要经过 TCP、STARTTLS 握手、EHLO、AUTH 才算可用，这几步往返在跨境
+// 链路上常是提交正文本身的好几倍。把连接留下来复用，省掉的正是这几步。
+const DefaultPoolSize = 4
+
+// MaxPoolSize 是空闲连接池的上限，避免配置写错把中继的连接配额打满。
+const MaxPoolSize = 64
+
+// DefaultIdleTimeout 是空闲连接在池中的保留时长。
+//
+// 取值远小于中继常见的会话超时（5–10 分钟）：留一条已被对端悄悄关掉的连接，
+// 下条消息就得先撞一次失败，收益抵不过这点复杂度。
+const DefaultIdleTimeout = 30 * time.Second
+
 // 默认端口：按加密方式给出业界惯例值，配置里不写 port 时使用。
 const (
 	defaultPortStartTLS = 587
@@ -55,6 +70,11 @@ type Config struct {
 	SkipVerify bool
 	// HelloName 是 EHLO 里自报的主机名，为空时用 "localhost"。
 	HelloName string
+	// PoolSize 是空闲连接池容量：0 取 DefaultPoolSize，负数表示每条消息
+	// 新建一条连接（不复用）。
+	PoolSize int
+	// IdleTimeout 是空闲连接在池中的保留时长，0 取 DefaultIdleTimeout。
+	IdleTimeout time.Duration
 }
 
 // Normalize 清理空白、补默认值并校验，返回可直接使用的配置。
@@ -130,6 +150,19 @@ func (c Config) Normalize() (Config, error) {
 	if c.HelloName == "" {
 		c.HelloName = "localhost"
 	}
+	// 负数统一归到「不复用」，避免 -3 这种写法在池里变成未定义行为。
+	if c.PoolSize < 0 {
+		c.PoolSize = -1
+	}
+	if c.PoolSize > MaxPoolSize {
+		return Config{}, fmt.Errorf("SMTP 连接池容量不能超过 %d，收到 %d", MaxPoolSize, c.PoolSize)
+	}
+	if c.PoolSize == 0 {
+		c.PoolSize = DefaultPoolSize
+	}
+	if c.IdleTimeout <= 0 {
+		c.IdleTimeout = DefaultIdleTimeout
+	}
 	return c, nil
 }
 
@@ -184,6 +217,11 @@ func (c Config) String() string {
 	if c.Username != "" {
 		out += " auth=" + c.Username
 	}
+	if c.PoolSize < 0 {
+		out += " pool=off"
+	} else {
+		out += fmt.Sprintf(" pool=%d idle=%s", c.PoolSize, c.IdleTimeout)
+	}
 	return out
 }
 
@@ -208,5 +246,57 @@ func ConfigFromCredentials(creds map[string]string) (Config, error) {
 		}
 		cfg.Port = port
 	}
+	if raw := get("pool_size"); raw != "" {
+		size, err := parsePoolSize(raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.PoolSize = size
+	}
+	if raw := get("idle_timeout"); raw != "" {
+		idle, err := parseIdleTimeout(raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.IdleTimeout = idle
+	}
 	return cfg.Normalize()
+}
+
+// parsePoolSize 解析连接池容量：整数为容量，"off" 一类的写法表示不复用。
+func parsePoolSize(raw string) (int, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "off", "none", "false", "no", "disabled":
+		return -1, nil
+	}
+	size, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return 0, fmt.Errorf("SMTP 连接池容量必须是整数或 off，收到 %q", raw)
+	}
+	if size < 0 {
+		return -1, nil
+	}
+	if size > MaxPoolSize {
+		return 0, fmt.Errorf("SMTP 连接池容量不能超过 %d，收到 %d", MaxPoolSize, size)
+	}
+	return size, nil
+}
+
+// parseIdleTimeout 解析空闲时长，接受 "30s" 这类写法或毫秒整数。
+func parseIdleTimeout(raw string) (time.Duration, error) {
+	value := strings.TrimSpace(raw)
+	if d, err := time.ParseDuration(value); err == nil {
+		if d <= 0 {
+			return 0, fmt.Errorf("SMTP 空闲连接保留时长必须为正，收到 %q", raw)
+		}
+		return d, nil
+	}
+	ms, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("SMTP 空闲连接保留时长应为时长（如 30s）或毫秒数，收到 %q", raw)
+	}
+	if ms <= 0 {
+		return 0, fmt.Errorf("SMTP 空闲连接保留时长必须为正，收到 %q", raw)
+	}
+	return time.Duration(ms) * time.Millisecond, nil
 }

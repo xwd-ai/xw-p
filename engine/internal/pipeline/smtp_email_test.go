@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"encoding/base64"
+	"io"
 	"mime"
 	"net"
 	"strings"
@@ -363,5 +364,56 @@ func TestSMTPEmailProviderProbeUnreachable(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Errorf("探测耗时应受超时约束，实际 %s", elapsed)
+	}
+}
+
+// TestSMTPEmailProviderReusesConnection 同一渠道实现连续投递时复用连接：
+// 握手与认证只在第一封付一次，后续消息直接进信封。
+func TestSMTPEmailProviderReusesConnection(t *testing.T) {
+	srv, err := mailertest.New(mailertest.Config{})
+	if err != nil {
+		t.Fatalf("启动测试服务器失败：%v", err)
+	}
+	defer srv.Close()
+
+	emailProvider, err := NewSMTPEmailProvider(discardLogger(), mailer.Config{
+		Host:    srv.Host(),
+		Port:    srv.Port(),
+		From:    "互动提醒 <notify@example.com>",
+		TLS:     mailer.TLSDisabled,
+		Timeout: 2 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("构造 smtp provider 失败：%v", err)
+	}
+
+	for i := 0; i < 3; i++ {
+		res := emailProvider.Send(Delivery{
+			Channel:      domain.ChannelEmail,
+			To:           "creator@example.com",
+			Subject:      "《周末骑行》有新评论",
+			Body:         "阿岚：这条路线我也骑过。",
+			StepID:       "comment_email",
+			WorkflowName: "post_commented",
+			SubscriberID: "creator-1",
+		})
+		if !res.Sent {
+			t.Fatalf("第 %d 封投递失败：%s", i+1, res.Reason)
+		}
+	}
+
+	if got := srv.Accepted(); got != 1 {
+		t.Errorf("连接数 = %d，期望 3 封共用 1 条连接", got)
+	}
+	if got := len(srv.Mails()); got != 3 {
+		t.Errorf("服务器收到 %d 封，期望 3 封", got)
+	}
+
+	closer, ok := emailProvider.(io.Closer)
+	if !ok {
+		t.Fatal("smtp provider 应实现 io.Closer，供引擎退出时释放空闲连接")
+	}
+	if err := closer.Close(); err != nil {
+		t.Errorf("关闭失败：%v", err)
 	}
 }

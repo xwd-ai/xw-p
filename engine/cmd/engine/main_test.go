@@ -12,6 +12,7 @@ import (
 
 	"github.com/xwd-ai/xw-p/engine/internal/config"
 	"github.com/xwd-ai/xw-p/engine/internal/domain"
+	"github.com/xwd-ai/xw-p/engine/internal/pipeline"
 	"github.com/xwd-ai/xw-p/engine/internal/provider"
 	"github.com/xwd-ai/xw-p/engine/internal/schedule"
 )
@@ -208,5 +209,41 @@ func TestNewPipelineWiresProviderHealth(t *testing.T) {
 	}
 	if got := health.DownAfter(); got != provider.DefaultDownAfter {
 		t.Errorf("默认判死阈值 = %d，期望 %d", got, provider.DefaultDownAfter)
+	}
+}
+
+// closeTrackingSender 记录是否被关闭，用于验证退出路径会释放渠道资源。
+type closeTrackingSender struct {
+	channel domain.Channel
+	closed  bool
+	err     error
+}
+
+func (s *closeTrackingSender) Channel() domain.Channel { return s.channel }
+
+func (s *closeTrackingSender) Send(provider.Delivery) provider.Result {
+	return provider.Result{Sent: true}
+}
+
+func (s *closeTrackingSender) Close() error {
+	s.closed = true
+	return s.err
+}
+
+// 退出时关闭实现了 io.Closer 的渠道实现；没有该方法的保持原样，也不应出错。
+func TestCloseProvidersReleasesClosers(t *testing.T) {
+	registry := provider.NewRegistry()
+	tracker := &closeTrackingSender{channel: domain.ChannelEmail}
+	if err := registry.Register(tracker); err != nil {
+		t.Fatalf("登记失败：%v", err)
+	}
+	// console 实现没有 Close，混在同一张表里不应让收尾失败。
+	if err := registry.Register(pipeline.NewInAppProvider(discardLogger(), pipeline.DefaultInboxStore(discardLogger()))); err != nil {
+		t.Fatalf("登记站内信实现失败：%v", err)
+	}
+
+	closeProviders(discardLogger(), registry)
+	if !tracker.closed {
+		t.Error("实现 io.Closer 的渠道应被关闭")
 	}
 }

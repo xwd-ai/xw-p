@@ -608,3 +608,21 @@ func testFactory() Factory {
 		return newTestSender(cfg.Channel, cfg.ID), nil
 	})
 }
+
+// TestSMTPKindAcceptsPoolCredentials 连接复用相关的两项写在 credentials 里，
+// 与既有的 host/port 同属可选键；拼错仍应被拒绝。
+func TestSMTPKindAcceptsPoolCredentials(t *testing.T) {
+	ok := `[{"id": "email-smtp", "channel": "email", "kind": "smtp",
+		"credentials": {"host": "smtp.example.com", "from": "notify@example.com",
+		                "pool_size": "8", "idle_timeout": "45s"}}]`
+	if _, err := ParseSet([]byte(ok)); err != nil {
+		t.Fatalf("连接池凭据应被接受：%v", err)
+	}
+
+	bad := `[{"id": "email-smtp", "channel": "email", "kind": "smtp",
+		"credentials": {"host": "smtp.example.com", "from": "notify@example.com",
+		                "poolsize": "8"}}]`
+	if _, err := ParseSet([]byte(bad)); err == nil {
+		t.Fatal("拼错的凭据键应被拒绝")
+	}
+}

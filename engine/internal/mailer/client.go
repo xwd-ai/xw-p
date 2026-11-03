@@ -65,12 +65,17 @@ type Receipt struct {
 
 // Client 是一个可复用的 SMTP 提交客户端。
 //
-// 客户端本身无状态：每次 Send 建立一条连接、走完一轮对话、退出，不复用连接
-// 也不跨 goroutine 共享。对通知投递这种「一条消息一次投递、并发由消费者池
-// 提供」的形态，连接池带来的收益抵不过「半死连接」的排查成本。
+// 投递完成且事务干净时，连接会被放回空闲池留给下一条消息：TCP、TLS 握手、
+// EHLO 与 AUTH 这几步往返是每条消息的固定成本，批量投递时把它们摊掉，吞吐
+// 差异主要来自这里。池容量与空闲时长由配置决定，PoolSize 为负时退化成
+// 「每条消息一条连接」。
+//
+// 池里的连接在取用时会先发一次 NOOP 确认对端还在，因此对端按会话超时断开、
+// 中继重启这类情况不会变成「正文投递失败」的误报。
 type Client struct {
-	cfg Config
-	now func() time.Time
+	cfg  Config
+	now  func() time.Time
+	pool *sessionPool
 }
 
 // New 校验配置并构造客户端。
@@ -79,11 +84,29 @@ func New(cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{cfg: normalized, now: time.Now}, nil
+	client := &Client{cfg: normalized, now: time.Now}
+	if normalized.PoolSize > 0 {
+		client.pool = newSessionPool(normalized.PoolSize, normalized.IdleTimeout, client.now)
+	}
+	return client, nil
 }
 
 // Config 返回归一化后的配置（不含口令的摘要见 String）。
 func (c *Client) Config() Config { return c.cfg }
+
+// Close 关闭池中的空闲连接并停止复用；在途投递不受影响。
+//
+// 进程退出或渠道被摘除时调用：留着已认证的连接不关，中继要到会话超时
+// 才会回收。
+func (c *Client) Close() error {
+	c.pool.closeAll()
+	return nil
+}
+
+// PoolStats 返回连接池的累计观测；池未启用时为零值。
+func (c *Client) PoolStats() PoolStats {
+	return c.pool.stats()
+}
 
 // Send 提交一封邮件，返回回执；失败时返回带阶段的 *Error。
 func (c *Client) Send(ctx context.Context, msg Message) (Receipt, error) {
@@ -98,36 +121,107 @@ func (c *Client) Send(ctx context.Context, msg Message) (Receipt, error) {
 	// 一条到服务器的连接。
 	payload := msg.build(envelopeFrom, recipients, now)
 
-	sess, err := c.dial(ctx)
+	// acquire 返回的连接已经完成登录：复用的走存活确认，新建的走完整会话
+	// 建立。这里不能再登录一次，否则会在同一条连接上重发 EHLO。
+	sess, _, err := c.acquire(ctx)
 	if err != nil {
 		return Receipt{MessageID: messageID}, err
 	}
-	defer sess.close()
+	// 连接最终只有两种归宿：回池继续用，或关闭。只有事务干净走完、且上下文
+	// 没被取消（取消时连接可能已被关闭协程关掉）才回池；中途出错时协议状态
+	// 常停在事务中间，留下只会让下一条消息踩同一个坑。
+	reusable := false
+	defer func() { c.release(sess, reusable) }()
+
 	stop := sess.watchCancel(ctx)
 	defer stop()
 
-	if err := sess.greet(ctx); err != nil {
-		return Receipt{MessageID: messageID}, err
-	}
-	if err := sess.ehlo(ctx); err != nil {
-		return Receipt{MessageID: messageID}, err
-	}
-	if c.cfg.TLS == TLSStartTLS {
-		if err := sess.startTLS(ctx); err != nil {
-			return Receipt{MessageID: messageID}, err
-		}
-	}
-	if c.cfg.Username != "" {
-		if err := sess.auth(ctx); err != nil {
-			return Receipt{MessageID: messageID}, err
-		}
-	}
 	reply, err := sess.deliver(ctx, envelopeFrom, recipients, payload)
 	if err != nil {
 		return Receipt{MessageID: messageID}, err
 	}
-	sess.quit()
+	reusable = ctx.Err() == nil
 	return Receipt{MessageID: messageID, Reply: reply}, nil
+}
+
+// acquire 取一条可用连接：优先复用池里的空闲连接，没有则新建并完成登录。
+//
+// 复用前的存活确认不能省：连接可能已被对端按会话超时关掉，不确认就直接写
+// 正文的话，失败会记在「正文」阶段，看起来像内容问题。确认失败就丢掉重连。
+func (c *Client) acquire(ctx context.Context) (*session, bool, error) {
+	for c.pool != nil {
+		sess, ok := c.pool.take()
+		if !ok {
+			break
+		}
+		if c.alive(ctx, sess) {
+			return sess, true, nil
+		}
+		c.pool.drop(sess)
+	}
+	sess, err := c.dial(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := c.login(ctx, sess); err != nil {
+		c.pool.drop(sess)
+		return nil, false, err
+	}
+	return sess, false, nil
+}
+
+// alive 复用前确认对端还在；连接已被关掉时立即返回 false，不阻塞等待。
+func (c *Client) alive(ctx context.Context, sess *session) bool {
+	stop := sess.watchCancel(ctx)
+	defer stop()
+	return sess.noop(ctx) == nil
+}
+
+// login 完成一轮会话建立：问候、EHLO、可选 STARTTLS、可选认证。
+//
+// 这一阶段同样监听取消：步骤超时不该卡在等服务器回问候上，否则一条连不上的
+// 中继会把执行预算耗在中继自己的超时里。
+func (c *Client) login(ctx context.Context, sess *session) error {
+	stop := sess.watchCancel(ctx)
+	defer stop()
+	if err := sess.greet(ctx); err != nil {
+		return err
+	}
+	if err := sess.ehlo(ctx); err != nil {
+		return err
+	}
+	if c.cfg.TLS == TLSStartTLS {
+		if err := sess.startTLS(ctx); err != nil {
+			return err
+		}
+	}
+	if c.cfg.Username != "" {
+		if err := sess.auth(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// release 决定一条连接的归宿。
+//
+// reusable 表示事务已干净走完、连接仍处于可再次投递的状态。池未启用时礼貌
+// 退出（QUIT）再关闭；不可复用时直接关闭，不对可疑连接发多余的命令。
+func (c *Client) release(sess *session, reusable bool) {
+	if sess == nil {
+		return
+	}
+	if !reusable {
+		// 计入丢弃：这条连接被关掉而不是回到池里，运维据此判断复用率。
+		c.pool.drop(sess)
+		return
+	}
+	if c.pool == nil {
+		sess.quit()
+		sess.close()
+		return
+	}
+	c.pool.put(sess)
 }
 
 // dial 建立连接；隐式 TLS 模式在拨号后立刻握手。
@@ -138,6 +232,7 @@ func (c *Client) dial(ctx context.Context) (*session, error) {
 		return nil, &Error{Stage: "连接 " + c.cfg.Addr(), Err: err}
 	}
 	sess := &session{conn: conn, r: bufio.NewReader(conn), w: bufio.NewWriter(conn), cfg: c.cfg}
+	c.pool.recordOpen()
 	if c.cfg.TLS == TLSImplicit {
 		if err := sess.handshake(ctx); err != nil {
 			_ = conn.Close()
@@ -171,6 +266,15 @@ func (s *session) watchCancel(ctx context.Context) func() {
 	}()
 	var once sync.Once
 	return func() { once.Do(func() { close(done) }) }
+}
+
+// noop 发一条 NOOP 确认连接仍然可用，用于复用空闲连接前的存活检查。
+//
+// 不取服务器的任何状态，只回答「对端还在不在」；对端已按会话超时断开时
+// 这里会立刻读到 EOF，比直接发 MAIL FROM 再失败更早暴露问题。
+func (s *session) noop(ctx context.Context) error {
+	_, err := s.expect(ctx, "存活确认", []int{250}, "NOOP")
+	return err
 }
 
 // quit 礼貌退出；服务器没回 221 也不影响已经拿到的投递结果。

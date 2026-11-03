@@ -78,6 +78,19 @@ func (p *smtpEmailProvider) Probe(ctx context.Context) error {
 	return conn.Close()
 }
 
+// Close 释放连接池中的空闲连接；引擎退出或渠道被摘除时调用。
+func (p *smtpEmailProvider) Close() error {
+	err := p.client.Close()
+	stats := p.client.PoolStats()
+	p.logger.Debug("[email] SMTP 连接池已关闭",
+		"capacity", stats.Capacity,
+		"opened", stats.Opened,
+		"reused", stats.Reused,
+		"discarded", stats.Discarded,
+	)
+	return err
+}
+
 // Send 提交邮件；不感知取消，供只调用 Send 的调用方使用。
 func (p *smtpEmailProvider) Send(d Delivery) SendResult {
 	return p.SendContext(context.Background(), d)
