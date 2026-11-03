@@ -640,6 +640,20 @@ def verify(headers, raw_body: bytes, tolerance: int = 300) -> bool:
 
 比较用固定时间实现（`compare_digest`），不要用 `==`：字符串比较在第一个不同的字节就返回，能把密钥一位一位试出来。校验必须用原始字节，先解析再重新序列化会改变字段顺序，签名随之失效。
 
+## 测试
+
+两个进程各有一套测试，都只依赖本机环境：Python 侧走 `pytest`（进程内 HTTP 客户端与假网关），Go 侧走标准 `testing`（Redis 相关用例默认用进程内实现，需要真实 Redis 的用例只在设了 `XW_TEST_REDIS_ADDR` 时启用）。
+
+```bash
+# API 与 Python 侧渠道实现
+api/.venv/bin/python -m pytest api/tests -q
+
+# Go 引擎；渠道与管线这两块并发路径多，单独跑一遍竞态检测
+cd engine && go test ./... && go test -race ./internal/provider/ ./internal/pipeline/
+```
+
+渠道实现除各自的细节测试外，还有一层跨实现的契约测试（`engine/internal/pipeline/provider_contract_test.go`），只验所有实现共有的部分：标识非空、互不重复且与服务渠道一致；本地就能判定的失败（缺地址、地址非法、正文为空、载荷超限）统一报成「失败 + 终态 + 原因」，避免回退链把一条必然被拒的消息试遍备选；零值投递不 panic 且失败原因可读；没有外部依赖时探测恒为可用、需要落盘或连网的实现如实报错；并发调用不出数据竞争。新增一个渠道实现时把它加进同一张表，这些约束即自动覆盖——细节规则仍由各自的实现测试负责。
+
 ## 压测
 
 `engine/cmd/xwbench` 压测队列链路：按指定并发与目标速率灌入消息，再由同进程内的消费者领取、处理、确认，输出吞吐、端到端延迟分位、错误率与进程内存。默认使用独立队列键 `xw:queue:bench`，不会干扰触发链路的消息。
