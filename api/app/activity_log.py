@@ -65,6 +65,8 @@ class ActivityStore(Protocol):
 
     def append(self, record: dict[str, Any]) -> None: ...
 
+    def append_many(self, records: list[dict[str, Any]]) -> int: ...
+
     def query(self, q: ActivityQuery) -> list[dict[str, Any]]: ...
 
 
@@ -131,6 +133,22 @@ class JSONLActivityStore:
             with self._path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(record, ensure_ascii=False) + "\n")
 
+    def append_many(self, records: list[dict[str, Any]]) -> int:
+        """把一批记录拼成一次追加写。
+
+        逐条 ``append`` 时每条都要开关一次文件，批量触发会把这个开销乘以
+        条数。这里在锁内一次打开、一次写出全部行；写失败时异常向上抛，
+        调用方据此知道这批活动日志没有落盘。
+        """
+        if not records:
+            return 0
+        blob = "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in records)
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock:
+            with self._path.open("a", encoding="utf-8") as fh:
+                fh.write(blob)
+        return len(records)
+
     def query(self, q: ActivityQuery) -> list[dict[str, Any]]:
         """按条件返回最新在前的一页记录；取满 ``limit`` 条即停止读取。"""
         limit = max(1, int(q.limit))
@@ -185,6 +203,13 @@ class MemoryActivityStore:
         with self._lock:
             self._records.append(record)
 
+    def append_many(self, records: list[dict[str, Any]]) -> int:
+        if not records:
+            return 0
+        with self._lock:
+            self._records.extend(records)
+        return len(records)
+
     def query(self, q: ActivityQuery) -> list[dict[str, Any]]:
         with self._lock:
             selected = [
@@ -215,9 +240,31 @@ class PostgresActivityStore:
         return self._engine
 
     def append(self, record: dict[str, Any]) -> None:
+        self.append_many([record])
+
+    def append_many(self, records: list[dict[str, Any]]) -> int:
+        """一批记录在一个事务里写入。
+
+        逐条提交会让批量触发在数据库上排出一串小事务；这里用一条语句配
+        多组参数，要么全进要么全不进，调用方也能从异常里判断整批是否落盘。
+        """
+        if not records:
+            return 0
         from sqlalchemy import text
 
         engine = self._get_engine()
+        params = [
+            {
+                "trigger_id": record["trigger_id"],
+                "workflow": record["workflow"],
+                "subscriber_id": record["subscriber_id"],
+                "channels": json.dumps(record.get("channels") or [], ensure_ascii=False),
+                "status": record.get("status", "triggered"),
+                "title": record.get("title") or record["workflow"],
+                "environment": record.get("environment") or config.ENV,
+            }
+            for record in records
+        ]
         with engine.begin() as conn:
             conn.execute(
                 text(
@@ -228,16 +275,9 @@ class PostgresActivityStore:
                         (:trigger_id, :workflow, :subscriber_id, :channels, :status, :title, :environment)
                     """
                 ),
-                {
-                    "trigger_id": record["trigger_id"],
-                    "workflow": record["workflow"],
-                    "subscriber_id": record["subscriber_id"],
-                    "channels": json.dumps(record.get("channels") or [], ensure_ascii=False),
-                    "status": record.get("status", "triggered"),
-                    "title": record.get("title") or record["workflow"],
-                    "environment": record.get("environment") or config.ENV,
-                },
+                params,
             )
+        return len(params)
 
     @staticmethod
     def _as_uuid(value: object) -> Optional[uuid.UUID]:
@@ -351,6 +391,35 @@ def get_activity_store() -> ActivityStore:
         return _activity_store
 
 
+def build_activity(
+    *,
+    trigger_id: str,
+    workflow: str,
+    subscriber_id: str,
+    channels: Optional[list[str]] = None,
+    status: str = "triggered",
+    title: Optional[str] = None,
+    payload: Optional[dict[str, Any]] = None,
+    environment: Optional[str] = None,
+) -> dict[str, Any]:
+    """构造一条活动日志记录（不落库）。
+
+    展示标题优先取 ``payload.title``，其次 ``title``，最后工作流名。
+    ``environment`` 打标隔离环境（默认 development），供活动流按环境过滤。
+    """
+    resolved_title = title or ((payload or {}).get("title") if payload else None) or workflow
+    return {
+        "trigger_id": trigger_id,
+        "workflow": workflow,
+        "subscriber_id": subscriber_id,
+        "channels": channels or ["in_app"],
+        "status": status,
+        "title": resolved_title,
+        "environment": environment or config.ENV,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 def record_activity(
     *,
     trigger_id: str,
@@ -365,22 +434,37 @@ def record_activity(
     """写入一条活动日志并返回落库记录。
 
     供触发 API 在返回回执前调用，令活动流即时反映「已触发」状态。
-    展示标题优先取 ``payload.title``，其次 ``title``，最后工作流名。
-    ``environment`` 打标隔离环境（默认 development），供活动流按环境过滤。
     """
-    resolved_title = title or ((payload or {}).get("title") if payload else None) or workflow
-    record = {
-        "trigger_id": trigger_id,
-        "workflow": workflow,
-        "subscriber_id": subscriber_id,
-        "channels": channels or ["in_app"],
-        "status": status,
-        "title": resolved_title,
-        "environment": environment or config.ENV,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
+    record = build_activity(
+        trigger_id=trigger_id,
+        workflow=workflow,
+        subscriber_id=subscriber_id,
+        channels=channels,
+        status=status,
+        title=title,
+        payload=payload,
+        environment=environment,
+    )
     get_activity_store().append(record)
     return record
+
+
+def record_activities(records: list[dict[str, Any]]) -> int:
+    """写入一批活动日志，返回条数。
+
+    后端有 ``append_many`` 时一次写入（文件后端一次打开、数据库后端一个
+    事务），没有则逐条追加。活动流是触发链路上的旁路记录，这里的取舍是
+    「写失败向上抛、由调用方决定是否让请求失败」，而不是静默丢一行。
+    """
+    if not records:
+        return 0
+    store = get_activity_store()
+    bulk = getattr(store, "append_many", None)
+    if callable(bulk):
+        return int(bulk(records))
+    for record in records:
+        store.append(record)
+    return len(records)
 
 
 __all__ = [
@@ -390,9 +474,11 @@ __all__ = [
     "MemoryActivityStore",
     "PostgresActivityStore",
     "ReverseLineReader",
+    "build_activity",
     "get_activity_store",
     "is_older_than",
     "matches",
     "record_activity",
+    "record_activities",
     "sort_key",
 ]

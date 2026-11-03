@@ -76,6 +76,41 @@ curl -X POST http://127.0.0.1:8000/v1/events/trigger \
   -d '{"name":"post_commented","to":{"subscriberId":"creator_1","email":"hi@example.com","deviceToken":"fcm-token-9f2c1d","channels":["in_app","push","email"]},"payload":{"post_id":"P-2026-1001","post_title":"我的第一支 Vlog","actor":"小林","comment":"拍得真好，求教程！"}}'
 ```
 
+### 批量触发
+
+一条热帖短时间内涌入的点赞、评论往往成批到达。逐条打触发接口时，每条消息都要一次 HTTP 往返加一次 Redis 往返，互动高峰下往返开销会盖过业务本身。批量接口把整批压成一次入队、一次活动日志写入：
+
+```bash
+curl -X POST http://127.0.0.1:8000/v1/events/trigger/batch \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: post-liked-P-2026-1001-burst-1" \
+  -d '{"events":[
+        {"name":"post_liked","to":{"subscriberId":"creator_1"},"payload":{"post_id":"P-2026-1001","actor":"小林"}},
+        {"name":"post_commented","to":{"subscriberId":"creator_1","email":"hi@example.com"},"payload":{"post_id":"P-2026-1001","actor":"阿澈","comment":"求教程"}}
+      ]}'
+```
+
+回执按请求顺序给出逐条结果，与请求等长：
+
+```json
+{"acknowledged": true, "accepted": 2, "rejected": 0,
+ "results": [
+   {"index": 0, "name": "post_liked", "subscriberId": "creator_1", "status": "accepted",
+    "triggerId": "…", "transactionId": "…", "acknowledgmentId": "…"},
+   {"index": 1, "name": "post_commented", "subscriberId": "creator_1", "status": "accepted",
+    "triggerId": "…", "transactionId": "…", "acknowledgmentId": "…"}
+ ]}
+```
+
+几条约定：
+
+- **部分失败不连坐**：某条事件的模板不存在、未启用或环境不匹配时记为 `rejected` 并给出 `error`，同批其余事件照常入队。全部被拒同样返回 200——这是「逐条结果」而不是「整批失败」，调用方看 `accepted` 与 `results` 即可。
+- **上限 100 条**：请求体超出范围由入参校验直接拒掉（422）。上限既让往返明显摊薄，又不至于让一条坏事件逼着重发整批。
+- **幂等作用于整批**：`Idempotency-Key` 相同即返回首次回执（含当时被拒的条目），不会重复入队；事件之间没有独立的幂等键。
+- **一次入队**：Redis 后端把整批装进一个 pipeline（不开事务，入队之间没有需要原子化的约束）一次发出；文件后端一次打开写完全部活动日志行，Postgres 后端一个事务插入。总线只提供逐条 `publish` 时自动退回逐条发送，批量是优化而非接入前提。
+
+入队路径本机实测（同一 Redis 实例，2000 条消息）：逐条 10.6k 条/秒，每批 100 条 55.8k 条/秒，顺序与逐条入队一致。
+
 ### 环境变量
 
 API 侧：

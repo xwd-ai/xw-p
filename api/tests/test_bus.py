@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-from app.bus import MemoryMessageBus, RedisMessageBus
+from app.bus import MemoryMessageBus, RedisMessageBus, publish_all
 from app.schemas import QueuedMessage, TriggerEvent, new_queued_message
 
 
@@ -17,6 +17,50 @@ def _make_msg(trigger_id: str = "t-1") -> QueuedMessage:
         channels=["in_app"],
         payload={"user": "Alice"},
     )
+
+
+class _FakePipeline:
+    """只记录命令、执行时一次落到 fake client 上。"""
+
+    def __init__(self, client) -> None:
+        self._client = client
+        self._commands: list[tuple[str, str]] = []
+
+    def lpush(self, key, value):
+        self._commands.append((key, value))
+        return len(self._commands)
+
+    def execute(self):
+        for key, value in self._commands:
+            self._client.lpush(key, value)
+        self._client.round_trips += 1
+        return [1] * len(self._commands)
+
+
+class _BulkRedis:
+    """支持 pipeline 的假客户端，用于统计批量写入的往返次数。"""
+
+    def __init__(self) -> None:
+        self.items: list[str] = []
+        self.round_trips = 0
+        self.pipelines = 0
+
+    def lpush(self, key, value):
+        self.items.insert(0, value)
+        return len(self.items)
+
+    def brpop(self, key, timeout=1):
+        if not self.items:
+            return None
+        return (key, self.items.pop())
+
+    def llen(self, key):
+        return len(self.items)
+
+    def pipeline(self, transaction=True):
+        assert transaction is False, "入队之间无需事务，MULTI 只会多两次往返"
+        self.pipelines += 1
+        return _FakePipeline(self)
 
 
 def test_memory_bus_roundtrip():
@@ -107,3 +151,92 @@ def test_device_token_carried_through_queue_contract():
     # 未提供时不报错，保持向后兼容
     assert QueuedMessage.model_validate({"trigger_id": "t", "transaction_id": "tx",
                                          "name": "post_liked", "subscriber_id": "s"}).device_token is None
+
+
+# --- 批量入队 ---
+
+
+def test_memory_bus_publish_many_keeps_order():
+    bus = MemoryMessageBus()
+    assert bus.publish_many([_make_msg(f"t-{i}") for i in range(3)]) == 3
+    assert bus.size() == 3
+    assert [bus.consume(timeout=0.1).trigger_id for _ in range(3)] == ["t-0", "t-1", "t-2"]
+
+
+def test_memory_bus_publish_many_empty_is_noop():
+    bus = MemoryMessageBus()
+    assert bus.publish_many([]) == 0
+    assert bus.size() == 0
+
+
+def test_redis_bus_publish_many_uses_one_round_trip(monkeypatch):
+    """一批消息只发一次 pipeline，且顺序与逐条 LPUSH 一致。"""
+    fake = _BulkRedis()
+    monkeypatch.setattr("redis.Redis.from_url", lambda *a, **k: fake)
+
+    bus = RedisMessageBus(url="redis://localhost:6379/0", queue_key="xw:q")
+    messages = [_make_msg(f"t-{i}") for i in range(50)]
+    assert bus.publish_many(messages) == 50
+
+    assert fake.pipelines == 1
+    assert fake.round_trips == 1
+    assert len(fake.items) == 50
+    # LPUSH 到表头、消费端 BRPOP 从表尾取，先入队的先被消费
+    assert [bus.consume(timeout=1.0).trigger_id for _ in range(50)] == [m.trigger_id for m in messages]
+
+
+def test_redis_bus_publish_many_empty_skips_client(monkeypatch):
+    def _boom(*a, **k):
+        raise AssertionError("空列表不应建立连接")
+
+    monkeypatch.setattr("redis.Redis.from_url", _boom)
+    bus = RedisMessageBus(url="redis://localhost:6379/0", queue_key="xw:q")
+    assert bus.publish_many([]) == 0
+
+
+def test_redis_bus_publish_single_still_works(monkeypatch):
+    fake = _BulkRedis()
+    monkeypatch.setattr("redis.Redis.from_url", lambda *a, **k: fake)
+    bus = RedisMessageBus(url="redis://localhost:6379/0", queue_key="xw:q")
+
+    bus.publish(_make_msg("t-solo"))
+    assert fake.round_trips == 0, "单条投递不该为一次写入开 pipeline"
+    assert json.loads(fake.items[0])["trigger_id"] == "t-solo"
+
+
+def test_publish_all_prefers_bulk_channel():
+    calls = {"bulk": 0, "single": 0}
+
+    class _Bus:
+        def publish(self, message):
+            calls["single"] += 1
+
+        def publish_many(self, messages):
+            calls["bulk"] += 1
+            return len(list(messages))
+
+    assert publish_all(_Bus(), [_make_msg("a"), _make_msg("b")]) == 2
+    assert calls == {"bulk": 1, "single": 0}
+
+
+def test_publish_all_falls_back_to_single_publish():
+    """外部注入的总线可能没有批量通道：批量只是优化，不是接入前提。"""
+    sent = []
+
+    class _Bus:
+        def publish(self, message):
+            sent.append(message.trigger_id)
+
+    assert publish_all(_Bus(), [_make_msg("a"), _make_msg("b")]) == 2
+    assert sent == ["a", "b"]
+
+
+def test_publish_all_empty_does_not_touch_bus():
+    class _Bus:
+        def publish(self, message):
+            raise AssertionError("空列表不应入队")
+
+        def publish_many(self, messages):
+            raise AssertionError("空列表不应入队")
+
+    assert publish_all(_Bus(), []) == 0

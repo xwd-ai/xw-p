@@ -13,17 +13,25 @@ from typing import Optional
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 
 from . import config
-from .activity_log import record_activity
+from .activity_log import build_activity, record_activities, record_activity
 from .auth import EnvContext, require_env
 from .activity_routes import router as activity_router
-from .bus import get_bus
+from .bus import get_bus, publish_all
 from .dashboard_routes import router as dashboard_router
 from .execution_routes import router as execution_router
 from .idempotency import get_idempotency_store
 from .inbox import router as inbox_router
 from .providers import factory as provider_factory
 from .provider_routes import router as provider_router
-from .schemas import TriggerEvent, TriggerResponse, new_queued_message
+from .schemas import (
+    BatchTriggerItem,
+    BatchTriggerRequest,
+    BatchTriggerResponse,
+    QueuedMessage,
+    TriggerEvent,
+    TriggerResponse,
+    new_queued_message,
+)
 from .worker import Worker
 from .workflow import get_registry
 from .workflow_routes import router as workflow_router
@@ -85,6 +93,30 @@ def _env_mismatch(workflow_env, request_env: str) -> bool:
     return wf_env != request_env
 
 
+def _resolve_workflow(name: str, environment: str):
+    """按名称查找当前环境下可触发的工作流，找不到或未启用返回 None。
+
+    优先查内存注册表（预置内容社区工作流），未命中回退到工作流存储，使经
+    CRUD 新建的工作流也能被触发；两处都要做环境匹配，实现环境间隔离。
+    单条触发与批量触发共用这一处判定，避免两条路径对「什么算可触发」
+    给出不同答案。
+    """
+    workflow = get_registry().get(name)
+    if workflow is None or _env_mismatch(workflow.environment, environment):
+        workflow = get_workflow_store().get_by_name(name)
+        if workflow is not None and _env_mismatch(workflow.environment, environment):
+            workflow = None
+    if workflow is None or not workflow.active:
+        return None
+    return workflow
+
+
+def _missing_workflow_detail(name: str, environment: str) -> str:
+    """统一「工作流不可触发」的文案，单条与批量回执里的措辞保持一致。"""
+    return f"工作流模板不存在或未启用：{name}（环境 {environment}）"
+
+
+
 @app.get("/health", tags=["system"], summary="健康检查")
 def health() -> dict:
     return {"status": "ok", "queued": get_bus().size()}
@@ -131,18 +163,12 @@ def trigger_event(
     幂等语义：携带 ``Idempotency-Key`` 的请求若此前已成功处理，直接返回缓存回执，
     不会重复入队；未携带则该键的请求每次都会生成新回执。
     """
-    # 1. 模板查找：触发标识必须对应一个已启用的工作流。
-    #    优先查内存注册表（预置内容社区工作流），未命中回退到工作流存储，
-    #    使经 CRUD 新建的工作流也能被触发；并做环境匹配，实现环境间隔离。
-    workflow = get_registry().get(event.name)
-    if workflow is None or _env_mismatch(workflow.environment, env.environment):
-        workflow = get_workflow_store().get_by_name(event.name)
-        if workflow is not None and _env_mismatch(workflow.environment, env.environment):
-            workflow = None
-    if workflow is None or not workflow.active:
+    # 1. 模板查找：触发标识必须对应一个已启用的工作流（含环境匹配）。
+    workflow = _resolve_workflow(event.name, env.environment)
+    if workflow is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"工作流模板不存在或未启用：{event.name}（环境 {env.environment}）",
+            detail=_missing_workflow_detail(event.name, env.environment),
         )
 
     store = get_idempotency_store()
@@ -185,4 +211,125 @@ def trigger_event(
 
     get_bus().publish(message)
     logger.info("已触发：%s -> %s（ack=%s）", event.name, message.subscriber_id, message.trigger_id)
+    return response
+
+
+@app.post(
+    "/v1/events/trigger/batch",
+    response_model=BatchTriggerResponse,
+    tags=["trigger"],
+    status_code=status.HTTP_200_OK,
+    summary="批量触发互动事件通知",
+    description=(
+        "一次提交多条互动事件，按单条触发的同一套语义逐条处理：模板查找、环境匹配、"
+        "生成回执，最后一次性把受理的事件写进队列。\n\n"
+        "**为什么批量**：逐条触发时每条消息都要一次 HTTP 往返加一次 Redis 往返，"
+        "互动高峰（比如一条热帖短时间涌入大量点赞）下往返开销会超过业务本身；"
+        "这个接口把整批压成一次入队、一次活动日志写入。\n\n"
+        "**部分失败**：某条事件的工作流不存在、未启用或环境不匹配时，该条记为 "
+        "``rejected`` 并给出原因，同批其余事件照常入队；回执里的 ``results`` 与请求"
+        "顺序一致，调用方按下标对齐即可。全部被拒时同样返回 200，逐条原因看 ``error``。\n\n"
+        "**幂等语义**：``Idempotency-Key`` 作用于整批——相同键重复请求返回首次的回执，"
+        "不会重复入队；逐条事件不带独立的幂等键。"
+    ),
+    responses={
+        status.HTTP_200_OK: {"description": "整批已处理，逐条结果见 results"},
+        status.HTTP_400_BAD_REQUEST: {"description": "未知环境"},
+        status.HTTP_401_UNAUTHORIZED: {"description": "API Key 缺失或不匹配"},
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {"description": "事件列表为空或超过上限"},
+    },
+)
+def trigger_events_batch(
+    payload: BatchTriggerRequest,
+    env: EnvContext = Depends(require_env),
+    idempotency_key: Optional[str] = Header(
+        default=None,
+        alias="Idempotency-Key",
+        description="整批幂等键：相同键重复请求返回首次回执",
+        examples=["post-liked-P-2026-1001-burst-1"],
+    ),
+) -> BatchTriggerResponse:
+    """批量触发：逐条判定可触发性，受理的合并成一次入队。"""
+    store = get_idempotency_store()
+
+    # 1. 整批幂等：命中则不再校验也不再入队。
+    #    与单条触发同样的取舍——缓存的是「那次请求的结果」，不是「这些事件」，
+    #    所以重放要原样返回，包括哪些条目当时就被拒。
+    if idempotency_key:
+        cached = store.get(idempotency_key)
+        if cached is not None:
+            logger.info("幂等命中：%s（返回缓存回执，%d 条）", idempotency_key, len(cached.get("results") or []))
+            return BatchTriggerResponse(**cached)
+
+    results: list[BatchTriggerItem] = []
+    messages: list[QueuedMessage] = []
+    activities: list[dict] = []
+
+    for index, event in enumerate(payload.events):
+        workflow = _resolve_workflow(event.name, env.environment)
+        if workflow is None:
+            results.append(
+                BatchTriggerItem(
+                    index=index,
+                    name=event.name,
+                    subscriber_id=event.to.subscriber_id,
+                    status="rejected",
+                    error=_missing_workflow_detail(event.name, env.environment),
+                )
+            )
+            continue
+
+        message = new_queued_message(event, workflow)
+        messages.append(message)
+        results.append(
+            BatchTriggerItem(
+                index=index,
+                name=event.name,
+                subscriber_id=message.subscriber_id,
+                status="accepted",
+                trigger_id=message.trigger_id,
+                transaction_id=message.transaction_id,
+                acknowledgment_id=message.trigger_id,
+            )
+        )
+        activities.append(
+            build_activity(
+                trigger_id=message.trigger_id,
+                workflow=event.name,
+                subscriber_id=message.subscriber_id,
+                channels=message.channels,
+                status="triggered",
+                payload=event.payload,
+                environment=env.environment,
+            )
+        )
+
+    response = BatchTriggerResponse(
+        accepted=len(messages),
+        rejected=len(results) - len(messages),
+        results=results,
+    )
+
+    # 2. 入队前登记整批幂等键：并发同键请求只有一个能把消息发出去。
+    if idempotency_key:
+        inserted = store.put_if_absent(
+            idempotency_key, response.model_dump(by_alias=True), config.IDEMPOTENCY_TTL
+        )
+        if not inserted:
+            cached = store.get(idempotency_key)
+            if cached is not None:
+                return BatchTriggerResponse(**cached)
+
+    if messages:
+        # 活动日志先写、再入队：活动流据此即时反映「已触发」，顺序与单条
+        # 触发一致。两处都走批量通道，整批各自一次写入。
+        record_activities(activities)
+        publish_all(get_bus(), messages)
+
+    logger.info(
+        "批量触发：%d 条，受理 %d，拒绝 %d",
+        len(results),
+        response.accepted,
+        response.rejected,
+    )
     return response

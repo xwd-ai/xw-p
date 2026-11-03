@@ -97,6 +97,69 @@ class TriggerResponse(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+# MAX_BATCH_EVENTS 是单次批量触发的上限。
+#
+# 批量接口的目的是把「N 条消息 N 次往返」压成一次，因此上限要够大才有意义；
+# 但一次请求里的全部事件会在同一个事务边界内校验、同一次写队列，过大就会
+# 把单请求的失败面放大到难以重试的程度（一条坏事件要重发整批）。100 条是
+# 一个既能明显摊薄往返、又便于整批重试的折中。
+MAX_BATCH_EVENTS = 100
+
+
+class BatchTriggerRequest(BaseModel):
+    """批量触发请求体。
+
+    ``events`` 逐条按单条触发的语义处理：工作流不存在、未启用或环境不匹配
+    的条目单独判失败，不影响同批其它事件入队。
+
+    示例（一次提交同一篇帖子的多条互动）：::
+
+        {
+            "events": [
+                {"name": "post_liked", "to": {"subscriberId": "creator-1001"},
+                 "payload": {"post_id": "P-2026-1001", "actor": "小林"}},
+                {"name": "post_commented", "to": {"subscriberId": "creator-1001",
+                 "email": "creator@example.com"},
+                 "payload": {"post_id": "P-2026-1001", "actor": "阿澈", "comment": "求教程"}}
+            ]
+        }
+    """
+
+    events: list[TriggerEvent] = Field(
+        min_length=1,
+        max_length=MAX_BATCH_EVENTS,
+        description=f"待触发的事件列表，1–{MAX_BATCH_EVENTS} 条",
+    )
+
+
+class BatchTriggerItem(BaseModel):
+    """批量触发中单条事件的处理结果。"""
+
+    index: int = Field(description="该事件在请求列表中的下标，从 0 开始")
+    name: str = Field(description="事件对应的工作流标识")
+    subscriber_id: str = Field(alias="subscriberId", description="订阅者标识")
+    status: str = Field(description="处理结果：accepted 已入队 / rejected 被拒")
+    trigger_id: Optional[str] = Field(default=None, alias="triggerId", description="触发标识（被拒时为空）")
+    transaction_id: Optional[str] = Field(default=None, alias="transactionId")
+    acknowledgment_id: Optional[str] = Field(default=None, alias="acknowledgmentId")
+    error: Optional[str] = Field(default=None, description="被拒原因")
+
+    model_config = {"populate_by_name": True}
+
+
+class BatchTriggerResponse(BaseModel):
+    """批量触发回执：整批计数 + 逐条结果。
+
+    结果按请求顺序给出且与请求等长，调用方按下标对齐即可，不必依赖
+    「成功的那几条按顺序出现」这种隐含约定。
+    """
+
+    acknowledged: bool = Field(default=True, description="整批是否已受理（部分被拒仍为 true）")
+    accepted: int = Field(description="已入队的条数")
+    rejected: int = Field(description="被拒的条数")
+    results: list[BatchTriggerItem] = Field(description="逐条结果，与请求顺序一致")
+
+
 class WorkflowStepSnapshot(BaseModel):
     """步骤定义的传输形态，与 Go 侧 ``queue.StepSpec`` 字段一一对应。"""
 

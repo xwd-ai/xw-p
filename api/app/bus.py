@@ -11,7 +11,7 @@ import json
 import logging
 import queue
 import threading
-from typing import Optional, Protocol
+from typing import Iterable, Optional, Protocol
 
 from . import config
 from .schemas import QueuedMessage
@@ -23,6 +23,8 @@ class MessageBus(Protocol):
     """总线后端统一接口：publish 入队，consume 阻塞出队，size 返回待消费数量。"""
 
     def publish(self, message: QueuedMessage) -> None: ...
+
+    def publish_many(self, messages: Iterable[QueuedMessage]) -> int: ...
 
     def consume(self, timeout: float = 1.0) -> Optional[QueuedMessage]: ...
 
@@ -37,6 +39,14 @@ class MemoryMessageBus:
 
     def publish(self, message: QueuedMessage) -> None:
         self._q.put(message)
+
+    def publish_many(self, messages: Iterable[QueuedMessage]) -> int:
+        """逐条放入内存队列；数量以实际放入的条数为准。"""
+        count = 0
+        for message in messages:
+            self._q.put(message)
+            count += 1
+        return count
 
     def consume(self, timeout: float = 1.0) -> Optional[QueuedMessage]:
         try:
@@ -68,8 +78,25 @@ class RedisMessageBus:
         return self._client
 
     def publish(self, message: QueuedMessage) -> None:
-        payload = json.dumps(message.model_dump(by_alias=False), ensure_ascii=False)
-        self._get_client().lpush(self._queue_key, payload)
+        self._get_client().lpush(self._queue_key, _encode(message))
+
+    def publish_many(self, messages: Iterable[QueuedMessage]) -> int:
+        """一批消息一次往返写入。
+
+        逐条 ``LPUSH`` 的代价不在命令本身，而在每条一次往返：批量触发 100 条
+        就是 100 次网络等待。这里把它们装进同一个 pipeline（不开事务：入队
+        之间没有需要原子化的约束，``MULTI`` 只会多两次往返）一次发出。
+        顺序与原列表一致——逐条 ``LPUSH`` 时最后一条在最左，消费端 ``BRPOP``
+        从右端取，先入队的先被消费。
+        """
+        payloads = [_encode(message) for message in messages]
+        if not payloads:
+            return 0
+        pipe = self._get_client().pipeline(transaction=False)
+        for payload in payloads:
+            pipe.lpush(self._queue_key, payload)
+        pipe.execute()
+        return len(payloads)
 
     def consume(self, timeout: float = 1.0) -> Optional[QueuedMessage]:
         # BRPOP 阻塞秒数必须为整数，且至少为 1 秒
@@ -82,6 +109,29 @@ class RedisMessageBus:
 
     def size(self) -> int:
         return int(self._get_client().llen(self._queue_key))
+
+
+def _encode(message: QueuedMessage) -> str:
+    """把消息序列化成入队载荷；字段名按内部契约（snake_case）落盘。"""
+    return json.dumps(message.model_dump(by_alias=False), ensure_ascii=False)
+
+
+def publish_all(bus: MessageBus, messages: Iterable[QueuedMessage]) -> int:
+    """把一批消息交给总线，返回入队条数。
+
+    后端支持 ``publish_many`` 时走批量通道（Redis 下一次往返发完），否则
+    退回逐条 ``publish``。回退分支是给外部注入的总线实现留的余地：批量
+    只是吞吐优化，不该成为接入的硬要求。
+    """
+    items = list(messages)
+    if not items:
+        return 0
+    bulk = getattr(bus, "publish_many", None)
+    if callable(bulk):
+        return int(bulk(items))
+    for message in items:
+        bus.publish(message)
+    return len(items)
 
 
 def create_bus() -> MessageBus:
