@@ -6,7 +6,8 @@ package main
 // 单项测试各自只验一层——回退链怎么选、重试怎么退避、明细怎么写、指标怎么
 // 累计。这里把整层装到一起，用的就是启动路径上的装配函数 buildRegistry，
 // 渠道配置来自一份真实的 providers 文件，邮件落到进程内的 SMTP 服务器，
-// 群播报落到进程内的 HTTP 接收端，回调也走真实的 HTTP 提交。
+// 群播报落到进程内的 HTTP 接收端，回调也走真实的 HTTP 提交并按接入方的做法
+// 验签——签名不对接收端回 401，事件不会入库。
 //
 // 三个场景：
 //   - post_commented 经四个渠道全部投出：收件箱、SMTP 信封、群机器人报文、
@@ -43,11 +44,25 @@ import (
 	"github.com/xwd-ai/xw-p/engine/internal/webhook"
 )
 
-// eventSink 是进程内的回调接收端：记录报文原文与解析后的事件。
+// callbackSecret 是回调签名用的密钥：接收端按接入方的做法验签，签名不对就
+// 返回 401，让「报文没签」在链路上直接失败，而不是被当成一条正常回调。
+const callbackSecret = "xw-phase3-integration-callback-secret"
+
+// eventSink 是进程内的回调接收端：记录报文原文、解析后的事件，并逐条验签。
 type eventSink struct {
-	mu     sync.Mutex
-	events []webhook.Event
-	raw    []string
+	secret string
+
+	mu       sync.Mutex
+	events   []webhook.Event
+	raw      []string
+	problems []string
+}
+
+// signedAll 返回每条回调的验签结论（空切片表示全部通过）。
+func (s *eventSink) signatureProblems() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.problems...)
 }
 
 func (s *eventSink) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -55,6 +70,20 @@ func (s *eventSink) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, "读取报文失败", http.StatusBadRequest)
 		return
+	}
+	if s.secret != "" {
+		verifier, err := webhook.NewVerifier(s.secret)
+		if err != nil {
+			http.Error(w, "验签器不可用", http.StatusInternalServerError)
+			return
+		}
+		if err := verifier.Verify(r.Header, body); err != nil {
+			s.mu.Lock()
+			s.problems = append(s.problems, err.Error())
+			s.mu.Unlock()
+			http.Error(w, "签名校验失败", http.StatusUnauthorized)
+			return
+		}
 	}
 	var ev webhook.Event
 	if err := json.Unmarshal(body, &ev); err != nil {
@@ -69,6 +98,9 @@ func (s *eventSink) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // wait 等到至少 n 条事件；回调是异步提交的，直接读会读到空。
+//
+// 验签失败的请求不会入库，若只等超时，失败信息会停在「没收到」上；这里把
+// 验签结论一并检查，签名不对就直接报出原因。
 func (s *eventSink) wait(t *testing.T, n int) []webhook.Event {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
@@ -76,7 +108,11 @@ func (s *eventSink) wait(t *testing.T, n int) []webhook.Event {
 		s.mu.Lock()
 		got := len(s.events)
 		out := append([]webhook.Event(nil), s.events...)
+		problems := append([]string(nil), s.problems...)
 		s.mu.Unlock()
+		if len(problems) != 0 {
+			t.Fatalf("回调签名校验未通过：%v", problems)
+		}
 		if got >= n {
 			return out
 		}
@@ -126,7 +162,7 @@ func newPhase3Rig(t *testing.T, providersPath string) *phase3Rig {
 		t.Fatalf("打开执行明细文件失败：%v", err)
 	}
 
-	sink := &eventSink{}
+	sink := &eventSink{secret: callbackSecret}
 	recv := httptest.NewServer(sink)
 	t.Cleanup(recv.Close)
 
@@ -134,7 +170,13 @@ func newPhase3Rig(t *testing.T, providersPath string) *phase3Rig {
 	if err != nil {
 		t.Fatalf("回调地址不合法：%v", err)
 	}
-	dispatcher := webhook.NewDispatcher(target, webhook.NewClient(2*time.Second), webhook.Options{
+	// 回调按接入方的约定签名：接收端不掌握密钥就验不出来，因此这里必须
+	// 用与接收端同一份密钥构造签名器，否则整条链路根本走不通。
+	signer, err := webhook.NewSigner(callbackSecret)
+	if err != nil {
+		t.Fatalf("构造回调签名器失败：%v", err)
+	}
+	dispatcher := webhook.NewDispatcher(target, webhook.NewClient(2*time.Second).WithSigner(signer), webhook.Options{
 		Workers:   1,
 		QueueSize: 32,
 		Timeout:   2 * time.Second,
@@ -200,6 +242,17 @@ func (r *phase3Rig) records() []execution.Record {
 		r.t.Fatalf("读取执行明细失败：%v", err)
 	}
 	return rows
+}
+
+// assertCallbacksSigned 断言接收端收到的每一条回调都通过了验签。
+//
+// 签名不对时接收端回 401、事件不会入库，等待本身也会失败；这条断言是为了
+// 让失败信息直接指出「签名没验过」，而不是停在「回调没到」上。
+func (r *phase3Rig) assertCallbacksSigned() {
+	r.t.Helper()
+	if problems := r.sink.signatureProblems(); len(problems) != 0 {
+		r.t.Errorf("回调签名校验未通过：%v", problems)
+	}
 }
 
 // statsByChannel 按渠道索引指标快照。
@@ -497,8 +550,9 @@ func TestPhase3IntegrationChannelsDeliverEverywhere(t *testing.T) {
 		}
 	}
 
-	// 回调：一条事件、四条明细，整体状态 sent。
+	// 回调：一条事件、四条明细，整体状态 sent，且接收端验签通过。
 	events := rig.sink.wait(t, 1)
+	rig.assertCallbacksSigned()
 	ev := events[0]
 	if ev.Event != webhook.EventDeliveryResult || ev.Status != webhook.StatusSent {
 		t.Errorf("回调事件 = %s / %s", ev.Event, ev.Status)
@@ -633,6 +687,7 @@ func TestPhase3IntegrationRetryThenFailover(t *testing.T) {
 
 	// 回调：整体成功，明细里给出实际完成投递的实现与尝试序列。
 	events := rig.sink.wait(t, 1)
+	rig.assertCallbacksSigned()
 	ev := events[0]
 	if ev.Status != webhook.StatusSent {
 		t.Errorf("回调整体状态 = %s, 期望 sent", ev.Status)
@@ -715,6 +770,7 @@ func TestPhase3IntegrationTerminalFailureAndDisabled(t *testing.T) {
 	}
 
 	events := rig.sink.wait(t, 1)
+	rig.assertCallbacksSigned()
 	if events[0].Status != webhook.StatusFailed {
 		t.Errorf("回调整体状态 = %s, 期望 failed", events[0].Status)
 	}
@@ -755,6 +811,7 @@ func TestPhase3IntegrationTerminalFailureAndDisabled(t *testing.T) {
 	}
 
 	events = rig.sink.wait(t, 2)
+	rig.assertCallbacksSigned()
 	if events[1].Status != webhook.StatusFailed {
 		t.Errorf("停用后的回调状态 = %s, 期望 failed", events[1].Status)
 	}
