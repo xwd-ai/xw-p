@@ -32,6 +32,7 @@ from .schemas import (
     TriggerResponse,
     new_queued_message,
 )
+from .subscriber_routes import router as subscriber_router
 from .worker import Worker
 from .workflow import get_registry
 from .workflow_routes import router as workflow_router
@@ -80,6 +81,7 @@ app.include_router(activity_router)
 app.include_router(execution_router)
 app.include_router(inbox_router)
 app.include_router(provider_router)
+app.include_router(subscriber_router)
 
 
 def _env_mismatch(workflow_env, request_env: str) -> bool:

@@ -482,6 +482,34 @@ API 进程读同一份 `XW_PROVIDERS_FILE`，校验规则与引擎一致（渠�
 
 投递前先校验寻址信息，缺 `email` / `phone` / `deviceToken` 时该渠道直接记为失败：执行明细（`GET /v1/executions`）里是 `status=failed` 加具体原因，消息记录也为 `failed`，不会把「地址没配」记成已发送。配置本身写错（未知渠道、种类与渠道不匹配、缺必填凭据）会让 API 启动失败，与引擎的处理一致。
 
+### 订阅者与渠道绑定
+
+订阅者是触发的收件方。`api/app/subscriber_routes.py` 提供一组 CRUD 接口，数据默认落在 `api/data/subscribers.jsonl`（`XW_SUBSCRIBERS_FILE` 可覆盖）；写操作与其它接口一样走环境鉴权（`X-Environment` / `X-Api-Key`）。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `POST` | `/v1/subscribers` | 创建；标识可带入业务侧用户 ID，留空自动生成，重复返回 409 |
+| `GET` | `/v1/subscribers?channel=email&limit=50&cursor=...` | 列表，按创建顺序游标翻页，可按渠道过滤 |
+| `GET` | `/v1/subscribers/{id}` | 单条查询 |
+| `PUT` | `/v1/subscribers/{id}` | 局部更新：未出现的字段保持不变，空串表示解绑，`channels` 整体替换 |
+| `DELETE` | `/v1/subscribers/{id}` | 删除；重复删除返回 404 |
+
+绑定关系分两部分存：地址是数据（`email` / `phone` / `device_token`），`channels` 是意愿（`in_app` / `email` / `sms` / `push`）。分开存才能表达「先停掉这个渠道、地址先留着」——合成一个字段就只能靠删地址来表达停用，恢复时又得重新收集。
+
+```json
+{
+  "id": "creator_42",
+  "email": "creator@example.com",
+  "phone": "+8613800000000",
+  "device_token": "fcm-token-42",
+  "channels": ["in_app", "email", "sms", "push"]
+}
+```
+
+响应里多一个 `bindings`，只列出此刻真的能投递的渠道（渠道已启用且地址存在；`in_app` 以订阅者标识作收件人，不需要额外地址）。启用了邮件却没填邮箱时，`channels` 里仍有 `email`，`bindings` 里没有——前端不必自己复述这条判定。渠道取值在请求模型里就归一：重复项按首次出现去重保序，`delay` / `digest` 是编排步骤、挂在订阅者身上没有意义，直接拒绝。
+
+存储有内存与 JSONL 两种实现：新增走单次 `O_APPEND` 追加，修改与删除走「同目录临时文件 + `rename`」整体重写；读之前比较文件大小与修改时刻，发现被其它进程写过就重扫，避免在共享卷上读到过期索引。
+
 ### 死信运维接口
 
 引擎启动时会在 `XW_ADMIN_ADDR`（默认本机 `ENGINE_PORT`）上开一组管理接口，用于查看、重放与丢弃死信，查看渠道实现的健康状态与启停，以及读取投递指标。接口只绑定回环地址，需要跨机访问时显式改成 `0.0.0.0:8081` 之类的地址；`XW_ADMIN_ADDR=off` 则不启动。

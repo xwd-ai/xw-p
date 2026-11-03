@@ -64,7 +64,12 @@ class Workflow(BaseModel):
 
 
 class Subscriber(BaseModel):
-    """订阅者：通知的接收方，可绑定多种渠道的联系方式。"""
+    """订阅者：通知的接收方，可绑定多种渠道的联系方式。
+
+    渠道绑定用「地址字段 + 启用的渠道列表」两个部分描述：地址是数据，
+    ``channels`` 是意愿。同一个订阅者可以只绑邮箱、只绑设备 token，也可以
+    同时绑多种；某个渠道是否真的能投，由地址是否存在与偏好判定共同决定。
+    """
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="订阅者唯一标识")
     email: Optional[str] = Field(default=None, description="邮箱地址")
@@ -73,6 +78,25 @@ class Subscriber(BaseModel):
     channels: list[Channel] = Field(default_factory=list, description="启用的渠道")
     environment: Environment = Field(default=Environment.DEVELOPMENT)
     created_at: datetime = Field(default_factory=_now_utc)
+    updated_at: datetime = Field(default_factory=_now_utc)
+
+    def address_for(self, channel: Channel) -> Optional[str]:
+        """返回某渠道对应的收件地址；未绑定或渠道无需地址时返回 ``None``。"""
+        mapping = {
+            Channel.EMAIL: self.email,
+            Channel.SMS: self.phone,
+            Channel.PUSH: self.device_token,
+            Channel.IN_APP: self.id,
+        }
+        return mapping.get(channel)
+
+    def binds(self, channel: Channel) -> bool:
+        """该渠道是否既在启用列表里、又有可用地址。"""
+        if channel not in self.channels:
+            return False
+        if channel is Channel.IN_APP:
+            return True
+        return bool(self.address_for(channel))
 
 
 class Message(BaseModel):
