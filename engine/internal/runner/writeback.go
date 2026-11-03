@@ -37,15 +37,33 @@ func RecordResults(recorder *execution.Recorder, logger *slog.Logger, msg queue.
 	return written
 }
 
+// deliveryChannel 判断一个步骤结果是否对应真实的投递动作，返回其渠道。
+//
+// 明细回写与指标采集共用这一处判定，否则两边对「什么算发过」的口径迟早分叉。
+func deliveryChannel(res pipeline.StepResult) (string, bool) {
+	channel := strings.TrimSpace(string(res.Channel))
+	if channel == "" {
+		return "", false
+	}
+	if res.Skipped || res.ShortCircuited || res.Deferred {
+		return "", false
+	}
+	if !res.Sent && res.Error == "" {
+		// 既没有成功也没有失败原因：聚合卡片在窗口内命中、其他渠道按设计
+		// 不重复投递等情形。这类步骤没有「这次投递的结果」。
+		return "", false
+	}
+	return channel, true
+}
+
 // buildRecord 把单个步骤结果折算成一条执行明细。
 //
 // 第二个返回值为 false 表示这个步骤没有投递动作，不该产生明细。
 func buildRecord(msg queue.QueuedMessage, res pipeline.StepResult) (execution.Record, bool) {
-	channel := strings.TrimSpace(string(res.Channel))
-	if channel == "" {
-		return execution.Record{}, false
-	}
-	if res.Skipped || res.ShortCircuited || res.Deferred || res.TimedOut {
+	channel, ok := deliveryChannel(res)
+	if !ok || res.TimedOut {
+		// 超时的步骤不落明细：投递可能已经在放弃等待之后真的发出去了，
+		// 写成 failed 会把执行记录变成误报。超时另有指标计数（见 metrics.go）。
 		return execution.Record{}, false
 	}
 
@@ -69,8 +87,6 @@ func buildRecord(msg queue.QueuedMessage, res pipeline.StepResult) (execution.Re
 		reason := res.Error
 		record.Reason = &reason
 	default:
-		// 既没有成功也没有失败原因：聚合卡片在窗口内命中、其他渠道按设计
-		// 不重复投递等情形。这类步骤没有「这次投递的结果」，不落明细。
 		return execution.Record{}, false
 	}
 	return record, true

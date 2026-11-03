@@ -1,9 +1,10 @@
-// Package admin 提供引擎的运维接口：死信查询、重放与丢弃，以及渠道实现的
-// 健康状态查询、启停与手动探测。
+// Package admin 提供引擎的运维接口：死信查询、重放与丢弃，渠道实现的
+// 健康状态查询、启停与手动探测，以及投递指标的读取。
 //
 // 死信存在 Redis 里、由队列包写入，键布局与记录格式都由队列包定义，
 // 所以这层只做「HTTP 入参 → 队列方法 → JSON 出参」，不自己拼键名。渠道
 // 的启停与健康同理：状态存在注册表与健康记录器里，这里只做转发与入参校验。
+// 指标是一次快照拷贝，读接口不会拖住投递路径。
 // 接口默认关闭，需要时用 XW_ADMIN_ADDR 显式打开。
 package admin
 
@@ -20,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xwd-ai/xw-p/engine/internal/metrics"
 	"github.com/xwd-ai/xw-p/engine/internal/provider"
 	"github.com/xwd-ai/xw-p/engine/internal/queue"
 )
@@ -51,6 +53,8 @@ type Server struct {
 	providers *provider.Registry
 	health    *provider.HealthTracker
 	checker   *provider.Checker
+	// metrics 是投递指标的读取入口，未装配时不注册路由。
+	metrics *metrics.Registry
 }
 
 // New 创建管理接口服务。
@@ -69,6 +73,12 @@ func (s *Server) WithProviders(registry *provider.Registry, health *provider.Hea
 	return s
 }
 
+// WithMetrics 装配投递指标的读取与重置能力，返回自身便于链式调用。
+func (s *Server) WithMetrics(reg *metrics.Registry) *Server {
+	s.metrics = reg
+	return s
+}
+
 // Handler 返回路由。方法不匹配由路由层直接回 405。
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -84,6 +94,10 @@ func (s *Server) Handler() http.Handler {
 	}
 	if s.checker != nil {
 		mux.HandleFunc("POST /admin/providers/probe", s.handleProbe)
+	}
+	if s.metrics != nil {
+		mux.HandleFunc("GET /admin/metrics", s.handleMetrics)
+		mux.HandleFunc("POST /admin/metrics/reset", s.handleMetricsReset)
 	}
 	return mux
 }
@@ -313,6 +327,25 @@ func (s *Server) handleProbe(w http.ResponseWriter, r *http.Request) {
 		"providers": s.health.Snapshot(),
 		"summary":   s.health.Summary(),
 	})
+}
+
+// handleMetrics 返回本实例自启动以来的投递指标。
+//
+// 口径是单实例：进程重启即归零，跨实例汇总由抓取端按实例聚合。做成 JSON
+// 而不是文本格式，是因为消费方是运维脚本与后台页面，需要结构化的渠道/实现
+// 维度；指标格式的抓取端留给后续接入。
+func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, s.metrics.Snapshot())
+}
+
+// handleMetricsReset 清空计数并重新计时，返回重置后的空快照。
+//
+// 换完渠道配置后想看「改动之后的表现」，累计数回答不了这个问题；重置比重启
+// 进程代价小得多。清理前的累计值不做保留，调用方需要留档应先取一次快照。
+func (s *Server) handleMetricsReset(w http.ResponseWriter, _ *http.Request) {
+	s.metrics.Reset()
+	s.logger.Info("[engine] 投递指标已重置")
+	writeJSON(w, http.StatusOK, s.metrics.Snapshot())
 }
 
 // readProviderIDs 解析 {"ids": [...]} 形式的请求体。

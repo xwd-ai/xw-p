@@ -19,6 +19,7 @@ import (
 
 	"github.com/xwd-ai/xw-p/engine/internal/domain"
 	"github.com/xwd-ai/xw-p/engine/internal/execution"
+	"github.com/xwd-ai/xw-p/engine/internal/metrics"
 	"github.com/xwd-ai/xw-p/engine/internal/pipeline"
 	"github.com/xwd-ai/xw-p/engine/internal/queue"
 )
@@ -65,6 +66,7 @@ type Runner struct {
 	logger   *slog.Logger
 	recorder *execution.Recorder
 	notifier Notifier
+	metrics  *metrics.Registry
 }
 
 // New 创建 Runner。source 可为 nil（只接受自带步骤快照的消息）；
@@ -85,6 +87,12 @@ func (r *Runner) WithRecorder(recorder *execution.Recorder) *Runner {
 // WithNotifier 接上投递结果的回调；notifier 为 nil 时不回调。
 func (r *Runner) WithNotifier(notifier Notifier) *Runner {
 	r.notifier = notifier
+	return r
+}
+
+// WithMetrics 接上投递指标采集；reg 为 nil 时只执行不计数。
+func (r *Runner) WithMetrics(reg *metrics.Registry) *Runner {
+	r.metrics = reg
 	return r
 }
 
@@ -138,6 +146,9 @@ func (r *Runner) Run(msg queue.QueuedMessage) (Report, error) {
 	// 投递结果回写执行明细：引擎是 Redis 队列的实际消费方，不写这一份，
 	// 后台「执行详情」就只能看到触发、看不到每个渠道最后有没有发出去。
 	rep.Recorded = RecordResults(r.recorder, r.logger, msg, results)
+
+	// 指标与明细同源：同一批步骤结果既落明细，也进进程内的成功/失败/延迟计数。
+	RecordMetrics(r.metrics, results)
 
 	// 回调与明细同源：接入方不必轮询执行明细接口就能拿到结果。
 	// 入队即返回，HTTP 提交在回调侧异步完成。

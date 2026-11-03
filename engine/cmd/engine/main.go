@@ -7,7 +7,8 @@
 // （filter → transform → render → dispatch，delay 步骤交给调度器续跑），
 // 同时运行延迟调度器，按时唤醒 delay 步骤之后的续跑步骤，未到期任务
 // 存放在 Redis 里，重启或换实例都能接上；每个渠道的投递结果写入执行明细，
-// 配置了回调地址时再异步推给接入方；
+// 配置了回调地址时再异步推给接入方；投递的成功/失败/超时与延迟在进程内累计，
+// 经运维接口 /admin/metrics 读取；
 // 另起一个本地管理接口，供运维查询、重放与丢弃死信。
 package main
 
@@ -25,6 +26,7 @@ import (
 	"github.com/xwd-ai/xw-p/engine/internal/admin"
 	"github.com/xwd-ai/xw-p/engine/internal/config"
 	"github.com/xwd-ai/xw-p/engine/internal/execution"
+	"github.com/xwd-ai/xw-p/engine/internal/metrics"
 	"github.com/xwd-ai/xw-p/engine/internal/pipeline"
 	"github.com/xwd-ai/xw-p/engine/internal/provider"
 	"github.com/xwd-ai/xw-p/engine/internal/queue"
@@ -87,9 +89,13 @@ func main() {
 	callback, closeCallback := newCallbackDispatcher(logger, cfg)
 	defer closeCallback()
 
+	// 投递指标：进程内的成功/失败/超时计数与延迟分布，经运维接口读取。
+	// 与执行明细同源，但口径不同——明细是逐条审计，指标是聚合观察。
+	sink := metrics.New()
+
 	// 延迟调度器：到期任务 → 管线续跑。delay 步骤到期后把剩余步骤跑完。
 	// 未到期任务存在 Redis，重启或换实例都不会丢。
-	scheduler, closeDelayStore := newDelayScheduler(logger, pipe, cfg, recorder, callback)
+	scheduler, closeDelayStore := newDelayScheduler(logger, pipe, cfg, recorder, callback, sink)
 	defer closeDelayStore()
 
 	// 把调度器接成管线的延迟出口：没有这一句，delay 步骤会以「未配置调度器」
@@ -100,7 +106,8 @@ func main() {
 	// 的快照，快照缺失时回退到启动时加载的定义表。
 	exec := runner.New(pipe, loadWorkflowSource(logger, cfg), logger).
 		WithRecorder(recorder).
-		WithNotifier(callback)
+		WithNotifier(callback).
+		WithMetrics(sink)
 
 	var wg sync.WaitGroup
 
@@ -179,7 +186,8 @@ func main() {
 	if cfg.AdminAddr != "" {
 		wg.Add(1)
 		adminServer := admin.New(consumer, logger).
-			WithProviders(pipe.Registry(), pipe.Health(), checker)
+			WithProviders(pipe.Registry(), pipe.Health(), checker).
+			WithMetrics(sink)
 		go func() {
 			defer wg.Done()
 			if err := adminServer.Run(ctx, cfg.AdminAddr); err != nil {
@@ -202,13 +210,45 @@ func main() {
 
 	// 池子退出（ctx 取消）后等待调度器收尾，避免任务被中断在日志中途。
 	wg.Wait()
+
+	logMetricsSummary(logger, sink)
+}
+
+// logMetricsSummary 在退出时打一条指标汇总。
+//
+// 进程退出后内存计数随之消失，最后一条日志是这批数字唯一的落点：排查
+// 「今天下午那波失败是从哪个渠道开始的」时，它比翻上百条 runner 日志快得多。
+func logMetricsSummary(logger *slog.Logger, sink *metrics.Registry) {
+	snap := sink.Snapshot()
+	if snap.Total.Attempted == 0 {
+		logger.Info("[engine] 投递指标累计：本次运行没有真实投递")
+		return
+	}
+	attrs := []any{
+		"attempted", snap.Total.Attempted,
+		"sent", snap.Total.Sent,
+		"failed", snap.Total.Failed,
+		"timeouts", snap.Total.Timeouts,
+		"retried", snap.Total.Retried,
+		"fallback", snap.Total.Fallback,
+		"errorRate", snap.Total.ErrorRate,
+		"p50ms", snap.Total.Latency.P50MS,
+		"p99ms", snap.Total.Latency.P99MS,
+		"uptimeSeconds", snap.UptimeSeconds,
+	}
+	perChannel := make(map[string]int64, len(snap.Channels))
+	for _, ch := range snap.Channels {
+		perChannel[ch.Channel] = ch.Attempted
+	}
+	attrs = append(attrs, "byChannel", perChannel)
+	logger.Info("[engine] 投递指标累计", attrs...)
 }
 
 // newDelayScheduler 组装延迟调度器：到期任务 → 解码续跑任务 → 执行剩余步骤。
 //
 // in_app 渠道写入默认收件箱存储，其余渠道走 console mock，
 // 与本进程的投递语义保持一致。返回值里的函数用于释放存储连接。
-func newDelayScheduler(logger *slog.Logger, pipe *pipeline.Pipeline, cfg config.Config, recorder *execution.Recorder, notifier runner.Notifier) (*schedule.Scheduler, func()) {
+func newDelayScheduler(logger *slog.Logger, pipe *pipeline.Pipeline, cfg config.Config, recorder *execution.Recorder, notifier runner.Notifier, sink *metrics.Registry) (*schedule.Scheduler, func()) {
 	handler := func(ctx context.Context, item schedule.Item) error {
 		deferral, results, err := pipe.Resume(item.Payload)
 		if err != nil {
@@ -231,6 +271,9 @@ func newDelayScheduler(logger *slog.Logger, pipe *pipeline.Pipeline, cfg config.
 		// 续跑同样是一次投递：不写执行明细的话，delay 之后的渠道在后台
 		// 就查不到结果（触发时刻只有前半程的明细）。
 		recorded := runner.RecordResults(recorder, logger, deferral.Message, results)
+		// 指标同理：续跑的这段投递同样是「这条渠道发了一次」，不计数会让
+		// 带 delay 的工作流在指标里少一截成功数。
+		runner.RecordMetrics(sink, results)
 		// 回调同理：接入方先前只拿到前半程的结果，续跑的这一段要补推。
 		notified := runner.NotifyResults(notifier, deferral.Message, results)
 		logger.Info("[engine] 延迟任务已续跑",
