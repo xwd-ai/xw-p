@@ -11,6 +11,9 @@
 文件大小（条件过于稀疏时仍会退化为顺序扫描，见 README 的说明）；Postgres 后端
 拼 WHERE + ``ORDER BY … LIMIT``，依赖 ``005_query_indexes.sql`` 建的复合索引。
 
+管理端的汇总走 ``scan``：按条件顺序遍历全部命中记录，不受分页与游标约束，命中
+集合不读成列表，供 ``admin_activity`` 逐条累加。
+
 字段约定（每条活动日志）：
 - ``trigger_id``：触发唯一标识。
 - ``workflow``：工作流/模板名。
@@ -29,7 +32,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional, Protocol
+from typing import Any, Iterator, Optional, Protocol
 
 from . import config
 from .jsonl_reader import READ_CHUNK, ReverseLineReader
@@ -43,10 +46,14 @@ JSONL_FILE = _DATA_DIR / "activity.jsonl"
 
 @dataclass(frozen=True)
 class ActivityQuery:
-    """活动流查询条件（过滤 + 游标翻页）。
+    """活动日志查询条件（过滤 + 游标翻页）。
 
     ``after`` 是上一页最后一条记录的排序键，只返回比它更旧（同时间戳时
     ``trigger_id`` 更小）的记录；``limit`` 是本页最多返回的条数。
+
+    ``channel`` 命中记录的目标渠道列表之一；``keyword`` 是大小写不敏感的
+    子串匹配，覆盖标题、工作流与订阅者标识——管理端排查时手里往往只有一个
+    片段（「谁」「哪个帖子」「哪个工作流」），要求先把字段名对上不合理。
     """
 
     subscriber_id: Optional[str] = None
@@ -54,6 +61,8 @@ class ActivityQuery:
     trigger_id: Optional[str] = None
     status: Optional[str] = None
     environment: Optional[str] = None
+    channel: Optional[str] = None
+    keyword: Optional[str] = None
     since: Optional[datetime] = None
     until: Optional[datetime] = None
     limit: int = 50
@@ -68,6 +77,8 @@ class ActivityStore(Protocol):
     def append_many(self, records: list[dict[str, Any]]) -> int: ...
 
     def query(self, q: ActivityQuery) -> list[dict[str, Any]]: ...
+
+    def scan(self, q: ActivityQuery) -> Iterator[dict[str, Any]]: ...
 
 
 def _channels_of(record: dict[str, Any]) -> list[str]:
@@ -94,6 +105,34 @@ def is_older_than(record: dict[str, Any], cursor: Cursor) -> bool:
     )
 
 
+def _like_pattern(keyword: str) -> str:
+    """把关键词转成 ILIKE 模式，转义 ``%`` / ``_`` / ``\\``。
+
+    关键词来自查询串，未转义的 ``_`` 会变成「任意单字符」，一个拼错的词就能
+    匹配到一堆无关记录。
+    """
+    escaped = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def _keyword_hit(record: dict[str, Any], keyword: str) -> bool:
+    """记录是否命中关键词（大小写不敏感的子串匹配）。
+
+    搜索面取标题、工作流与订阅者标识：管理端排查时手里的线索通常是一个
+    片段，能落到这三处之一就够用；payload 不参与匹配，它的形状由业务方决定，
+    把整块内容纳入搜索只会让结果更难解释。
+    """
+    needle = keyword.strip().lower()
+    if not needle:
+        return True
+    haystack = (
+        str(record.get("title") or ""),
+        str(record.get("workflow") or record.get("name") or ""),
+        str(record.get("subscriber_id") or ""),
+    )
+    return any(needle in part.lower() for part in haystack)
+
+
 def matches(record: dict[str, Any], q: ActivityQuery) -> bool:
     """按查询条件判断一条记录是否命中（JSONL / 内存后端共用）。"""
     if q.environment:
@@ -107,6 +146,10 @@ def matches(record: dict[str, Any], q: ActivityQuery) -> bool:
     if q.trigger_id and record.get("trigger_id") != q.trigger_id:
         return False
     if q.status and record.get("status") != q.status:
+        return False
+    if q.channel and q.channel not in _channels_of(record):
+        return False
+    if q.keyword and not _keyword_hit(record, q.keyword):
         return False
     if q.since is not None or q.until is not None:
         dt = parse_dt(record.get("created_at"))
@@ -174,6 +217,29 @@ class JSONLActivityStore:
             self.last_scan_bytes = reader.bytes_read
         return out
 
+    def scan(self, q: ActivityQuery) -> Iterator[dict[str, Any]]:
+        """按条件顺序遍历全部命中的记录（管理端汇总用）。
+
+        与 ``query`` 的差别是不受 ``limit`` 与游标约束：汇总要的是命中集合的
+        全貌。只持有文件句柄、不持有写锁，写入方用另一个描述符追加，互不阻塞；
+        逐行解析后立即交给调用方，文件再大也只占一条记录的内存。顺序为写入
+        顺序，调用方需要按时间排序时自行处理。
+        """
+        if not self._path.exists():
+            return
+        with self._path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    logger.warning("跳过损坏的活动日志行：%s", line[:80])
+                    continue
+                if isinstance(record, dict) and matches(record, q):
+                    yield record
+
     def read_all(self) -> list[dict[str, Any]]:
         """读取全部记录（导出/排查用，查询接口不再走这条路径）。"""
         with self._lock:
@@ -219,6 +285,14 @@ class MemoryActivityStore:
             ]
         selected.sort(key=sort_key, reverse=True)
         return selected[: max(1, int(q.limit))]
+
+    def scan(self, q: ActivityQuery) -> Iterator[dict[str, Any]]:
+        """按条件遍历记录；先取快照再迭代，汇总期间的新写入不改变本次结果。"""
+        with self._lock:
+            snapshot = list(self._records)
+        for record in snapshot:
+            if matches(record, q):
+                yield record
 
     def read_all(self) -> list[dict[str, Any]]:
         with self._lock:
@@ -286,7 +360,7 @@ class PostgresActivityStore:
         except (ValueError, AttributeError, TypeError):
             return None
 
-    def _build_where(self, q: ActivityQuery) -> tuple[list[str], dict[str, Any]]:
+    def _build_where(self, q: ActivityQuery, include_cursor: bool = True) -> tuple[list[str], dict[str, Any]]:
         where: list[str] = []
         params: dict[str, Any] = {}
         if q.environment:
@@ -304,13 +378,23 @@ class PostgresActivityStore:
         if q.status:
             where.append("status = :status")
             params["status"] = q.status
+        if q.channel:
+            # channels 是 JSONB 数组：包含判定交给数据库，避免把数组取回来再筛。
+            where.append("channels @> CAST(:channel AS jsonb)")
+            params["channel"] = json.dumps([q.channel], ensure_ascii=False)
+        if q.keyword:
+            where.append(
+                "(title ILIKE :keyword OR workflow ILIKE :keyword "
+                "OR subscriber_id ILIKE :keyword)"
+            )
+            params["keyword"] = _like_pattern(q.keyword)
         if q.since is not None:
             where.append("created_at >= :since")
             params["since"] = q.since
         if q.until is not None:
             where.append("created_at <= :until")
             params["until"] = q.until
-        if q.after is not None:
+        if include_cursor and q.after is not None:
             where.append("(created_at, trigger_id) < (:cursor_ts, :cursor_id)")
             params["cursor_ts"] = q.after.created_at
             params["cursor_id"] = self._as_uuid(q.after.trigger_id)
@@ -354,6 +438,29 @@ class PostgresActivityStore:
             "environment": d.get("environment") or config.ENV,
             "created_at": d.get("created_at"),
         }
+
+    def scan(self, q: ActivityQuery) -> Iterator[dict[str, Any]]:
+        """按条件遍历全部命中记录（服务端游标流式返回，忽略分页与游标）。"""
+        from sqlalchemy import text
+
+        # 与 query 同一处短路：非 UUID 的触发标识不可能命中 UUID 列。
+        if q.trigger_id and self._as_uuid(q.trigger_id) is None:
+            return
+
+        where, params = self._build_where(q, include_cursor=False)
+        sql = (
+            "SELECT trigger_id, workflow, subscriber_id, channels, status, title, "
+            "environment, created_at FROM activity_log"
+        )
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY created_at, trigger_id"
+
+        engine = self._get_engine()
+        with engine.connect() as conn:
+            result = conn.execution_options(stream_results=True).execute(text(sql), params)
+            for row in result.mappings():
+                yield self._to_record(dict(row))
 
     def read_all(self) -> list[dict[str, Any]]:
         """读取全部记录（导出/排查用，查询接口不再走这条路径）。"""
