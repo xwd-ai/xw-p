@@ -189,7 +189,10 @@ h1 { font-size: 20px; margin-bottom: 4px; }
 .wf-item .wf-ver { margin-left:auto; font-size:10.5px; color:var(--muted); white-space:nowrap; }
 .wf-list-empty { font-size:12px; color:var(--muted); padding:12px 4px; }
 .wf-main { flex:1; min-width:0; }
-.wf-toolbar { display:flex; align-items:center; gap:8px; margin-bottom:16px; flex-wrap:wrap; }
+.wf-toolbar { display:flex; align-items:center; gap:8px; margin-bottom:14px; flex-wrap:wrap; }
+.wf-title { font-size:13px; font-weight:700; color:var(--text); max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.wf-toolbar-sep { width:1px; height:18px; background:var(--border); }
+.wf-toolbar-label { font-size:12px; color:var(--muted); }
 .chip { font-size:12px; padding:7px 12px; border-radius:9px; border:1px solid var(--border); background:#fbfbfe; cursor:pointer; font-weight:500; }
 .chip:hover { border-color: var(--accent); color: var(--accent); }
 .chip .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; }
@@ -197,13 +200,56 @@ h1 { font-size: 20px; margin-bottom: 4px; }
 .chip-danger:hover { border-color:#be123c; color:#be123c; }
 .canvas { width:100%; background: #fafbff; border:1px dashed #d9ddf0; border-radius: 12px; overflow:hidden; }
 .canvas svg { display:block; width:100%; }
-.node { cursor: grab; }
+.node { cursor: pointer; }
 .node rect { transition: filter .15s; }
 .node:hover rect { filter: drop-shadow(0 4px 10px rgba(99,102,241,.25)); }
 .node[data-sel="1"] rect { filter: drop-shadow(0 0 0 2px var(--accent)); }
 .edge { stroke: #c7cbe6; stroke-width: 2; fill: none; }
 .edge.running { stroke: var(--accent); stroke-dasharray: 6 6; animation: dash .5s linear infinite; }
 @keyframes dash { to { stroke-dashoffset: -12; } }
+
+/* editor body：画布 + 步骤列表与检查器 */
+.editor-body { display:flex; gap:16px; align-items:flex-start; }
+.editor-canvas { flex:1; min-width:0; }
+.editor-side { width:290px; flex-shrink:0; display:flex; flex-direction:column; gap:10px; }
+.editor-side-head { display:flex; align-items:center; justify-content:space-between; font-size:12px; font-weight:700; color:var(--muted); }
+.editor-count { font-size:11px; font-weight:600; background:#eef0ff; color:var(--accent); border-radius:99px; padding:1px 8px; }
+.wf-steps { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; max-height:260px; overflow-y:auto; }
+.step-row { display:flex; align-items:center; gap:8px; padding:8px 9px; border:1px solid var(--border); border-radius:10px; background:#fff; cursor:pointer; transition: border-color .15s, background .15s; }
+.step-row:hover { border-color:#c7cbe6; }
+.step-row[data-sel="1"] { border-color:var(--accent); background:#f7f8ff; }
+.step-row.dragging { opacity:.45; }
+.step-row.drop-target { border-color:var(--accent); border-style:dashed; }
+.step-grip { color:#c3c7d8; font-size:11px; cursor:grab; letter-spacing:-2px; }
+.step-dot { width:22px; height:22px; border-radius:7px; display:inline-flex; align-items:center; justify-content:center; font-size:11px; color:#fff; flex-shrink:0; }
+.step-text { display:flex; flex-direction:column; min-width:0; flex:1; }
+.step-text b { font-size:12px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.step-text small { font-size:10.5px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.step-order { font-size:10px; color:#b3b8ca; }
+.step-actions { display:flex; gap:2px; }
+.step-actions button { width:20px; height:20px; border:1px solid var(--border); background:#fff; border-radius:6px; font-size:10px; color:#7d8299; cursor:pointer; line-height:1; padding:0; }
+.step-actions button:hover:not(:disabled) { border-color:var(--accent); color:var(--accent); }
+.step-actions button:disabled { opacity:.35; cursor:not-allowed; }
+.step-empty { font-size:11.5px; color:var(--muted); padding:10px; border:1px dashed var(--border); border-radius:10px; text-align:center; }
+.inspector { border:1px solid var(--border); border-radius:12px; padding:12px; background:#fcfcff; display:flex; flex-direction:column; gap:9px; }
+.insp-empty { font-size:11.5px; color:var(--muted); line-height:1.6; }
+.insp-head { display:flex; align-items:center; gap:7px; font-size:12.5px; }
+.insp-id { margin-left:auto; font-size:10px; color:#a9aec2; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; }
+.fld { display:flex; flex-direction:column; gap:4px; }
+.fld-label { font-size:11px; font-weight:600; color:#5b6076; display:flex; align-items:center; gap:6px; }
+.fld-hint { font-weight:400; color:#a2a7bb; font-size:10px; }
+.fld input, .fld select, .fld textarea {
+  width:100%; box-sizing:border-box; font-family:inherit; font-size:11.5px; color:var(--text);
+  border:1px solid var(--border); border-radius:8px; padding:6px 8px; background:#fff; resize:vertical;
+}
+.fld input:focus, .fld select:focus, .fld textarea:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px rgba(99,102,241,.12); }
+.fld-note { font-size:10.5px; color:var(--muted); line-height:1.5; margin:0; }
+.dep-list { display:flex; flex-wrap:wrap; gap:6px; }
+.dep { display:inline-flex; align-items:center; gap:5px; font-size:11px; color:#5b6076; border:1px solid var(--border); border-radius:7px; padding:3px 7px; background:#fff; cursor:pointer; }
+.dep input { width:auto; margin:0; }
+.wf-issues { margin-top:10px; font-size:11.5px; color:#b45309; background:#fff7ed; border:1px solid #fed7aa; border-radius:10px; padding:9px 12px; }
+.wf-issues b { display:block; margin-bottom:4px; font-size:11px; }
+.wf-issues ul { margin:0; padding-left:16px; line-height:1.6; }
 
 /* ---------- 加载态骨架 ---------- */
 .skel { position: relative; overflow: hidden; background: #eef0f6; border-radius: 8px; }
@@ -241,6 +287,14 @@ h1 { font-size: 20px; margin-bottom: 4px; }
 /* ---------- 响应式 ---------- */
 /* 顶栏移动端菜单按钮 */
 #nav-toggle { display:none; border:none; background:transparent; font-size:20px; color:var(--text); cursor:pointer; padding:4px 8px; }
+
+@media (max-width: 1180px) {
+  /* 画布与检查器并排需要 ~900px，收窄后改为上下排列，避免检查器把画布压成一条线 */
+  .editor-body { flex-direction: column; }
+  .editor-side { width:100%; }
+  .wf-steps { flex-direction:row; flex-wrap:wrap; max-height:none; }
+  .step-row { flex:1 1 240px; }
+}
 
 @media (max-width: 980px) {
   .grid { grid-template-columns: repeat(2,1fr); }

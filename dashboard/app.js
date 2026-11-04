@@ -337,11 +337,17 @@
       });
   }
 
-  // 保存：当前画布步骤写回后端（新增/删除步骤）
+  // 保存：当前画布步骤写回后端（新增/删除/排序/改配置）
   function saveWorkflow() {
     const meta = window.xwEditor.currentMeta();
     if (!meta) {
       showToast('请先选择或新建一个工作流');
+      return;
+    }
+    // 本地先跑一遍与后端同源的步骤校验：能在发请求前指出是哪一步的问题。
+    const issues = window.xwEditor.validate();
+    if (issues.length) {
+      showToast('保存前请先处理：' + issues[0]);
       return;
     }
     const steps = window.xwEditor.serializeSteps();
@@ -356,7 +362,7 @@
       })
       .catch(err => {
         console.warn('保存工作流失败', err);
-        showToast('保存失败：请确认后端服务已启动');
+        showToast('保存失败：' + (err.message || '请确认后端服务已启动'));
       });
   }
 

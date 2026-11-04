@@ -41,7 +41,21 @@
       opts.headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers);
     }
     const resp = await fetch(API_BASE + path, opts);
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    if (!resp.ok) {
+      // 后端的 4xx 通常带一条能指导下一步的 detail（例如步骤校验失败的
+      // 具体原因）。只抛「HTTP 422」等于把这层信息丢掉，调用方只能靠猜。
+      let detail = '';
+      try {
+        const body = await resp.json();
+        if (typeof body.detail === 'string') detail = body.detail;
+        else if (Array.isArray(body.detail) && body.detail.length) {
+          detail = body.detail.map(d => (d && d.msg) || '').filter(Boolean).join('；');
+        }
+      } catch (err) { /* 非 JSON 响应：保留状态码 */ }
+      const error = new Error(detail || ('HTTP ' + resp.status));
+      error.status = resp.status;
+      throw error;
+    }
     const text = await resp.text();
     return text ? JSON.parse(text) : null;
   }

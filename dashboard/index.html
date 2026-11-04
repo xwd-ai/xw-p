@@ -60,7 +60,7 @@
     <!-- ===== Workflows ===== -->
     <section class="view" id="view-workflows">
       <h1>工作流编排</h1>
-      <p class="sub">左侧选择工作流，拖拽节点调整布局，新增/删除步骤并保存写回后端</p>
+      <p class="sub">左侧选择工作流，添加步骤、拖拽排序、修改名称与模板，保存即写回后端</p>
       <div class="wf-wrap">
         <aside class="wf-list-panel">
           <div class="wf-list-head">
@@ -71,18 +71,31 @@
         </aside>
         <div class="wf-main">
           <div class="wf-toolbar">
-            <span style="font-size:12px;color:var(--muted);margin-right:4px;">添加步骤：</span>
-            <button class="chip" data-add="email"><span class="dot" style="background:#6366f1"></span>邮件 Email</button>
-            <button class="chip" data-add="sms"><span class="dot" style="background:#0ea5e9"></span>短信 SMS</button>
-            <button class="chip" data-add="push"><span class="dot" style="background:#f59e0b"></span>推送 Push</button>
-            <button class="chip" data-add="inapp"><span class="dot" style="background:#10b981"></span>站内 In-App</button>
-            <button class="chip" data-add="digest"><span class="dot" style="background:#8b5cf6"></span>摘要 Digest</button>
-            <button class="chip chip-danger" id="wf-del-btn" style="margin-left:8px">✕ 删除步骤</button>
+            <span class="wf-title" id="wf-title">未命名工作流</span>
+            <span class="wf-toolbar-sep"></span>
+            <span class="wf-toolbar-label">添加步骤：</span>
+            <button class="chip" data-add="in_app"><span class="dot" style="background:#10b981"></span>站内信</button>
+            <button class="chip" data-add="email"><span class="dot" style="background:#6366f1"></span>邮件</button>
+            <button class="chip" data-add="push"><span class="dot" style="background:#f59e0b"></span>推送</button>
+            <button class="chip" data-add="sms"><span class="dot" style="background:#0ea5e9"></span>短信</button>
+            <button class="chip" data-add="digest"><span class="dot" style="background:#7c3aed"></span>聚合</button>
+            <button class="chip" data-add="delay"><span class="dot" style="background:#64748b"></span>延迟</button>
+            <button class="chip chip-danger" id="wf-del-btn">✕ 删除步骤</button>
             <span style="flex:1"></span>
             <button class="btn btn-ghost" id="run-btn">▶ 运行工作流</button>
-            <button class="btn btn-primary" id="wf-save-btn" style="margin-left:8px">💾 保存</button>
+            <button class="btn btn-primary" id="wf-save-btn">💾 保存</button>
           </div>
-          <div class="canvas"><svg id="wf-svg" viewBox="0 0 920 480"></svg></div>
+          <div class="editor-body">
+            <div class="editor-canvas">
+              <div class="canvas"><svg id="wf-svg" viewBox="0 0 900 220"></svg></div>
+              <div class="wf-issues" id="wf-issues" hidden></div>
+            </div>
+            <div class="editor-side">
+              <div class="editor-side-head"><span>步骤</span><span class="editor-count" id="wf-step-count">0</span></div>
+              <ol class="wf-steps" id="wf-steps"></ol>
+              <div class="inspector" id="wf-inspector"></div>
+            </div>
+          </div>
         </div>
       </div>
     </section>
@@ -121,6 +134,7 @@
   </main>
 
   <script src="data.js"></script>
+  <script src="editor_model.js"></script>
   <script src="editor.js"></script>
   <script src="inbox.js"></script>
   <script src="app.js"></script>
