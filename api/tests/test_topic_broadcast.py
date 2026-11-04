@@ -231,17 +231,15 @@ def test_broadcast_keeps_indices_aligned_with_member_list():
     )
 
     # 回执与名单等长、按下标对齐：调用方不必猜「第几条对应谁」。
+    # 名单顺序取存储给出的顺序而不是硬编码的加入顺序——加入时刻落在同一微秒时
+    # 存储按订阅者标识定序，硬编码顺序会让这条用例随机器快慢时好时坏。
     assert [item.index for item in result.items] == [0, 1, 2]
-    assert [item.subscriber_id for item in result.items] == [
-        "creator_1",
-        "ghost",
-        "creator_2",
-    ]
-    assert [item.status for item in result.items] == [
-        STATUS_ACCEPTED,
-        STATUS_SKIPPED,
-        STATUS_ACCEPTED,
-    ]
+    assert [item.subscriber_id for item in result.items] == topics.member_ids("hot_authors")
+    assert {item.subscriber_id: item.status for item in result.items} == {
+        "creator_1": STATUS_ACCEPTED,
+        "creator_2": STATUS_ACCEPTED,
+        "ghost": STATUS_SKIPPED,
+    }
 
 
 # ---------------------------------------------------------------- 接口

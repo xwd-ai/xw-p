@@ -31,17 +31,24 @@ def env_mismatch(workflow_env: object, request_env: str) -> bool:
 def resolve_workflow(name: str, environment: str) -> Optional[Workflow]:
     """按名称查找当前环境下可触发的工作流，找不到或未启用返回 ``None``。
 
-    优先查内存注册表（预置的内容社区工作流），未命中回退到工作流存储，使经
-    CRUD 新建的工作流也能被触发；两处都要做环境匹配，实现环境间隔离。
+    解析顺序是「先存储、后预置」：
+
+    - 工作流存储是运营写入的那一份——启停、改名、改步骤都落在这里，因此存储
+      里存在同名且同环境的记录时以它为准，**停用即返回 None，不再回落到预置**。
+      反过来（预置优先）会让后台点了停用仍然能触发，启停等于没做。
+    - 预置模板只兜住「存储里还没有这条记录」的情况，例如 Postgres 后端尚未
+      导入预置模板、或测试替换掉了存储。
+
+    两处都要做环境匹配，实现环境间隔离。
     """
-    workflow = get_registry().get(name)
-    if workflow is None or env_mismatch(workflow.environment, environment):
-        workflow = get_workflow_store().get_by_name(name)
-        if workflow is not None and env_mismatch(workflow.environment, environment):
-            workflow = None
-    if workflow is None or not workflow.active:
+    stored = get_workflow_store().get_by_name(name)
+    if stored is not None and not env_mismatch(stored.environment, environment):
+        return stored if stored.active else None
+
+    preset = get_registry().get(name)
+    if preset is None or env_mismatch(preset.environment, environment):
         return None
-    return workflow
+    return preset
 
 
 def missing_workflow_detail(name: str, environment: str) -> str:
