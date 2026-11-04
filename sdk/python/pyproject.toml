@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xw-notify"
+dynamic = ["version"]
+description = "xw-notify 的 Python 客户端：触发互动事件、管理订阅者与发送偏好"
+requires-python = ">=3.9"
+dependencies = []
+
+[tool.setuptools]
+packages = ["xw_notify"]
+
+[tool.setuptools.dynamic]
+version = { attr = "xw_notify.__version__" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

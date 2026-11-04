@@ -49,6 +49,7 @@
 api/        Python FastAPI：触发 API、管理 API、渠道集成
 engine/     Go：执行引擎、队列消费、provider 分发、digest、死信运维接口
 dashboard/  原生 HTML/CSS/JS 展示前端（仪表盘 + 可视化工作流编排器 + 实时活动流 + 运营后台）
+sdk/python/ Python 客户端：触发、订阅者与偏好接口，只依赖标准库
 infra/      docker-compose 与基础设施配置
 docs/       文档
 scripts/    演示与辅助脚本
@@ -77,6 +78,15 @@ curl -X POST http://127.0.0.1:8000/v1/events/trigger \
 
 前端直接打开 `dashboard/index.html` 即可看到内置示例数据；接真实后端时在页面注入 `window.XW_API_BASE` 指向 API 地址。页面与 API 通常不同源，服务端已开启 CORS（默认放行任意来源，需要收紧时用 `XW_CORS_ORIGINS` 给逗号分隔的白名单）。
 
+服务端调用可以用 `sdk/python/` 里的客户端，它只依赖标准库，覆盖触发、批量触发、订阅者与发送偏好：
+
+```python
+from xw_notify import Client
+
+client = Client("http://127.0.0.1:8000")
+client.trigger.send("post_commented", "creator-1001", payload={"post_id": "P-2026-1001", "actor": "小林"})
+```
+
 运营后台在 `dashboard/admin.html`：按环境查看投递统计、渠道成功率、失败原因与活动汇总，启停或复制工作流，并用自定义 payload 对任一工作流做触发测试。触发之后回执下方会跟随该次触发的逐渠道投递明细（结果、实际实现、重试与回退、耗时、失败或跳过原因）——一条消息可能同时投往多个渠道，只有一个整体状态时看不出是哪一路出了问题。明细按「声明的渠道是否都有结果」判断是否取完，慢渠道没写出来时如实列出缺口而不是停在一个看着完整的数字上。
 
 工作流编排页（`dashboard/index.html` 的「工作流编排」）是一个手写 SVG 编辑器：左侧选模板，中间画布按数组顺序把步骤排成执行链，右侧列出步骤并在选中后给出字段表单。添加步骤按当前选中位置插入，排序用行内上下按钮或直接拖拽列表，删除一个步骤会同时清掉其它步骤对它的 `depends_on` 引用（否则整份保存会被服务端以「依赖不存在」拒绝）。保存时按原样带上步骤标识，因此 `depends_on` 在多次保存之间保持有效；改步骤类型会保留依赖与模板，丢弃与类型无关的键（聚合键、延迟时长）。保存前先跑一遍与后端同源的校验：空步骤、缺少延迟时长、聚合窗口写法、悬空依赖与依赖环都会在发出请求之前指出具体是哪一步。
@@ -99,6 +109,9 @@ curl -X POST http://127.0.0.1:8000/v1/events/trigger \
 ```bash
 # Python：API 与渠道实现
 api/.venv/bin/python -m pytest api/tests -q
+
+# Python 客户端
+api/.venv/bin/python -m pytest sdk/python/tests -q
 
 # Go：引擎（含并发路径的竞态检测）
 cd engine && go test ./... && go test -race ./internal/provider/ ./internal/pipeline/ ./internal/runner/ ./internal/webhook/ ./cmd/engine/
