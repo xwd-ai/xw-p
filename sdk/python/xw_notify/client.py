@@ -15,16 +15,27 @@
 
 请求体用 ``json.dumps`` 而不是表单编码：接口只收 JSON，且 ``ensure_ascii``
 关掉之后日志与抓包里能直接读到中文正文。
+
+重试默认关闭，需要时传 ``retry=RetryPolicy(...)``。开关打开不代表所有请求都会
+重发：只有「失败类型值得重发」且「请求本身可重放」两个条件同时成立才重试，
+规则见 :mod:`xw_notify.retry`——没有幂等键的 POST 重发就是第二条通知。
 """
 from __future__ import annotations
 
 import json
-from typing import Any, Mapping, Optional
+import time
+from typing import Any, Callable, Mapping, Optional
 from urllib.parse import urlencode
 
 from ._http import Request, Response, Transport, UrllibTransport, quote_segment
 from .errors import APIError, ProtocolError, error_for_status
 from .models import Health
+from .retry import (
+    RetryPolicy,
+    is_replay_safe,
+    retry_after_seconds,
+    run_with_retry,
+)
 
 #: 服务端默认监听地址，与 README 里的启动命令一致。
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
@@ -74,6 +85,11 @@ class Client:
     :param environment: 隔离环境，``development`` 或 ``production``。
     :param timeout: 连接与读取超时（秒）。仅在未注入 ``transport`` 时生效。
     :param transport: 自定义传输层，用于替换 HTTP 实现或在测试里注入假响应。
+    :param retry: 重试策略。默认不重试；传 :meth:`RetryPolicy.disabled` 与默认
+        等价。写操作想被重试必须带幂等键，否则会被判为不可重放而只发一次。
+    :param sleep: 退避等待函数，默认 ``time.sleep``；测试可注入记录器。
+    :param on_retry: 每次准备重发前的回调（异常, 已失败次数, 等待秒数），
+        便于把重试计进自己的日志或指标。
     """
 
     def __init__(
@@ -84,6 +100,9 @@ class Client:
         environment: str = DEFAULT_ENVIRONMENT,
         timeout: float = DEFAULT_TIMEOUT,
         transport: Optional[Transport] = None,
+        retry: Optional[RetryPolicy] = None,
+        sleep: Optional[Callable[[float], None]] = None,
+        on_retry: Optional[Callable[[BaseException, int, float], None]] = None,
     ) -> None:
         text = str(base_url or "").strip()
         if not text:
@@ -96,6 +115,9 @@ class Client:
         self.environment = str(environment or DEFAULT_ENVIRONMENT).strip() or DEFAULT_ENVIRONMENT
         self.timeout = float(timeout)
         self._transport: Transport = transport or UrllibTransport(timeout=self.timeout)
+        self.retry: RetryPolicy = retry or RetryPolicy.disabled()
+        self._sleep: Callable[[float], None] = sleep or time.sleep
+        self._on_retry = on_retry
 
         # 资源在构造时装配：调用方不必记「先取资源再调方法」的顺序。
         from .preferences import PreferencesResource
@@ -123,14 +145,28 @@ class Client:
             data = client.request("GET", "/v1/inbox", query={"subscriberId": "creator-1001"})
 
         参数名用 ``json_body`` 而不是 ``json``，是为了不和 ``json`` 模块同名。
+
+        是否重发由客户端构造时的 :class:`~xw_notify.retry.RetryPolicy` 决定，
+        调用方不需要在每次请求上重复声明。
         """
+        method_name = method.upper()
         request = Request(
-            method=method.upper(),
+            method=method_name,
             url=self._build_url(path, query),
             headers=self._build_headers(json_body is not None, headers),
             body=self._encode(json_body),
         )
-        return self._handle(method.upper(), path, self._transport.send(request))
+
+        def send() -> Any:
+            return self._handle(method_name, path, self._transport.send(request))
+
+        return run_with_retry(
+            send,
+            self.retry,
+            replay_safe=is_replay_safe(method_name, request.headers),
+            sleep=self._sleep,
+            on_retry=self._on_retry,
+        )
 
     def health(self) -> Health:
         """读一次 ``GET /health``，可用于启动时探活。"""
@@ -206,6 +242,7 @@ class Client:
                 _error_payload(response),
                 method=method,
                 path=path,
+                retry_after=retry_after_seconds(response.headers),
             )
         if not response.body:
             return None

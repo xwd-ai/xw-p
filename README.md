@@ -104,7 +104,64 @@ ack, err := client.Trigger(ctx,
 )
 ```
 
-批量触发用 `client.TriggerBatch(ctx, events)`，逐条结果与请求等长且按下标对齐（被拒条目带原因）。失败按类型分流：`IsNotFound` / `IsValidation` / `IsUnauthorized` 等判定状态码，`IsRetryable` 只回答「这次失败值不值得重发」，客户端本身不做隐式重试——评论重发会让创作者收到两条，要不要重发由业务决定。
+批量触发用 `client.TriggerBatch(ctx, events)`，逐条结果与请求等长且按下标对齐（被拒条目带原因）。
+
+### 错误分类与重试约定
+
+两个 SDK 都按「接下来怎么办」给失败分类，而不是给每个状态码包一个类：
+
+| 异常 | 典型场景 | 处理方式 |
+| --- | --- | --- |
+| `ValidationError`（本地校验、422） | 缺必填字段、聚合窗口写法不对、批量超 100 条 | 改参数再发 |
+| `AuthenticationError` / `ForbiddenError`（401 / 403） | Key 没带、带错或越权 | 换凭据 |
+| `NotFoundError`（404） | 工作流不存在或已停用、订阅者被删 | 不要重发 |
+| `ConflictError`（409） | 订阅者标识重复、邮箱已被占用 | 读回既有记录 |
+| `RateLimitError`（429）/ `ServerError`（5xx） | 服务端忙或过载 | 退避后重发 |
+| `TransportError` | 连接失败、超时、读响应断流 | 可重发，但先确认请求可重放 |
+| `ProtocolError` | 响应不是约定的形状（代理返回 HTML、版本不匹配） | 对齐版本，重发无用 |
+
+「可以重发」不等于「会自动重发」。客户端默认一次请求就结束，打开重试要显式给策略；打开之后仍要**同时**满足两个条件才会重发：
+
+1. 失败属于可重试的那几类（传输失败、429、5xx）。501/505 不在此列——它们不会因为再试一次而变好；
+2. 请求本身可重放：`GET` / `HEAD` / `OPTIONS` / `PUT` / `DELETE` 天然幂等，`POST` 必须带幂等键。没有幂等键的 `POST` 永远只发一次，因为服务端无从判断这第二次是重发还是一条新评论。
+
+退避是「指数 + 向下抖动」：第 n 次失败后等 `base × 2^(n-1)`，按抖动比例随机下压，封顶 `max_delay`；服务端给了 `Retry-After` 就以它为准（两类写法都支持：整数秒与 HTTP 日期），但封顶 60 秒，避免一个异常响应把调用方挂住。
+
+```python
+from xw_notify import Client, RetryPolicy, RateLimitError
+
+client = Client("http://127.0.0.1:8000", retry=RetryPolicy(max_attempts=3))
+
+try:
+    client.trigger.send(
+        "post_commented", "creator-1001",
+        payload={"post_id": "P-2026-1001", "comment": "求教程"},
+        idempotency_key="comment-C-8842",   # 没有它，这个 POST 不会被自动重发
+    )
+except RateLimitError as exc:
+    print(exc.retry_after)                  # 服务端建议的等待秒数，没有则为 None
+```
+
+```go
+client, err := xwnotify.NewClient("http://127.0.0.1:8000",
+	xwnotify.WithRetry(xwnotify.DefaultRetryPolicy()),   // 3 次、200ms 起、5s 封顶
+)
+if err != nil {
+	return err
+}
+
+ack, err := client.Trigger(ctx,
+	xwnotify.NewEvent("post_commented", "creator-1001").
+		WithPayload(map[string]any{"post_id": "P-2026-1001", "comment": "求教程"}),
+	xwnotify.WithIdempotencyKey("comment-C-8842"),        // 同上：没有幂等键不重发
+)
+var apiErr *xwnotify.APIError
+if errors.As(err, &apiErr) {
+	log.Printf("触发失败：%d %s，建议等待 %s", apiErr.StatusCode, apiErr.Detail, apiErr.RetryAfter)
+}
+```
+
+判定用类型而不是文案：Python 用 `isinstance` / `except`，Go 用 `errors.As` 与 `IsNotFound` / `IsValidation` / `IsUnauthorized` / `IsRetryable` 这些辅助函数。`should_retry`（Go 的 `IsRetryable`）只回答「这次失败值不值得重发」，`is_replay_safe` 只回答「这个请求重发安全不安全」，两件事分开之后，「要不要重试」在日志与代码里都能讲清楚。
 
 运营后台在 `dashboard/admin.html`：按环境查看投递统计、渠道成功率、失败原因与活动汇总，启停或复制工作流，并用自定义 payload 对任一工作流做触发测试。触发之后回执下方会跟随该次触发的逐渠道投递明细（结果、实际实现、重试与回退、耗时、失败或跳过原因）——一条消息可能同时投往多个渠道，只有一个整体状态时看不出是哪一路出了问题。明细按「声明的渠道是否都有结果」判断是否取完，慢渠道没写出来时如实列出缺口而不是停在一个看着完整的数字上。
 

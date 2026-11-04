@@ -53,7 +53,9 @@ class APIError(XWNotifyError):
     - ``status``：HTTP 状态码；
     - ``message``：从响应体里整理出的可读原因；
     - ``method`` / ``path``：出错的请求，日志里不必再自己拼；
-    - ``payload``：原始响应体，排查时能拿到 FastAPI 完整的 ``detail``。
+    - ``payload``：原始响应体，排查时能拿到 FastAPI 完整的 ``detail``；
+    - ``retry_after``：服务端给出的等待秒数（``Retry-After`` 头，没有则 ``None``）；
+      是否应该重发由 :func:`xw_notify.retry.should_retry` 按状态码判断。
     """
 
     def __init__(
@@ -64,12 +66,14 @@ class APIError(XWNotifyError):
         method: str = "",
         path: str = "",
         payload: Any = None,
+        retry_after: Optional[float] = None,
     ) -> None:
         self.status = status
         self.message = message or "服务端未给出原因"
         self.method = method
         self.path = path
         self.payload = payload
+        self.retry_after = retry_after
         super().__init__(self._describe())
 
     def _describe(self) -> str:
@@ -211,6 +215,7 @@ def error_for_status(
     method: str = "",
     path: str = "",
     reason: Optional[str] = None,
+    retry_after: Optional[float] = None,
 ) -> APIError:
     """按状态码与响应体构造异常实例。"""
     detail = payload.get("detail") if isinstance(payload, Mapping) else None
@@ -218,7 +223,14 @@ def error_for_status(
     cls = _STATUS_ERRORS.get(status)
     if cls is None:
         cls = ServerError if status >= 500 else APIError
-    return cls(status, message, method=method, path=path, payload=payload)
+    return cls(
+        status,
+        message,
+        method=method,
+        path=path,
+        payload=payload,
+        retry_after=retry_after,
+    )
 
 
 __all__ = [

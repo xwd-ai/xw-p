@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // 三类错误对应三种处理方式：
@@ -68,6 +69,9 @@ type APIError struct {
 	Detail string
 	// Body 是原始响应体，便于排查反代返回的 HTML 错误页。
 	Body []byte
+	// RetryAfter 是服务端给出的等待建议（Retry-After 头），0 表示没有或不可用。
+	// 只有 429/5xx 会被客户端用来调整退避，其余状态码带着它也不会触发重试。
+	RetryAfter time.Duration
 }
 
 func (e *APIError) Error() string {

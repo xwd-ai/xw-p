@@ -37,6 +37,18 @@
 异常按处理方式分层（见 :mod:`xw_notify.errors`）：网络层失败抛
 ``TransportError``，服务端拒绝抛 ``APIError`` 的子类，响应形状不对抛
 ``ProtocolError``。
+
+默认不重试。需要时显式传策略，并给写操作带上幂等键——只有「值得重发的失败」
+落在「可重放的请求」上才会再试一次::
+
+    from xw_notify import Client, RetryPolicy
+
+    client = Client("http://127.0.0.1:8000", retry=RetryPolicy(max_attempts=3))
+    client.trigger.send(
+        "post_commented", "creator-1001",
+        payload={"post_id": "P-2026-1001", "comment": "求教程"},
+        idempotency_key="comment-C-8842",   # 没有这个键，POST 不会被自动重发
+    )
 """
 from __future__ import annotations
 
@@ -74,6 +86,7 @@ from .models import (
     TriggerBatch,
 )
 from .preferences import PreferencesResource
+from .retry import RetryPolicy, is_replay_safe, run_with_retry, should_retry
 from .subscribers import SubscribersResource
 from .trigger import MAX_BATCH_EVENTS, TriggerResource
 
@@ -100,6 +113,7 @@ __all__ = [
     "ProtocolError",
     "RateLimitError",
     "Resolution",
+    "RetryPolicy",
     "ServerError",
     "Subscriber",
     "SubscriberPage",
@@ -111,5 +125,8 @@ __all__ = [
     "ValidationError",
     "XWNotifyError",
     "__version__",
+    "is_replay_safe",
     "quote_segment",
+    "run_with_retry",
+    "should_retry",
 ]

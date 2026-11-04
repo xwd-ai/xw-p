@@ -9,9 +9,10 @@
 //	ack, err := client.Trigger(ctx, xwnotify.NewEvent("post_commented", "creator-1001").
 //		WithPayload(map[string]any{"post_id": "P-2026-1001", "actor": "小林"}))
 //
-// 客户端不做任何隐式重试：一次 Trigger 就是一次请求。重试要由调用方按
-// 业务语义决定（点赞可以重发，评论重发会让创作者收到两条），错误类型里的
-// Retryable 只回答「这次失败本身值不值得再发」，不代替这个判断。
+// 客户端默认不重试：一次 Trigger 就是一次请求。需要重试时显式传
+// WithRetry，并且只有「失败值得重发」且「请求可重放」（GET/PUT/DELETE 或
+// 带 Idempotency-Key 的 POST）两个条件同时成立才会重发，规则见 retry.go。
+// 评论通知重发会让创作者收到两条，是否接受重复仍然由业务决定。
 package xwnotify
 
 import (
@@ -48,6 +49,8 @@ type Client struct {
 	apiKey      string
 	userAgent   string
 	httpClient  *http.Client
+	retry       *RetryPolicy
+	sleep       func(context.Context, time.Duration) error
 }
 
 // Option 在构造期修改客户端配置。返回错误是为了让非法取值在启动时暴露，
@@ -106,6 +109,25 @@ func WithUserAgent(userAgent string) Option {
 	}
 }
 
+// WithRetry 打开重试，并按策略退避。
+//
+// 打开它不代表所有请求都会重发：只有值得重发的失败（传输失败、429、5xx）
+// 落在可重放的请求（GET/PUT/DELETE，或带 WithIdempotencyKey 的 POST）上才
+// 会再试。不带幂等键的 POST 仍然只发一次——重发就是第二条通知。
+//
+// 传入的策略会在构造期校验，非法取值直接让 NewClient 返回错误，而不是等到
+// 第一次请求失败才发现退避曲线是错的。
+func WithRetry(policy RetryPolicy) Option {
+	return func(c *Client) error {
+		if err := policy.validate(); err != nil {
+			return err
+		}
+		stored := policy
+		c.retry = &stored
+		return nil
+	}
+}
+
 // NewClient 构造客户端。
 //
 // baseURL 只写到主机与端口（可带路径前缀），不要带 /v1——接口路径由 SDK 拼接。
@@ -135,6 +157,7 @@ func NewClient(baseURL string, opts ...Option) (*Client, error) {
 		environment: DefaultEnvironment,
 		userAgent:   "xw-notify-go/0.1",
 		httpClient:  newDefaultHTTPClient(),
+		sleep:       sleepContext,
 	}
 	for _, opt := range opts {
 		if opt == nil {
@@ -169,14 +192,54 @@ func newDefaultHTTPClient() *http.Client {
 // do 发一次请求并返回 2xx 的响应体。
 //
 // 状态码判定集中在这里：传输层把 4xx/5xx 也当普通响应返回，2xx 之外一律
-// 折成错误，调用方（资源层）只处理正常路径。
+// 折成错误，调用方（资源层）只处理正常路径。重试也在这里——它需要同时知道
+// 失败类型与请求可否重放，这两件事只有在装配完请求头之后才齐全。
 func (c *Client) do(ctx context.Context, method, path string, body any, headers map[string]string) ([]byte, error) {
-	var reader io.Reader
+	var encoded []byte
 	if body != nil {
-		encoded, err := json.Marshal(body)
+		serialized, err := json.Marshal(body)
 		if err != nil {
 			return nil, &ValidationError{Field: "body", Message: "无法序列化为 JSON：" + err.Error()}
 		}
+		encoded = serialized
+	}
+
+	attempts := 1
+	if c.retry != nil && c.retry.Enabled() && replaySafe(method, headers) {
+		attempts = c.retry.MaxAttempts
+	}
+
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		payload, err := c.once(ctx, method, path, encoded, headers)
+		if err == nil {
+			return payload, nil
+		}
+		lastErr = err
+		if attempt == attempts || !IsRetryable(err) {
+			return nil, err
+		}
+		wait := c.retry.delay(attempt, retryAfterOf(err))
+		// 等待期间被取消时，返回最后一次失败；调用方用 ctx.Err() 判断原因，
+		// 比抛一个「等待被取消」更能说明是哪次请求没成。
+		if sleepErr := c.sleepOrDefault()(ctx, wait); sleepErr != nil {
+			return nil, lastErr
+		}
+	}
+	return nil, lastErr
+}
+
+func (c *Client) sleepOrDefault() func(context.Context, time.Duration) error {
+	if c.sleep == nil {
+		return sleepContext
+	}
+	return c.sleep
+}
+
+// once 发一次请求，不做重试。
+func (c *Client) once(ctx context.Context, method, path string, encoded []byte, headers map[string]string) ([]byte, error) {
+	var reader io.Reader
+	if encoded != nil {
 		reader = bytes.NewReader(encoded)
 	}
 
@@ -187,7 +250,7 @@ func (c *Client) do(ctx context.Context, method, path string, body any, headers 
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-Environment", c.environment)
 	req.Header.Set("User-Agent", c.userAgent)
-	if body != nil {
+	if encoded != nil {
 		req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	}
 	if c.apiKey != "" {
@@ -232,6 +295,7 @@ func (c *Client) do(ctx context.Context, method, path string, body any, headers 
 			Path:       path,
 			Detail:     errorDetail(payload),
 			Body:       payload,
+			RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()),
 		}
 	}
 	if len(bytes.TrimSpace(payload)) == 0 {
