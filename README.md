@@ -50,6 +50,7 @@ api/        Python FastAPI：触发 API、管理 API、渠道集成
 engine/     Go：执行引擎、队列消费、provider 分发、digest、死信运维接口
 dashboard/  原生 HTML/CSS/JS 展示前端（仪表盘 + 可视化工作流编排器 + 实时活动流 + 运营后台）
 sdk/python/ Python 客户端：触发、订阅者与偏好接口，只依赖标准库
+sdk/go/     Go 客户端：单条与批量触发，独立模块、只依赖标准库
 infra/      docker-compose 与基础设施配置
 docs/       文档
 scripts/    演示与辅助脚本
@@ -89,6 +90,22 @@ client.trigger.send("post_commented", "creator-1001", payload={"post_id": "P-202
 
 可运行的示例在 `sdk/python/examples/`：点赞聚合与带幂等键的评论、三层发送偏好的设置与解析、收件箱读取与批量已读。在 `sdk/python` 目录下执行 `python -m examples.post_interaction`，用 `XW_BASE_URL` / `XW_API_KEY` / `XW_ENVIRONMENT` 指向别的部署。
 
+Go 服务端可以用 `sdk/go/`（独立模块 `github.com/xwd-ai/xw-p/sdk/go`，只依赖标准库）：
+
+```go
+client, err := xwnotify.NewClient("http://127.0.0.1:8000", xwnotify.WithAPIKey(key))
+if err != nil {
+	return err
+}
+ack, err := client.Trigger(ctx,
+	xwnotify.NewEvent("post_liked", "creator-1001").
+		WithPayload(map[string]any{"post_id": "P-2026-1001", "actor": "小林"}),
+	xwnotify.WithIdempotencyKey("post-liked-P-2026-1001"),
+)
+```
+
+批量触发用 `client.TriggerBatch(ctx, events)`，逐条结果与请求等长且按下标对齐（被拒条目带原因）。失败按类型分流：`IsNotFound` / `IsValidation` / `IsUnauthorized` 等判定状态码，`IsRetryable` 只回答「这次失败值不值得重发」，客户端本身不做隐式重试——评论重发会让创作者收到两条，要不要重发由业务决定。
+
 运营后台在 `dashboard/admin.html`：按环境查看投递统计、渠道成功率、失败原因与活动汇总，启停或复制工作流，并用自定义 payload 对任一工作流做触发测试。触发之后回执下方会跟随该次触发的逐渠道投递明细（结果、实际实现、重试与回退、耗时、失败或跳过原因）——一条消息可能同时投往多个渠道，只有一个整体状态时看不出是哪一路出了问题。明细按「声明的渠道是否都有结果」判断是否取完，慢渠道没写出来时如实列出缺口而不是停在一个看着完整的数字上。
 
 工作流编排页（`dashboard/index.html` 的「工作流编排」）是一个手写 SVG 编辑器：左侧选模板，中间画布按数组顺序把步骤排成执行链，右侧列出步骤并在选中后给出字段表单。添加步骤按当前选中位置插入，排序用行内上下按钮或直接拖拽列表，删除一个步骤会同时清掉其它步骤对它的 `depends_on` 引用（否则整份保存会被服务端以「依赖不存在」拒绝）。保存时按原样带上步骤标识，因此 `depends_on` 在多次保存之间保持有效；改步骤类型会保留依赖与模板，丢弃与类型无关的键（聚合键、延迟时长）。保存前先跑一遍与后端同源的校验：空步骤、缺少延迟时长、聚合窗口写法、悬空依赖与依赖环都会在发出请求之前指出具体是哪一步。
@@ -114,6 +131,9 @@ api/.venv/bin/python -m pytest api/tests -q
 
 # Python 客户端
 api/.venv/bin/python -m pytest sdk/python/tests -q
+
+# Go 客户端
+cd sdk/go && go test ./...
 
 # Go：引擎（含并发路径的竞态检测）
 cd engine && go test ./... && go test -race ./internal/provider/ ./internal/pipeline/ ./internal/runner/ ./internal/webhook/ ./cmd/engine/
