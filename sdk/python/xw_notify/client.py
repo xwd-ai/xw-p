@@ -43,14 +43,6 @@ def _query_value(value: Any) -> str:
     return str(value)
 
 
-def _query_value(value: Any) -> str:
-    if isinstance(value, bool):
-        # FastAPI 的布尔查询参数接受 true/false；Python 的 True/False 也能收，
-        # 但大小写敏感的实现（其它服务端）会认不出来，统一发小写。
-        return "true" if value else "false"
-    return str(value)
-
-
 def _header(headers: Mapping[str, str], name: str) -> Optional[str]:
     """按名称取响应头（HTTP 头大小写不敏感，字典不一定）。"""
     wanted = name.lower()
