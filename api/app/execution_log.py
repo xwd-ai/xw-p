@@ -14,6 +14,10 @@
 JSONL 后端从文件尾部倒着读，取满一页即停；Postgres 后端拼 ``WHERE`` +
 ``ORDER BY … LIMIT``，依赖 ``006_execution_indexes.sql`` 的复合索引。
 
+统计聚合走 ``scan``：按时间窗顺序遍历记录，供 ``admin_stats`` 逐条累加。这里
+刻意不返回列表——窗口内的记录数可能很大，聚合只需要每条的渠道、状态与耗时，
+把整窗读进内存没有意义。JSONL 后端顺序读文件、Postgres 后端用流式游标。
+
 字段约定（每条执行明细）：
 - ``id``：明细记录标识（翻页次级键）。
 - ``trigger_id``：所属触发的唯一标识。
@@ -39,7 +43,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional, Protocol
+from typing import Any, Iterator, Optional, Protocol
 
 from . import config
 from .jsonl_reader import ReverseLineReader
@@ -85,6 +89,8 @@ class ExecutionStore(Protocol):
 
     def read_all(self) -> list[dict[str, Any]]: ...
 
+    def scan(self, since: Optional[datetime] = None, until: Optional[datetime] = None) -> Iterator[dict[str, Any]]: ...
+
 
 def record_key(record: dict[str, Any]) -> str:
     """记录的次级排序键；缺失时退化为空串（排在同时间戳记录的最后）。"""
@@ -124,6 +130,28 @@ def matches(record: dict[str, Any], q: ExecutionQuery) -> bool:
             return False
         if q.until is not None and dt > q.until:
             return False
+    return True
+
+
+def _in_window(
+    record: dict[str, Any],
+    since: Optional[datetime],
+    until: Optional[datetime],
+) -> bool:
+    """记录是否落在时间窗内（含边界）。
+
+    给了窗口却解析不出时间戳的记录一律排除：统计里把它算进任何一天都是错的，
+    静默归到「今天」只会让数字对不上。
+    """
+    if since is None and until is None:
+        return True
+    dt = parse_dt(record.get("created_at"))
+    if dt is None:
+        return False
+    if since is not None and dt < since:
+        return False
+    if until is not None and dt > until:
+        return False
     return True
 
 
@@ -191,6 +219,27 @@ class JSONLExecutionStore:
                         logger.warning("跳过损坏的执行明细行：%s", line[:80])
             return records
 
+    def scan(self, since: Optional[datetime] = None, until: Optional[datetime] = None) -> Iterator[dict[str, Any]]:
+        """按时间窗顺序遍历记录（统计聚合用）。
+
+        只持有文件句柄、不持有写锁：写入方用另一个描述符追加，互不阻塞。逐行
+        解析后立即交给调用方，窗口再大也只占一条记录的内存。
+        """
+        if not self._path.exists():
+            return
+        with self._path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    logger.warning("跳过损坏的执行明细行：%s", line[:80])
+                    continue
+                if isinstance(record, dict) and _in_window(record, since, until):
+                    yield record
+
 
 class MemoryExecutionStore:
     """进程内执行明细存储（测试注入与无持久化演示用）。"""
@@ -216,6 +265,14 @@ class MemoryExecutionStore:
     def read_all(self) -> list[dict[str, Any]]:
         with self._lock:
             return list(self._records)
+
+    def scan(self, since: Optional[datetime] = None, until: Optional[datetime] = None) -> Iterator[dict[str, Any]]:
+        """按时间窗遍历记录；先取快照再迭代，聚合期间的新写入不改变本次结果。"""
+        with self._lock:
+            snapshot = list(self._records)
+        for record in snapshot:
+            if _in_window(record, since, until):
+                yield record
 
 
 class PostgresExecutionStore:
@@ -329,6 +386,32 @@ class PostgresExecutionStore:
             "duration_ms": d.get("duration_ms", 0),
             "created_at": d.get("created_at"),
         }
+
+    def scan(self, since: Optional[datetime] = None, until: Optional[datetime] = None) -> Iterator[dict[str, Any]]:
+        """按时间窗遍历记录（统计聚合用，服务端游标流式返回）。"""
+        from sqlalchemy import text
+
+        where: list[str] = []
+        params: dict[str, Any] = {}
+        if since is not None:
+            where.append("created_at >= :since")
+            params["since"] = since
+        if until is not None:
+            where.append("created_at <= :until")
+            params["until"] = until
+        sql = (
+            "SELECT id, trigger_id, channel, status, reason, duration_ms, created_at "
+            "FROM execution_details"
+        )
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY created_at, id"
+
+        engine = self._get_engine()
+        with engine.connect() as conn:
+            result = conn.execution_options(stream_results=True).execute(text(sql), params)
+            for row in result.mappings():
+                yield self._to_record(dict(row))
 
     def read_all(self) -> list[dict[str, Any]]:
         """读取全部记录（导出/排查用，查询接口不再走这条路径）。"""

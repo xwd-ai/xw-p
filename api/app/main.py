@@ -14,6 +14,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, status
 
 from . import config
 from .activity_log import build_activity, record_activities, record_activity
+from .admin_routes import router as admin_router
 from .auth import EnvContext, require_env
 from .activity_routes import router as activity_router
 from .bus import get_bus, publish_all
@@ -78,6 +79,7 @@ app = FastAPI(
 
 app.include_router(workflow_router)
 app.include_router(dashboard_router)
+app.include_router(admin_router)
 app.include_router(activity_router)
 app.include_router(execution_router)
 app.include_router(inbox_router)

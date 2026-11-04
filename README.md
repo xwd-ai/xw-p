@@ -85,7 +85,7 @@ curl -X POST http://127.0.0.1:8000/v1/events/trigger \
 - **延迟任务持久化**：delay 步骤存 Redis，重启或换实例都能接上。
 - **聚合**：digest 计数并发原子累加，窗口到期重开卡。
 - **多渠道**：收件箱 / 邮件 / 短信 / 推送 / 群播报，主备回退、渠道级重试。
-- **可观测**：逐条执行明细 + 投递指标 + 回调 HMAC-SHA256 签名。
+- **可观测**：逐条执行明细 + 投递指标 + 回调 HMAC-SHA256 签名；管理统计按渠道给出成功率与耗时分布、实现与工作流排行、失败原因榜单。
 
 实测吞吐 **约 53.8k 条/秒**（端到端 P50 400µs / P99 800µs），完整执行管线约 50k 条/秒。压测口径、参数与复现命令见 [`docs/benchmark.md`](docs/benchmark.md)。
 
@@ -97,6 +97,9 @@ api/.venv/bin/python -m pytest api/tests -q
 
 # Go：引擎（含并发路径的竞态检测）
 cd engine && go test ./... && go test -race ./internal/provider/ ./internal/pipeline/ ./internal/runner/ ./internal/webhook/ ./cmd/engine/
+
+# 前端：收件箱组件的纯逻辑测试（Node 内置 runner，无第三方依赖）
+node --test 'dashboard/tests/*.test.js'
 ```
 
 ## License
