@@ -1,6 +1,7 @@
 """In-app 收件箱 API 测试：列表过滤、未读计数、已读标记、引擎收件箱合并。"""
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -11,12 +12,32 @@ from app.inbox import _is_inapp, _to_inbox_item
 from app.main import app
 
 
-def _record(trigger_id="t", subscriber="u1", channels=None, days_ago=0, payload=None):
+def _collect_events(agen):
+    """把异步事件流收成列表；测试不额外引入 pytest-asyncio 依赖。"""
+
+    async def run():
+        return [frame async for frame in agen]
+
+    return asyncio.run(run())
+
+
+async def _no_sleep(_interval):
+    return None
+
+
+def _record(
+    trigger_id="t",
+    subscriber="u1",
+    channels=None,
+    days_ago=0,
+    payload=None,
+    workflow="post_commented",
+):
     dt = (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
     return {
         "trigger_id": trigger_id,
         "transaction_id": "tx",
-        "workflow": "post_commented",
+        "workflow": workflow,
         "subscriber_id": subscriber,
         "channels": channels or ["in_app"],
         "payload": payload or {},
@@ -695,4 +716,176 @@ def test_cursor_roundtrip():
     stamp, message_id = decode_cursor(token)
     assert message_id == "digest-p1"
     assert stamp == datetime(2026, 11, 1, 10, tzinfo=timezone.utc)
+
+
+# ---------------------------------------------------------------- 实时推送
+
+
+def test_stream_ready_frame(client):
+    import app.inbox as inbox_mod
+
+    frames = _collect_events(
+        inbox_mod.iter_inbox_events("u1", sleep=_no_sleep, max_events=1)
+    )
+    assert len(frames) == 1
+    assert frames[0].startswith("event: ready\n")
+
+    payload = json.loads(frames[0].split("data: ", 1)[1])
+    assert payload["unread"] == 2
+    assert payload["total"] == 2
+    assert [item["trigger_id"] for item in payload["items"]] == ["a", "c"]
+
+
+def test_stream_skips_unchanged(client, monkeypatch):
+    import app.inbox as inbox_mod
+
+    # 版本固定：轮询几轮都不该推 inbox 帧
+    monkeypatch.setattr(inbox_mod, "_inbox_cache", None)
+    monkeypatch.setattr(inbox_mod, "_revision", lambda subscriber_id: ("fixed",))
+
+    frames = _collect_events(
+        inbox_mod.iter_inbox_events("u1", sleep=_no_sleep, max_polls=5)
+    )
+    assert len(frames) == 1
+    assert frames[0].startswith("event: ready")
+
+
+def test_stream_pushes_on_change(client):
+    import app.inbox as inbox_mod
+    import app.storage as storage_mod
+
+    state = {"polled": 0}
+
+    async def fake_sleep(_):
+        state["polled"] += 1
+        if state["polled"] == 1:
+            storage_mod._storage.save(
+                _record(
+                    trigger_id="e",
+                    subscriber="u1",
+                    days_ago=0,
+                    payload={"title": "新评论", "body": "来啦"},
+                )
+            )
+
+    frames = _collect_events(
+        inbox_mod.iter_inbox_events("u1", sleep=fake_sleep, max_events=2)
+    )
+    assert frames[0].startswith("event: ready")
+    assert frames[1].startswith("event: inbox")
+
+    payload = json.loads(frames[1].split("data: ", 1)[1])
+    assert payload["unread"] == 3
+    assert payload["items"][0]["trigger_id"] == "e"
+
+
+def test_stream_heartbeat_after_idle(client, monkeypatch):
+    import app.inbox as inbox_mod
+
+    monkeypatch.setattr(inbox_mod, "_inbox_cache", None)
+    monkeypatch.setattr(inbox_mod, "_revision", lambda subscriber_id: ("fixed",))
+
+    frames = _collect_events(
+        inbox_mod.iter_inbox_events(
+            "u1", sleep=_no_sleep, max_polls=inbox_mod.STREAM_HEARTBEAT_POLLS
+        )
+    )
+    assert frames[0].startswith("event: ready")
+    assert any(frame.startswith(": keep-alive") for frame in frames)
+    assert not any(frame.startswith("event: inbox") for frame in frames)
+
+
+def test_stream_routes_registered(client):
+    schema = client.get("/openapi.json").json()
+    assert "/v1/inbox/stream" in schema["paths"]
+    assert "/v1/inbox/unread" in schema["paths"]
+
+
+def test_stream_rejects_empty_subscriber(client):
+    assert client.get("/v1/inbox/stream", params={"subscriberId": ""}).status_code == 422
+
+
+# ---------------------------------------------------------------- 未读聚合
+
+
+def test_unread_summary_by_workflow(client):
+    data = client.get("/v1/inbox/unread", params={"subscriberId": "u1"}).json()
+    assert data["unread"] == 2
+    assert data["total"] == 2
+    assert data["byWorkflow"] == [
+        {"workflow": "post_commented", "unread": 2, "total": 2}
+    ]
+    assert data["latestAt"]
+
+
+def test_unread_summary_groups_by_workflow(client):
+    import app.storage as storage_mod
+
+    storage_mod._storage.save(
+        _record(trigger_id="e", subscriber="u1", workflow="post_liked", days_ago=0)
+    )
+    data = client.get("/v1/inbox/unread", params={"subscriberId": "u1"}).json()
+
+    assert data["total"] == 3
+    assert data["unread"] == 3
+    rows = {row["workflow"]: row for row in data["byWorkflow"]}
+    assert rows["post_commented"] == {
+        "workflow": "post_commented",
+        "unread": 2,
+        "total": 2,
+    }
+    assert rows["post_liked"] == {"workflow": "post_liked", "unread": 1, "total": 1}
+
+
+def test_unread_summary_isolated_per_subscriber(client):
+    data = client.get("/v1/inbox/unread", params={"subscriberId": "u2"}).json()
+    assert data["unread"] == 1
+    assert data["total"] == 1
+
+
+def test_unread_summary_reflects_mark_read(client):
+    before = client.get("/v1/inbox/unread", params={"subscriberId": "u1"}).json()
+    assert before["unread"] == 2
+
+    client.post("/v1/inbox/read", json={"subscriberId": "u1", "triggerIds": ["a"]})
+    after = client.get("/v1/inbox/unread", params={"subscriberId": "u1"}).json()
+    assert after["unread"] == 1
+    assert after["total"] == 2
+
+
+def test_unread_summary_cache_hits(client, monkeypatch):
+    import app.inbox as inbox_mod
+
+    # 版本固定 + 空缓存，才能观察到「第二次没有重算」
+    monkeypatch.setattr(inbox_mod, "_revision", lambda subscriber_id: ("fixed",))
+    monkeypatch.setattr(inbox_mod, "_unread_cache", None)
+
+    calls = {"n": 0}
+    original = inbox_mod._build_unread_summary
+
+    def counting(subscriber_id):
+        calls["n"] += 1
+        return original(subscriber_id)
+
+    monkeypatch.setattr(inbox_mod, "_build_unread_summary", counting)
+
+    first = client.get("/v1/inbox/unread", params={"subscriberId": "u1"}).json()
+    second = client.get("/v1/inbox/unread", params={"subscriberId": "u1"}).json()
+    assert first == second
+    assert calls["n"] == 1
+
+
+def test_unread_summary_cache_invalidated_by_new_message(client):
+    import app.inbox as inbox_mod
+    import app.storage as storage_mod
+
+    cache = inbox_mod.get_unread_cache()
+    cache.invalidate()
+    first = client.get("/v1/inbox/unread", params={"subscriberId": "u1"}).json()
+    assert first["unread"] == 2
+
+    storage_mod._storage.save(_record(trigger_id="e", subscriber="u1", days_ago=0))
+    second = client.get("/v1/inbox/unread", params={"subscriberId": "u1"}).json()
+    assert second["unread"] == 3
+    assert second["total"] == 3
 

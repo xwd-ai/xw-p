@@ -34,10 +34,10 @@ from .schemas import (
     new_queued_message,
 )
 from .subscriber_routes import router as subscriber_router
+from .topic_routes import router as topic_router
+from .trigger_core import missing_workflow_detail, resolve_workflow
 from .worker import Worker
-from .workflow import get_registry
 from .workflow_routes import router as workflow_router
-from .workflow_store import get_workflow_store
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
@@ -84,41 +84,7 @@ app.include_router(inbox_router)
 app.include_router(provider_router)
 app.include_router(subscriber_router)
 app.include_router(preference_router)
-
-
-def _env_mismatch(workflow_env, request_env: str) -> bool:
-    """判断工作流环境与请求环境是否不匹配。
-
-    环境一致（或工作流环境未知、回退默认）视为匹配，返回 False。
-    """
-    wf_env = workflow_env.value if hasattr(workflow_env, "value") else str(workflow_env)
-    if not wf_env:
-        return False
-    return wf_env != request_env
-
-
-def _resolve_workflow(name: str, environment: str):
-    """按名称查找当前环境下可触发的工作流，找不到或未启用返回 None。
-
-    优先查内存注册表（预置内容社区工作流），未命中回退到工作流存储，使经
-    CRUD 新建的工作流也能被触发；两处都要做环境匹配，实现环境间隔离。
-    单条触发与批量触发共用这一处判定，避免两条路径对「什么算可触发」
-    给出不同答案。
-    """
-    workflow = get_registry().get(name)
-    if workflow is None or _env_mismatch(workflow.environment, environment):
-        workflow = get_workflow_store().get_by_name(name)
-        if workflow is not None and _env_mismatch(workflow.environment, environment):
-            workflow = None
-    if workflow is None or not workflow.active:
-        return None
-    return workflow
-
-
-def _missing_workflow_detail(name: str, environment: str) -> str:
-    """统一「工作流不可触发」的文案，单条与批量回执里的措辞保持一致。"""
-    return f"工作流模板不存在或未启用：{name}（环境 {environment}）"
-
+app.include_router(topic_router)
 
 
 @app.get("/health", tags=["system"], summary="健康检查")
@@ -168,11 +134,11 @@ def trigger_event(
     不会重复入队；未携带则该键的请求每次都会生成新回执。
     """
     # 1. 模板查找：触发标识必须对应一个已启用的工作流（含环境匹配）。
-    workflow = _resolve_workflow(event.name, env.environment)
+    workflow = resolve_workflow(event.name, env.environment)
     if workflow is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=_missing_workflow_detail(event.name, env.environment),
+            detail=missing_workflow_detail(event.name, env.environment),
         )
 
     store = get_idempotency_store()
@@ -270,7 +236,7 @@ def trigger_events_batch(
     activities: list[dict] = []
 
     for index, event in enumerate(payload.events):
-        workflow = _resolve_workflow(event.name, env.environment)
+        workflow = resolve_workflow(event.name, env.environment)
         if workflow is None:
             results.append(
                 BatchTriggerItem(
@@ -278,7 +244,7 @@ def trigger_events_batch(
                     name=event.name,
                     subscriber_id=event.to.subscriber_id,
                     status="rejected",
-                    error=_missing_workflow_detail(event.name, env.environment),
+                    error=missing_workflow_detail(event.name, env.environment),
                 )
             )
             continue

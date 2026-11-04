@@ -99,6 +99,22 @@ class Subscriber(BaseModel):
         return bool(self.address_for(channel))
 
 
+class Topic(BaseModel):
+    """分组：按主题归在一起的订阅者集合。
+
+    分组只描述「谁属于哪一组」，成员各自的渠道绑定与偏好照旧在投递阶段
+    生效；触发时按分组广播，业务侧不必把一长串订阅者标识塞进请求体。
+    标识是寻址键（触发与成员接口都按它定位），``name`` 只用于展示。
+    """
+
+    id: str = Field(description="分组唯一标识")
+    name: str = Field(description="分组名称（展示用）")
+    description: Optional[str] = Field(default=None, description="分组说明")
+    environment: Environment = Field(default=Environment.DEVELOPMENT)
+    created_at: datetime = Field(default_factory=_now_utc)
+    updated_at: datetime = Field(default_factory=_now_utc)
+
+
 class Message(BaseModel):
     """消息：一次触发投递产生的执行实例。
 

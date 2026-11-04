@@ -39,6 +39,7 @@ JSONL 投递存储取文件 ``stat``，Postgres 取表的写入计数。
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import itertools
@@ -52,6 +53,7 @@ from pathlib import Path
 from typing import NamedTuple, Optional
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from .storage import get_storage
@@ -228,6 +230,15 @@ def get_read_store() -> ReadStateStore:
 # 上限取接口允许的最大 limit（200），更早的消息只计入 total / unread。
 CACHE_MAX_SUBSCRIBERS = 256
 CACHE_MAX_ITEMS = 200
+
+# 实时推送的默认轮询间隔与心跳节奏。文件后端没有变更通知，只能按版本号轮询；
+# 1 秒是「人眼能感觉到实时」与「不为空转烧 CPU」之间的折中，客户端可以按需调大。
+DEFAULT_STREAM_INTERVAL = 1.0
+MAX_STREAM_INTERVAL = 30.0
+# 连续这么多次轮询没有变化时发一条 SSE 注释心跳：中间的代理会掐掉长时间无数据的连接。
+STREAM_HEARTBEAT_POLLS = 15
+# 每次推送携带的条目数：首帧要够填满首屏，又不该把整份收件箱塞进一个事件。
+DEFAULT_STREAM_ITEMS = 20
 
 # 存储后端未提供 revision 时使用的兜底序号：每次都视为已变化，
 # 即退化为不缓存——正确性优先于命中率。
@@ -658,6 +669,254 @@ def _time_bound(raw: Optional[str], name: str) -> Optional[datetime]:
     return stamp
 
 
+# ---------------------------------------------------------------- 实时推送
+
+
+def _sse(event: str, payload: dict, event_id: Optional[str] = None) -> str:
+    """拼一帧 SSE 报文：``id`` 可选，``data`` 一定是单行 JSON。"""
+    lines: list[str] = []
+    if event_id:
+        lines.append(f"id: {event_id}")
+    lines.append(f"event: {event}")
+    lines.append("data: " + json.dumps(payload, ensure_ascii=False))
+    return "\n".join(lines) + "\n\n"
+
+
+def _stream_payload(snapshot: "InboxSnapshot", limit: int) -> dict:
+    return {
+        "unread": snapshot.unread,
+        "total": snapshot.total,
+        "items": snapshot.items[:limit],
+    }
+
+
+async def iter_inbox_events(
+    subscriber_id: str,
+    *,
+    limit: int = DEFAULT_STREAM_ITEMS,
+    interval: float = DEFAULT_STREAM_INTERVAL,
+    max_events: Optional[int] = None,
+    max_polls: Optional[int] = None,
+    sleep=asyncio.sleep,
+):
+    """按版本变化持续产出收件箱事件（SSE）。
+
+    首帧 ``ready`` 带上当前列表，客户端不必再发一次 ``GET /v1/inbox``；之后只在
+    「收件箱来源 + 已读状态」的版本变化时推 ``inbox``，没变化就只发注释心跳。
+    连接断开时 ``StreamingResponse`` 会关闭生成器，不需要额外的停止信号。
+
+    写成异步生成器是为了不占线程池：同步生成器的 ``sleep`` 在线程池线程里执行，
+    几十个空闲连接就能把默认容量占满，连带拖慢其它同步端点。这里只有读文件
+    那一步走 ``to_thread``，等待期间不占线程。
+
+    两个上限参数只给测试与短连接用：``max_events`` 限制产出的帧数，
+    ``max_polls`` 限制轮询轮数，端点不传时按连接生命周期一直跑。
+    """
+    snapshot = await asyncio.to_thread(_snapshot, subscriber_id)
+    revision = await asyncio.to_thread(_revision, subscriber_id)
+    yield _sse("ready", _stream_payload(snapshot, limit))
+    emitted = 1
+    if max_events is not None and emitted >= max_events:
+        return
+
+    idle = 0
+    polls = 0
+    while True:
+        if max_polls is not None and polls >= max_polls:
+            return
+        await sleep(interval)
+        polls += 1
+        idle += 1
+        if idle % STREAM_HEARTBEAT_POLLS == 0:
+            yield ": keep-alive\n\n"
+            emitted += 1
+            if max_events is not None and emitted >= max_events:
+                return
+
+        current = await asyncio.to_thread(_revision, subscriber_id)
+        if current == revision:
+            continue
+        revision = current
+        snapshot = await asyncio.to_thread(_snapshot, subscriber_id)
+        yield _sse("inbox", _stream_payload(snapshot, limit))
+        emitted += 1
+        if max_events is not None and emitted >= max_events:
+            return
+
+
+@router.get(
+    "/stream",
+    summary="实时订阅收件箱变化（SSE）",
+    description=(
+        "以 ``text/event-stream`` 持续推送收件箱变化：首帧 ``ready`` 给出当前"
+        "未读数、总数与最近消息，之后每次来源或已读状态变化推一帧 ``inbox``。\n\n"
+        "事件格式::\n\n"
+        "    event: inbox\n"
+        "    data: {\"unread\": 3, \"total\": 12, \"items\": [...]}\n\n"
+        "连接空闲时每 15 个轮询周期发一条注释心跳（``: keep-alive``），"
+        "避免中间代理掐掉长时间无数据的连接。客户端断开即结束。"
+    ),
+)
+def stream_inbox(
+    subscriber_id: str = Query(alias="subscriberId", min_length=1, description="订阅者唯一标识"),
+    limit: int = Query(
+        default=DEFAULT_STREAM_ITEMS, ge=1, le=MAX_INBOX_LIMIT, description="每帧携带的条数"
+    ),
+    interval: float = Query(
+        default=DEFAULT_STREAM_INTERVAL,
+        ge=0.1,
+        le=MAX_STREAM_INTERVAL,
+        description="轮询间隔（秒），越小越实时，越大越省资源",
+    ),
+) -> StreamingResponse:
+    return StreamingResponse(
+        iter_inbox_events(subscriber_id, limit=limit, interval=interval),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            # 反向代理（nginx 等）默认把响应攒满缓冲区再发，SSE 需要逐帧下发。
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# ---------------------------------------------------------------- 未读聚合
+
+
+class UnreadSummary(NamedTuple):
+    """未读计数的聚合结果：总数 + 按工作流分组 + 最近一条时间。"""
+
+    unread: int
+    total: int
+    by_workflow: list[dict]
+    latest_at: Optional[str]
+
+
+def _build_unread_summary(subscriber_id: str) -> UnreadSummary:
+    """扫描收件箱，按工作流汇总未读与总数。"""
+    items = _collect_inbox(subscriber_id)
+    buckets: dict[str, list[int]] = {}
+    latest: Optional[datetime] = None
+    for item in items:
+        workflow = item.get("workflow") or "unknown"
+        bucket = buckets.setdefault(workflow, [0, 0])
+        bucket[1] += 1
+        if not item.get("read"):
+            bucket[0] += 1
+        stamp = _sort_ts(item)
+        if latest is None or stamp > latest:
+            latest = stamp
+
+    rows = [
+        {"workflow": name, "unread": counts[0], "total": counts[1]}
+        for name, counts in buckets.items()
+    ]
+    # 未读多的排前面；同未读按总量、再按名称，保证顺序稳定。
+    rows.sort(key=lambda row: (-row["unread"], -row["total"], row["workflow"]))
+    return UnreadSummary(
+        unread=sum(row["unread"] for row in rows),
+        total=len(items),
+        by_workflow=rows,
+        latest_at=None if latest is None or latest == _EPOCH else latest.isoformat(),
+    )
+
+
+class UnreadSummaryCache:
+    """按版本号缓存未读聚合（LRU，容量与收件箱快照一致）。
+
+    不复用 ``InboxCache`` 的原因：快照只保留最近 200 条，用它算不出「按工作流
+    分组」的完整分布；聚合结果轻得多（每个工作流一行），可以单独缓存。
+    """
+
+    def __init__(self, max_subscribers: int = CACHE_MAX_SUBSCRIBERS) -> None:
+        self._max_subscribers = max(1, max_subscribers)
+        self._entries: "OrderedDict[str, tuple[object, UnreadSummary]]" = OrderedDict()
+        self._lock = threading.Lock()
+        self._hits = 0
+        self._misses = 0
+
+    def get(self, subscriber_id: str, revision: object) -> Optional[UnreadSummary]:
+        with self._lock:
+            entry = self._entries.get(subscriber_id)
+            if entry is not None and entry[0] == revision:
+                self._entries.move_to_end(subscriber_id)
+                self._hits += 1
+                return entry[1]
+            self._misses += 1
+            return None
+
+    def put(
+        self, subscriber_id: str, revision: object, summary: UnreadSummary
+    ) -> UnreadSummary:
+        with self._lock:
+            self._entries[subscriber_id] = (revision, summary)
+            self._entries.move_to_end(subscriber_id)
+            while len(self._entries) > self._max_subscribers:
+                self._entries.popitem(last=False)
+        return summary
+
+    def invalidate(self, subscriber_id: Optional[str] = None) -> None:
+        with self._lock:
+            if subscriber_id is None:
+                self._entries.clear()
+            else:
+                self._entries.pop(subscriber_id, None)
+
+    def stats(self) -> dict:
+        with self._lock:
+            return {
+                "subscribers": len(self._entries),
+                "hits": self._hits,
+                "misses": self._misses,
+            }
+
+
+_unread_cache: Optional[UnreadSummaryCache] = None
+_unread_cache_lock = threading.Lock()
+
+
+def get_unread_cache() -> UnreadSummaryCache:
+    """获取全局未读聚合缓存单例（惰性初始化）。"""
+    global _unread_cache
+    with _unread_cache_lock:
+        if _unread_cache is None:
+            _unread_cache = UnreadSummaryCache()
+        return _unread_cache
+
+
+def unread_summary(subscriber_id: str) -> UnreadSummary:
+    """取未读聚合：版本未变复用缓存，否则重算并回填。"""
+    cache = get_unread_cache()
+    revision = _revision(subscriber_id)
+    cached = cache.get(subscriber_id, revision)
+    if cached is not None:
+        return cached
+    return cache.put(subscriber_id, revision, _build_unread_summary(subscriber_id))
+
+
+@router.get(
+    "/unread",
+    summary="未读计数聚合（按工作流）",
+    description=(
+        "返回该订阅者的未读总数、消息总数、按工作流分组的未读分布，以及最近一条"
+        "消息的时间。只统计 In-app 消息，口径与 ``GET /v1/inbox`` 一致：同一张聚合"
+        "卡片无论被多少次互动改写都只算一条。结果按版本号缓存，任一来源写入或标记"
+        "已读后自动重算。"
+    ),
+)
+def get_unread_summary(
+    subscriber_id: str = Query(alias="subscriberId", min_length=1, description="订阅者唯一标识"),
+) -> dict:
+    summary = unread_summary(subscriber_id)
+    return {
+        "unread": summary.unread,
+        "total": summary.total,
+        "byWorkflow": summary.by_workflow,
+        "latestAt": summary.latest_at,
+    }
+
+
 @router.get("")
 def get_inbox(
     subscriber_id: str = Query(alias="subscriberId", min_length=1, description="订阅者唯一标识"),
@@ -757,16 +1016,24 @@ def mark_read(req: ReadRequest) -> dict:
 
 __all__ = [
     "DEFAULT_INBOX_LIMIT",
+    "DEFAULT_STREAM_INTERVAL",
+    "DEFAULT_STREAM_ITEMS",
     "MAX_INBOX_LIMIT",
+    "MAX_STREAM_INTERVAL",
     "router",
     "InboxCache",
     "InboxCursorError",
     "InboxSnapshot",
     "ReadStateStore",
+    "UnreadSummary",
+    "UnreadSummaryCache",
     "decode_cursor",
     "encode_cursor",
     "get_inbox_cache",
     "get_read_store",
+    "get_unread_cache",
+    "iter_inbox_events",
+    "unread_summary",
     "_collect_inbox",
     "_filter_items",
     "_is_inapp",
