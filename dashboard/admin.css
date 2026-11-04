@@ -1,0 +1,163 @@
+/* 运营后台的页面级样式 —— 复用 styles.css 的变量与卡片，只补表格、表单与图表 */
+:root {
+  --ok: #16a34a;
+  --warn: #d97706;
+}
+
+/* 侧栏：跳转到页面内的分区 + 返回工作台 */
+aside .nav li { user-select: none; }
+aside .back-link {
+  display: inline-block; margin-bottom: 8px; color: var(--accent);
+  text-decoration: none; font-weight: 600;
+}
+aside .back-link:hover { text-decoration: underline; }
+
+main section { margin-bottom: 34px; scroll-margin-top: 18px; }
+section > h1 { font-size: 20px; }
+
+/* ---------- 顶栏控件 ---------- */
+.field-inline { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.input {
+  font: inherit; font-size: 12.5px; color: var(--text);
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 9px; padding: 8px 10px; outline: none;
+  transition: border-color .15s, box-shadow .15s;
+}
+.input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(99,102,241,.12); }
+.btn-sm { padding: 7px 12px; font-size: 12px; }
+
+/* ---------- 错误横幅 ---------- */
+#adm-banner {
+  display: none; align-items: center; gap: 10px;
+  background: #fff1f2; color: #be123c; border: 1px solid #fecdd3;
+  padding: 10px 14px; border-radius: 10px; font-size: 13px; margin-bottom: 18px;
+}
+#adm-banner.show { display: flex; }
+#adm-banner .retry {
+  margin-left: auto; border: 1px solid #fecdd3; background: #fff; color: #be123c;
+  font-size: 12px; padding: 5px 12px; border-radius: 7px; cursor: pointer; font-weight: 600;
+}
+#adm-banner .close-banner { cursor: pointer; font-size: 15px; opacity: .6; margin-left: 4px; }
+
+/* ---------- 统计卡 ---------- */
+#adm-kpi .stat .value { font-variant-numeric: tabular-nums; }
+
+/* ---------- 表格 ---------- */
+.table-wrap { overflow-x: auto; }
+.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.tbl th {
+  text-align: left; font-weight: 600; color: var(--muted); font-size: 11.5px;
+  padding: 8px 10px; border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+.tbl td { padding: 11px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.tbl tbody tr:last-child td { border-bottom: none; }
+.tbl tbody tr:hover { background: #fafbff; }
+.tbl .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tbl .ops { text-align: right; white-space: nowrap; }
+.tbl .muted { color: var(--muted); font-size: 11.5px; }
+.tbl-empty { text-align: center; color: var(--muted); padding: 26px 8px; font-size: 12.5px; }
+
+/* 成功率进度条：数字与条形同格 */
+.rate-cell { display: flex; align-items: center; gap: 8px; min-width: 118px; }
+.rate-bar { flex: 1; height: 6px; border-radius: 99px; background: #eef0f6; overflow: hidden; }
+.rate-bar i { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg,#6366f1,#8b5cf6); }
+.rate-bar i.low { background: linear-gradient(90deg,#f59e0b,#e11d48); }
+.rate-text { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 11.5px; min-width: 44px; text-align: right; }
+
+/* 工作流状态灯 */
+.state { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; }
+.state i { width: 7px; height: 7px; border-radius: 50%; background: #cbd0e0; }
+.state.on { color: var(--ok); }
+.state.on i { background: var(--ok); box-shadow: 0 0 0 3px rgba(22,163,74,.14); }
+.state.off { color: var(--muted); }
+.tbl .btn-ghost { padding: 5px 10px; font-size: 11.5px; border-radius: 8px; }
+.tbl .btn-ghost + .btn-ghost { margin-left: 4px; }
+.tbl .btn-ghost.danger { color: #be123c; border-color: #fecdd3; }
+
+/* ---------- 失败原因 / 排行 / 状态分布 ---------- */
+.reason-list, .rank-list, .status-list { display: flex; flex-direction: column; gap: 10px; }
+.reason {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px;
+  font-size: 12px; color: var(--text);
+}
+.reason .bar { grid-column: 1 / -1; height: 6px; border-radius: 99px; background: #f2f4fb; overflow: hidden; }
+.reason .bar i { display: block; height: 100%; background: #fda4af; border-radius: 99px; }
+.reason .count { color: var(--muted); font-variant-numeric: tabular-nums; }
+.reason .txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.rank { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12.5px; }
+.rank .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.rank .nums { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rank .fail { color: #be123c; }
+
+.status-row { display: flex; align-items: center; gap: 10px; font-size: 12.5px; }
+.status-row .name { width: 82px; color: var(--muted); }
+.status-row .bar { flex: 1; height: 8px; border-radius: 99px; background: #f2f4fb; overflow: hidden; }
+.status-row .bar i { display: block; height: 100%; border-radius: 99px; background: var(--accent); }
+.status-row .bar i[data-s="failed"] { background: #e11d48; }
+.status-row .bar i[data-s="skipped"] { background: #f59e0b; }
+.status-row .bar i[data-s="sent"] { background: #16a34a; }
+.status-row .count { width: 46px; text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ---------- 每日投递趋势 ---------- */
+.trend-card { margin-top: 16px; }
+.trend { display: flex; align-items: flex-end; gap: 10px; height: 150px; padding-top: 6px; }
+.trend .col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 6px; min-width: 0; }
+.trend .stack {
+  width: 100%; max-width: 46px; height: 110px;
+  display: flex; flex-direction: column; justify-content: flex-end; gap: 2px;
+}
+.trend .seg { border-radius: 4px; min-height: 0; }
+.trend .seg.sent { background: linear-gradient(180deg,#4ade80,#16a34a); }
+.trend .seg.failed { background: linear-gradient(180deg,#fb7185,#e11d48); }
+.trend .cap { font-size: 10.5px; color: var(--muted); white-space: nowrap; }
+.trend .val { font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* ---------- 触发测试 ---------- */
+.trigger-wrap { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.form { display: flex; flex-direction: column; gap: 14px; }
+.form-row { display: flex; flex-direction: column; gap: 6px; }
+.lbl { font-size: 12px; font-weight: 600; color: var(--muted); }
+.input.code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px; line-height: 1.6; resize: vertical;
+}
+.checks { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12.5px; }
+.checks label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+.checks input { accent-color: var(--accent); }
+.hint-line { font-size: 11.5px; color: var(--muted); margin: 0; }
+.hint-line code { background: #f2f4fb; padding: 1px 4px; border-radius: 4px; font-size: 11px; }
+.adv { border-top: 1px dashed var(--border); padding-top: 12px; }
+.adv summary { cursor: pointer; font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 10px; }
+.adv .form-row { margin-bottom: 10px; }
+.form-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.form-actions .muted { font-size: 12px; }
+
+.receipt { min-height: 180px; }
+.receipt-body { font-size: 12.5px; line-height: 1.7; }
+.receipt-body .kv { display: flex; gap: 8px; padding: 4px 0; }
+.receipt-body .kv .k { width: 92px; color: var(--muted); flex-shrink: 0; }
+.receipt-body .kv .v { word-break: break-all; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.receipt-body.error { color: #be123c; }
+.receipt-body.ok { color: var(--text); }
+.receipt .next { margin-top: 12px; font-size: 12px; color: var(--muted); }
+
+/* ---------- 响应式 ---------- */
+@media (max-width: 980px) {
+  /* minmax(0, 1fr) 而不是 1fr：后者的最小尺寸是内容的 min-content，渠道表格
+     有七列，会把整个网格撑得比视口还宽，页面上表现为右侧内容被切掉。 */
+  .trigger-wrap { grid-template-columns: minmax(0, 1fr); }
+  .cards { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 720px) {
+  .top-actions { flex-wrap: wrap; }
+  .field-inline { flex: 1; }
+  .field-inline .input { flex: 1; }
+  .trend .stack { height: 84px; }
+  /* 窄屏收紧单元格：工作流表格的三个操作按钮在手机上会挤到可视区之外，
+     表格虽然能横向滚动，但「按钮看不见」与「按钮不存在」很难区分。 */
+  .tbl th, .tbl td { padding: 9px 6px; }
+  .tbl .ops { white-space: normal; }
+  .tbl .btn-ghost { padding: 4px 8px; font-size: 11px; }
+  .tbl .muted { display: none; }
+}

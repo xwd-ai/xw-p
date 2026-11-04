@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
 
 from . import config
 from .activity_log import build_activity, record_activities, record_activity
@@ -76,6 +77,16 @@ app = FastAPI(
         "所在的多个渠道（站内信 / 邮件 / 短信 / 推送）。"
     ),
     lifespan=lifespan,
+)
+
+# 展示前端是独立的一组静态文件，与 API 不同源；没有这层中间件时，浏览器会把
+# 页面里的 fetch 全部挡在 CORS 检查上。放行名单由 XW_CORS_ORIGINS 控制。
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=config.CORS_ORIGINS,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
+    max_age=600,
 )
 
 app.include_router(workflow_router)

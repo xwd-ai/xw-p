@@ -48,7 +48,7 @@
 ```
 api/        Python FastAPI：触发 API、管理 API、渠道集成
 engine/     Go：执行引擎、队列消费、provider 分发、digest、死信运维接口
-dashboard/  原生 HTML/CSS/JS 展示前端（仪表盘 + 可视化工作流编排器 + 实时活动流）
+dashboard/  原生 HTML/CSS/JS 展示前端（仪表盘 + 可视化工作流编排器 + 实时活动流 + 运营后台）
 infra/      docker-compose 与基础设施配置
 docs/       文档
 scripts/    演示与辅助脚本
@@ -75,7 +75,9 @@ curl -X POST http://127.0.0.1:8000/v1/events/trigger \
   -d '{"name":"post_commented","to":{"subscriberId":"creator_1","email":"hi@example.com","deviceToken":"fcm-token-9f2c1d","channels":["in_app","push","email"]},"payload":{"post_id":"P-2026-1001","post_title":"我的第一支 Vlog","actor":"小林","comment":"拍得真好，求教程！"}}'
 ```
 
-前端直接打开 `dashboard/index.html` 即可看到内置示例数据；接真实后端时在页面注入 `window.XW_API_BASE` 指向 API 地址。
+前端直接打开 `dashboard/index.html` 即可看到内置示例数据；接真实后端时在页面注入 `window.XW_API_BASE` 指向 API 地址。页面与 API 通常不同源，服务端已开启 CORS（默认放行任意来源，需要收紧时用 `XW_CORS_ORIGINS` 给逗号分隔的白名单）。
+
+运营后台在 `dashboard/admin.html`：按环境查看投递统计、渠道成功率、失败原因与活动汇总，启停或复制工作流，并用自定义 payload 对任一工作流做触发测试。
 
 ## 能力亮点
 
@@ -99,7 +101,7 @@ api/.venv/bin/python -m pytest api/tests -q
 # Go：引擎（含并发路径的竞态检测）
 cd engine && go test ./... && go test -race ./internal/provider/ ./internal/pipeline/ ./internal/runner/ ./internal/webhook/ ./cmd/engine/
 
-# 前端：收件箱组件的纯逻辑测试（Node 内置 runner，无第三方依赖）
+# 前端：收件箱组件与运营后台的纯逻辑测试（Node 内置 runner，无第三方依赖）
 node --test 'dashboard/tests/*.test.js'
 ```
 

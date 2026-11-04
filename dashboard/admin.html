@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>xw-notify · 运营后台</title>
+<link rel="stylesheet" href="styles.css" />
+<link rel="stylesheet" href="admin.css" />
+</head>
+<body>
+  <aside>
+    <div class="brand">
+      <div class="logo">✦</div>
+      <div><b>xw-notify</b><span>Operations Console</span></div>
+    </div>
+    <ul class="nav">
+      <li class="active" data-jump="sec-overview"><span class="ic">◧</span>运营概览</li>
+      <li data-jump="sec-workflows"><span class="ic">⇄</span>工作流</li>
+      <li data-jump="sec-trigger"><span class="ic">▶</span>触发测试</li>
+      <li data-jump="sec-summary"><span class="ic">≣</span>活动汇总</li>
+    </ul>
+    <div class="sidebar-foot">
+      <a class="back-link" href="index.html">← 返回工作台</a><br />
+      xw-notify v0.1 · 自主实现<br />Python · Go · 无 TS
+    </div>
+  </aside>
+
+  <main>
+    <header class="top">
+      <div class="crumb">运营 / <b>管理后台</b></div>
+      <div class="top-actions">
+        <label class="field-inline">
+          <span>环境</span>
+          <select id="adm-env" class="input">
+            <option value="development">development</option>
+            <option value="production">production</option>
+          </select>
+        </label>
+        <label class="field-inline">
+          <span>窗口</span>
+          <select id="adm-days" class="input">
+            <option value="1">最近 1 天</option>
+            <option value="7" selected>最近 7 天</option>
+            <option value="30">最近 30 天</option>
+            <option value="90">最近 90 天</option>
+          </select>
+        </label>
+        <button class="btn btn-ghost" id="adm-refresh">↻ 刷新</button>
+      </div>
+    </header>
+
+    <div id="adm-banner" role="alert">
+      <span>⚠︎</span><span id="adm-banner-text">后端服务未连接</span>
+      <button class="retry" id="adm-banner-retry">重试</button>
+      <span class="close-banner" id="adm-banner-close">✕</span>
+    </div>
+
+    <!-- ===== 运营概览 ===== -->
+    <section id="sec-overview">
+      <h1>运营概览</h1>
+      <p class="sub">按执行明细聚合的投递结果：一条记录对应一次「触发 × 渠道」，跳过的渠道不计入成功率分母</p>
+      <div class="grid" id="adm-kpi"></div>
+
+      <div class="cards">
+        <div class="card">
+          <h3>渠道明细 <span class="hint">按尝试数排序</span></h3>
+          <div class="table-wrap">
+            <table class="tbl" id="adm-channels">
+              <thead>
+                <tr><th>渠道</th><th class="num">尝试</th><th class="num">成功</th><th class="num">失败</th><th class="num">跳过</th><th>成功率</th><th class="num">P95</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card">
+          <h3>失败原因 <span class="hint">空白压缩后归并</span></h3>
+          <div id="adm-reasons" class="reason-list"></div>
+        </div>
+      </div>
+
+      <div class="card trend-card">
+        <h3>每日投递 <span class="hint">绿=成功 · 红=失败</span></h3>
+        <div id="adm-trend" class="trend"></div>
+      </div>
+    </section>
+
+    <!-- ===== 工作流 ===== -->
+    <section id="sec-workflows">
+      <h1>工作流</h1>
+      <p class="sub">启停只翻转运营状态、不推进版本号；停用后单条触发、批量触发与分组广播都会拒绝新事件</p>
+      <div class="card">
+        <div class="card-head">
+          <span class="muted" id="adm-wf-meta">—</span>
+          <button class="btn btn-ghost btn-sm" id="adm-wf-refresh">刷新列表</button>
+        </div>
+        <div class="table-wrap">
+          <table class="tbl" id="adm-workflows">
+            <thead>
+              <tr><th>工作流</th><th class="num">版本</th><th class="num">步骤</th><th>环境</th><th>状态</th><th class="ops">操作</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== 触发测试 ===== -->
+    <section id="sec-trigger">
+      <h1>触发测试</h1>
+      <p class="sub">向选中的工作流派一条真实互动事件；回执只表示已受理，投递结果在概览与活动汇总里看</p>
+      <div class="trigger-wrap">
+        <form class="card form" id="adm-trigger-form" novalidate>
+          <div class="form-row">
+            <label class="lbl" for="adm-trigger-workflow">工作流</label>
+            <select class="input" id="adm-trigger-workflow"></select>
+          </div>
+          <div class="form-row">
+            <label class="lbl" for="adm-trigger-subscriber">订阅者标识</label>
+            <input class="input" id="adm-trigger-subscriber" list="adm-subscriber-options"
+                   placeholder="创作者用户 ID，例如 creator_1001" autocomplete="off" />
+            <datalist id="adm-subscriber-options"></datalist>
+          </div>
+          <div class="form-row">
+            <span class="lbl">渠道</span>
+            <div class="checks" id="adm-trigger-channels">
+              <label><input type="checkbox" value="in_app" /> 站内信</label>
+              <label><input type="checkbox" value="email" /> 邮件</label>
+              <label><input type="checkbox" value="sms" /> 短信</label>
+              <label><input type="checkbox" value="push" /> 推送</label>
+            </div>
+            <p class="hint-line">不勾选则由工作流步骤决定分发范围</p>
+          </div>
+          <div class="form-row">
+            <label class="lbl" for="adm-trigger-payload">payload</label>
+            <textarea class="input code" id="adm-trigger-payload" rows="7" spellcheck="false"></textarea>
+            <p class="hint-line">渲染变量；聚合步骤按 <code>post_id</code> 归并同一篇帖子的互动</p>
+          </div>
+          <details class="adv">
+            <summary>收件地址（可选）</summary>
+            <div class="form-row">
+              <label class="lbl" for="adm-trigger-email">邮箱</label>
+              <input class="input" id="adm-trigger-email" placeholder="creator@example.com" autocomplete="off" />
+            </div>
+            <div class="form-row">
+              <label class="lbl" for="adm-trigger-phone">手机号</label>
+              <input class="input" id="adm-trigger-phone" placeholder="+8613800000000" autocomplete="off" />
+            </div>
+            <div class="form-row">
+              <label class="lbl" for="adm-trigger-token">设备 token</label>
+              <input class="input" id="adm-trigger-token" placeholder="推送设备标识" autocomplete="off" />
+            </div>
+          </details>
+          <div class="form-actions">
+            <button class="btn btn-primary" id="adm-trigger-submit" type="submit">▶ 发送测试事件</button>
+            <span class="muted" id="adm-trigger-hint"></span>
+          </div>
+        </form>
+
+        <div class="card receipt" id="adm-receipt">
+          <h3>回执</h3>
+          <div class="receipt-body muted">尚未发送。发送后这里给出触发标识与事务标识，便于对照执行明细。</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== 活动汇总 ===== -->
+    <section id="sec-summary">
+      <h1>活动汇总</h1>
+      <p class="sub">触发事件的状态分布、工作流排行与去重订阅者数；默认跨环境汇总</p>
+      <div class="cards">
+        <div class="card">
+          <h3>状态分布 <span class="hint" id="adm-summary-unique"></span></h3>
+          <div id="adm-summary-status" class="status-list"></div>
+          <p class="hint-line" id="adm-summary-range"></p>
+        </div>
+        <div class="card">
+          <h3>工作流排行 <span class="hint">按触发数</span></h3>
+          <div id="adm-summary-workflows" class="rank-list"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="data.js"></script>
+  <script src="admin_model.js"></script>
+  <script src="admin.js"></script>
+</body>
+</html>

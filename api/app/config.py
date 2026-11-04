@@ -81,6 +81,26 @@ IDEMPOTENCY_TTL = int(_env("XW_IDEMPOTENCY_TTL", "86400"))
 # 用于区分 API Key 与数据隔离，未显式设置时回退 development，保证 demo 开箱即用。
 ENV = _env("XW_ENV", "development")
 
+
+def parse_origins(raw: str | None) -> list[str]:
+    """解析 CORS 白名单：逗号分隔，``*`` 表示全部放行。
+
+    空串按「不限制」处理而不是「全部禁止」：这个配置的意义是收紧，写成空值
+    多半是没配，而不是要把页面挡在门外。
+    """
+    if raw is None or raw.strip() == "":
+        return ["*"]
+    origins = [item.strip().rstrip("/") for item in raw.split(",") if item.strip()]
+    return origins or ["*"]
+
+
+# 展示前端与 API 通常不同源：dashboard/ 是一组静态文件，由任意静态服务器打开，
+# 而 API 在另一个端口。浏览器对这种跨源 fetch 先做 CORS 预检，服务端没有对应
+# 响应头就直接失败——页面上表现为「Failed to fetch」，与后端是否健康无关。
+# 默认放行所有来源：服务不使用 Cookie 鉴权（凭据走 X-Api-Key 头），因此不需要
+# allow_credentials；需要收紧时用 XW_CORS_ORIGINS 给出逗号分隔的白名单。
+CORS_ORIGINS: list[str] = parse_origins(os.getenv("XW_CORS_ORIGINS"))
+
 # 各环境的 API Key：仅当对应环境配置了 Key 时才强制鉴权。
 # 未配置（空）时该环境的写入接口保持开放（demo / 测试友好），
 # 一旦配置，请求须携带匹配的 ``X-Api-Key`` 头，否则返回 401。
