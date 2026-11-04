@@ -399,7 +399,7 @@
       receiptField('受理状态', payload.acknowledged === false ? '未受理' : '已受理'),
     ];
     body.innerHTML = rows.join('')
-      + '<div class="next">' + esc(hint || '已入队。投递由引擎消费后落成执行明细，稍后刷新概览即可看到。') + '</div>';
+      + '<div class="next">' + esc(hint || '已入队。下方会跟随该次触发的逐渠道结果。') + '</div>';
   }
 
   function selectedChannels() {
@@ -432,8 +432,11 @@
       hideBanner();
       renderReceipt(true, ack || {});
       $('adm-trigger-hint').textContent = '已受理 · ' + built.body.name;
-      // 消费是异步的：给引擎一点时间再拉统计，否则看到的是提交前的那一版。
-      setTimeout(function () { refreshAfterTrigger(); }, 1200);
+      // 消费是异步的：先按触发标识跟进该次投递，明细落定后再刷新统计，
+      // 否则看到的是提交前的那一版。
+      const triggerId = (ack && (ack.triggerId || ack.trigger_id)) || '';
+      if (triggerId) trackExecutions(triggerId);
+      else setTimeout(refreshAfterTrigger, 1200);
     } catch (err) {
       noteError(err);
       const hint = err.status === 404
@@ -450,6 +453,108 @@
     loadStats();
     loadSummary();
   }
+
+  /* ============ 执行明细追踪 ============ */
+
+  // 一次触发的逐渠道结果取自下钻接口：活动记录给出「声明了哪些渠道」，明细给出
+  // 每个渠道的结果，缺口由服务端算好。trackSeq 用来作废旧轮询——连点两次发送
+  // 时，前一轮的响应晚到也不能覆盖新一轮的明细。
+  let trackSeq = 0;
+  let trackTimer = null;
+  let lastTriggerId = '';
+
+  function execMeta(text) {
+    $('adm-exec-meta').textContent = text || '';
+  }
+
+  function renderExecutionRows(rows) {
+    const body = $('adm-exec-table').querySelector('tbody');
+    if (!rows.length) {
+      body.innerHTML = emptyRow(5, '等待消费…');
+      return;
+    }
+    body.innerHTML = rows.map(function (row) {
+      const impl = row.provider || '—';
+      const extra = [];
+      if (row.attemptCount > 1) extra.push('尝试 ' + row.attemptCount + ' 次');
+      if (row.fallback) extra.push('已回退');
+      const implCell = '<b>' + esc(impl) + '</b>'
+        + (extra.length ? '<div class="muted">' + esc(extra.join(' · ')) + '</div>' : '')
+        + (row.attemptsText && row.attemptCount > 1
+          ? '<div class="muted exec-attempts">' + esc(row.attemptsText) + '</div>'
+          : '');
+      return '<tr>'
+        + '<td><b>' + esc(row.label) + '</b><div class="muted">' + esc(row.channel) + '</div></td>'
+        + '<td><span class="exec-status ' + row.tone + '">' + esc(row.statusText) + '</span></td>'
+        + '<td>' + implCell + '</td>'
+        + '<td class="num">' + esc(row.durationText) + '</td>'
+        + '<td class="exec-reason">' + esc(row.reason || '—') + '</td>'
+        + '</tr>';
+    }).join('');
+  }
+
+  function stopTracking() {
+    trackSeq += 1;
+    if (trackTimer) {
+      clearTimeout(trackTimer);
+      trackTimer = null;
+    }
+  }
+
+  async function trackExecutions(triggerId) {
+    stopTracking();
+    const seq = trackSeq;
+    lastTriggerId = String(triggerId || '');
+    if (!lastTriggerId) {
+      $('adm-executions').hidden = true;
+      return;
+    }
+    $('adm-executions').hidden = false;
+    renderExecutionRows([]);
+    execMeta('等待消费…');
+
+    const observed = [];
+    let attempts = 0;
+
+    const step = async function () {
+      if (seq !== trackSeq) return;
+      attempts += 1;
+      let view = null;
+      try {
+        const detail = await request(M._internal.buildActivityDetailPath(lastTriggerId));
+        view = M.executionTrack(detail);
+      } catch (err) {
+        if (seq !== trackSeq) return;
+        noteError(err);
+        // 连不上时继续轮询只会反复弹同一条错误，停在这里等用户手动重试。
+        execMeta('明细拉取失败：' + err.message);
+        return;
+      }
+      if (seq !== trackSeq) return;
+
+      observed.push(view.rows.length);
+      renderExecutionRows(view.rows);
+      const decision = M._internal.pollDecision(observed, attempts, {
+        complete: view.complete,
+        missing: view.missing,
+      });
+      execMeta(M.executionHint(view.summary, decision));
+      if (view.truncated) execMeta(M.executionHint(view.summary, decision) + ' · 明细超过单次上限，只显示前 200 条');
+
+      if (decision.again) {
+        trackTimer = setTimeout(step, M._internal.EXECUTION_POLL_INTERVAL);
+      } else {
+        trackTimer = null;
+        refreshAfterTrigger();
+      }
+    };
+
+    step();
+  }
+
+  $('adm-exec-refresh').addEventListener('click', function () {
+    if (lastTriggerId) trackExecutions(lastTriggerId);
+  });
 
   $('adm-trigger-form').addEventListener('submit', submitTrigger);
 

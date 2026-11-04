@@ -80,6 +80,20 @@
     return '/v1/workflows/' + encodeURIComponent(String(id)) + '/duplicate';
   }
 
+  // 执行明细：触发回执只说明「已受理」，真正投不投得出去要看逐渠道的结果。
+  // 数据取自单次触发的下钻接口——它同时给出活动记录（声明了哪些渠道）、逐渠道
+  // 明细与「声明了却没有记录」的缺口，前端不必自己拼这三件事。
+  //
+  // 消费是异步的：明细要等消费方跑完才出现。轮询不是等结果，而是等「这一轮
+  // 写完」——条数连续两次不变就停；一直为空则等到次数上限，免得对端没起时
+  // 每个周期打一次接口。
+  const EXECUTION_POLL_MAX = 6;
+  const EXECUTION_POLL_INTERVAL = 900;
+
+  function buildActivityDetailPath(triggerId) {
+    return '/v1/admin/activity/' + encodeURIComponent(String(triggerId || '').trim());
+  }
+
   /* ============ 触发表单 ============ */
 
   function parsePayload(text) {
@@ -204,15 +218,18 @@
     const rows = (stats && stats.channels) || [];
     return rows.map(function (row) {
       const rate = Number(row.success_rate);
-      const safeRate = isFinite(rate) ? Math.max(0, Math.min(100, rate)) : 0;
+      const attempted = Number(row.attempted) || 0;
+      // 一次都没尝试的渠道（全被偏好拦下）没有成功率可言：后端在这种情形下
+      // 给的是 100，直接展示会变成「邮件 100% 成功，只是发了 0 次」。
+      const safeRate = attempted && isFinite(rate) ? Math.max(0, Math.min(100, rate)) : 0;
       return {
         channel: String(row.channel || ''),
         label: channelLabel(row.channel),
-        attempted: Number(row.attempted) || 0,
+        attempted: attempted,
         sent: Number(row.sent) || 0,
         failed: Number(row.failed) || 0,
         skipped: Number(row.skipped) || 0,
-        rateText: formatPct(rate),
+        rateText: attempted ? formatPct(rate) : '—',
         width: safeRate,
         avgText: formatMs(row.avg_ms),
         p95Text: formatMs(row.p95_ms),
@@ -287,6 +304,155 @@
     };
   }
 
+  /* ============ 执行明细归一 ============ */
+
+  const EXECUTION_STATUS_LABELS = { sent: '已投递', failed: '失败', skipped: '跳过' };
+  const EXECUTION_STATUS_TONES = { sent: 'ok', failed: 'fail', skipped: 'mute' };
+
+  function executionLabel(status) {
+    return EXECUTION_STATUS_LABELS[status] || status || '未知';
+  }
+
+  /**
+   * 把一页执行明细折成可渲染的行。
+   *
+   * 排序按「写入时刻倒序、时间相同时记录标识倒序」：一次触发会在同一秒写
+   * 出多条渠道结果，只按时间排会让同一个响应里的顺序取决于存储的返回顺序，
+   * 两次拉取看起来像在跳。后端已经这么排过，这里再排一次是为了在手工拼的
+   * 分页合并结果上也稳定。
+   */
+  function executionRows(page) {
+    const items = (page && Array.isArray(page.items)) ? page.items : [];
+    return items.map(function (item) {
+      const record = item || {};
+      const status = String(record.status || 'sent');
+      const attempts = Array.isArray(record.attempts) ? record.attempts.map(String) : [];
+      return {
+        id: String(record.id || ''),
+        channel: String(record.channel || ''),
+        label: channelLabel(record.channel),
+        status: status,
+        statusText: executionLabel(status),
+        tone: EXECUTION_STATUS_TONES[status] || 'mute',
+        provider: record.provider ? String(record.provider) : '',
+        attemptCount: attempts.length,
+        attemptsText: attempts.join(' → '),
+        fallback: record.fallback === true,
+        durationText: formatMs(record.duration_ms),
+        // 失败给的是原因，跳过给的是命中的偏好层级，两种都摆在同一列：
+        // 「为什么没收到」在这两种情况下是同一个问题。
+        reason: record.reason ? String(record.reason) : '',
+        createdAt: String(record.created_at || ''),
+      };
+    }).sort(function (a, b) {
+      if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? 1 : -1;
+      if (a.id === b.id) return 0;
+      return a.id < b.id ? 1 : -1;
+    });
+  }
+
+  /** 明细汇总；成功率分母只算真正尝试过的渠道，与统计接口同一口径。 */
+  function executionSummary(rows) {
+    const list = rows || [];
+    const counts = { sent: 0, failed: 0, skipped: 0 };
+    let unknown = 0;
+    list.forEach(function (row) {
+      const status = row && row.status;
+      if (counts[status] === undefined) unknown += 1;
+      else counts[status] += 1;
+    });
+    const attempted = counts.sent + counts.failed;
+    return {
+      total: list.length,
+      sent: counts.sent,
+      failed: counts.failed,
+      skipped: counts.skipped,
+      unknown: unknown,
+      attempted: attempted,
+      rateText: attempted ? formatPct((counts.sent * 100) / attempted) : '—',
+    };
+  }
+
+  /** 期望的渠道里还没出现结果的部分。 */
+  function missingChannels(expected, rows) {
+    const want = Array.isArray(expected) ? expected : [];
+    const seen = (rows || []).map(function (row) { return row && row.channel; });
+    return want.filter(function (channel) { return seen.indexOf(channel) < 0; });
+  }
+
+  /**
+   * 把单次触发的下钻结果折成面板要用的视图。
+   *
+   * 「声明了哪些渠道」取自活动记录而不是工作流步骤：同一条工作流在不同订阅者
+   * 身上会展开成不同的渠道（没有邮箱就没有邮件），只有活动记录里那份才是本次
+   * 真正入队的列表。缺口优先用服务端算好的 `missingChannels`，它已经按同一条
+   * 口径比对过；字段缺失时再自己比一遍。
+   */
+  function executionTrack(detail) {
+    const data = detail || {};
+    const activity = data.activity || {};
+    const declared = Array.isArray(activity.channels) ? activity.channels.map(String) : [];
+    const rows = executionRows({ items: data.executions || [] });
+    const missing = Array.isArray(data.missingChannels)
+      ? data.missingChannels.map(String)
+      : missingChannels(declared, rows);
+    return {
+      rows: rows,
+      summary: executionSummary(rows),
+      declared: declared,
+      missing: missing,
+      complete: missing.length === 0,
+      truncated: data.executionsTruncated === true,
+    };
+  }
+
+  /**
+   * 是否还要再取一次。
+   *
+   * 判据是「声明的渠道都有结果」——一次触发写出的明细条数等于声明渠道数，
+   * 凑齐就说明这一轮写完了。没凑齐时看条数是否还在增长：连着两次一样说明
+   * 剩下的渠道这次没有写（例如消息还在队列里），继续等只会白等，如实停下
+   * 并把缺口写进提示语。
+   */
+  function pollDecision(observed, attempts, context) {
+    const opts = context || {};
+    const counts = Array.isArray(observed) ? observed : [];
+    const tries = Number(attempts) || 0;
+    const missing = opts.missing || [];
+
+    if (opts.complete === true) return { again: false, reason: 'complete', missing: [] };
+    if (tries >= EXECUTION_POLL_MAX) return { again: false, reason: 'timeout', missing: missing };
+    if (!counts.length) return { again: true, reason: 'start', missing: missing };
+    const last = counts[counts.length - 1];
+    if (last === 0) return { again: true, reason: 'empty', missing: missing };
+    if (counts.length < 2) return { again: true, reason: 'growing', missing: missing };
+    if (counts[counts.length - 2] !== last) return { again: true, reason: 'growing', missing: missing };
+    return { again: false, reason: 'settled', missing: missing };
+  }
+
+  /** 明细区上方的一句话：有多少、成没成、哪些渠道没写出来。 */
+  function executionHint(summary, decision) {
+    const data = summary || {};
+    const verdict = decision || {};
+    const missing = verdict.missing || [];
+    if (!data.total) {
+      if (verdict.again) return '等待消费…';
+      return missing.length
+        ? '还没有明细：' + missing.map(channelLabel).join('、') + ' 暂未写入，稍后点「重新拉取」'
+        : '还没有明细：消息可能仍在队列中，稍后点「重新拉取」';
+    }
+    const parts = ['共 ' + formatNumber(data.total) + ' 条', '成功 ' + formatNumber(data.sent)];
+    if (data.failed) parts.push('失败 ' + formatNumber(data.failed));
+    if (data.skipped) parts.push('跳过 ' + formatNumber(data.skipped));
+    parts.push('成功率 ' + data.rateText);
+    if (missing.length) {
+      parts.push(missing.map(channelLabel).join('、') + ' 暂无记录');
+    } else if (verdict.again) {
+      parts.push('仍在写入…');
+    }
+    return parts.join(' · ');
+  }
+
   /* ============ 错误文案 ============ */
 
   function fallbackReason(status) {
@@ -340,9 +506,18 @@
     buildSubscribersPath: buildSubscribersPath,
     buildActivationPath: buildActivationPath,
     buildDuplicatePath: buildDuplicatePath,
+    buildActivityDetailPath: buildActivityDetailPath,
     buildTriggerBody: buildTriggerBody,
+    missingChannels: missingChannels,
+    executionTrack: executionTrack,
+    executionRows: executionRows,
+    executionSummary: executionSummary,
+    executionHint: executionHint,
+    pollDecision: pollDecision,
     parsePayload: parsePayload,
     summarizeSummary: summaryView,
+    EXECUTION_POLL_MAX: EXECUTION_POLL_MAX,
+    EXECUTION_POLL_INTERVAL: EXECUTION_POLL_INTERVAL,
   };
 
   root.xwAdminModel = {
@@ -354,6 +529,11 @@
     summaryView: summaryView,
     normalizeWorkflow: normalizeWorkflow,
     channelLabel: channelLabel,
+    executionLabel: executionLabel,
+    executionRows: executionRows,
+    executionTrack: executionTrack,
+    executionSummary: executionSummary,
+    executionHint: executionHint,
     describeError: describeError,
     formatNumber: formatNumber,
     formatPct: formatPct,

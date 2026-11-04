@@ -1,6 +1,6 @@
 /* 收件箱组件的纯逻辑测试 —— 用 Node 内置 test runner，无第三方依赖
  *
- *   node --test dashboard/tests
+ *   node --test 'dashboard/tests/*.test.js'
  *
  * 组件本身在浏览器里跑，这一层只验不依赖 DOM 的部分：查询串拼装、分页合并
  * 去重、排序、筛选与未读聚合的归一。它们决定「列表是否重复、顺序是否稳定、

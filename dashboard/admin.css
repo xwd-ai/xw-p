@@ -142,6 +142,20 @@ section > h1 { font-size: 20px; }
 .receipt-body.ok { color: var(--text); }
 .receipt .next { margin-top: 12px; font-size: 12px; color: var(--muted); }
 
+/* 回执下方的逐渠道投递结果：与回执同卡，避免「看到受理」与「看到结果」
+   分处两屏。表头在窄屏也保持可读，原因列允许换行而不是把表格撑宽。 */
+.exec-block { margin-top: 16px; border-top: 1px dashed var(--border); padding-top: 14px; }
+.exec-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.exec-head h4 { margin: 0; font-size: 13px; }
+.exec-head .muted { font-size: 11.5px; flex: 1; min-width: 120px; }
+.exec-block .tbl td { vertical-align: top; }
+.exec-status { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+.exec-status.ok { background: #dcfce7; color: #15803d; }
+.exec-status.fail { background: #fee2e2; color: #b91c1c; }
+.exec-status.mute { background: #eef1f8; color: #57607a; }
+.exec-reason { font-size: 11.5px; color: var(--muted); max-width: 260px; word-break: break-word; }
+.exec-attempts { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10.5px; }
+
 /* ---------- 响应式 ---------- */
 @media (max-width: 980px) {
   /* minmax(0, 1fr) 而不是 1fr：后者的最小尺寸是内容的 min-content，渠道表格

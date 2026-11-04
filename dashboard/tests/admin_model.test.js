@@ -153,6 +153,16 @@ test('渠道行给出展示名、夹紧进度条宽度', () => {
   assert.strictEqual(rows[0].width, 100);
 });
 
+test('从未尝试投递的渠道不给成功率', () => {
+  // 渠道全被偏好拦下时后端给的是 100：直接的展示会变成「发了 0 次、100% 成功」
+  const rows = M.channelRows({
+    channels: [{ channel: 'email', attempted: 0, sent: 0, failed: 0, skipped: 2, success_rate: 100 }],
+  });
+  assert.strictEqual(rows[0].rateText, '—');
+  assert.strictEqual(rows[0].width, 0);
+  assert.strictEqual(rows[0].skipped, 2);
+});
+
 test('失败原因按最大计数归一宽度', () => {
   const rows = M.reasons({ failure_reasons: [{ reason: '连接超时', count: 4 }, { reason: '收件人被拒', count: 2 }] });
   assert.strictEqual(rows[0].width, 100);
@@ -224,4 +234,196 @@ test('错误文案：没有 detail 时按状态码给可读原因', () => {
   assert.strictEqual(M.describeError(409, {}), 'HTTP 409 · 与现有数据冲突');
   assert.strictEqual(M.describeError(0, null), '无法连接后端');
   assert.strictEqual(M.describeError(502, '<html>bad gateway</html>'), 'HTTP 502 · <html>bad gateway</html>');
+});
+
+/* ============ 执行明细 ============ */
+
+function detail(payload) {
+  return {
+    activity: { trigger_id: 'trg_1', channels: payload.channels },
+    executions: payload.executions || [],
+    missingChannels: payload.missingChannels,
+    executionsTruncated: payload.truncated === true,
+  };
+}
+
+test('下钻路径对触发标识编码', () => {
+  assert.strictEqual(X.buildActivityDetailPath('trg_1'), '/v1/admin/activity/trg_1');
+  // 触发标识可能带空格与保留字符（自定义前缀），拼进路径前必须编码
+  assert.strictEqual(X.buildActivityDetailPath(' a b&c '), '/v1/admin/activity/a%20b%26c');
+});
+
+test('明细行归一：渠道标签、状态文案与尝试链路', () => {
+  const rows = M.executionRows({
+    items: [
+      {
+        id: 'e1', channel: 'email', status: 'failed', duration_ms: 12.34,
+        provider: 'smtp-email', attempts: ['smtp-email', 'smtp-email', 'console-email'],
+        fallback: true, reason: '连接被拒绝',
+      },
+      { id: 'e2', channel: 'in_app', status: 'sent', duration_ms: 0.8, provider: 'console-in-app' },
+      { id: 'e3', channel: 'push', status: 'skipped', reason: '偏好跳过：渠道 push 已关闭' },
+    ],
+  });
+  assert.strictEqual(rows.length, 3);
+  const mail = rows.find(function (r) { return r.id === 'e1'; });
+  assert.strictEqual(mail.label, 'Email');
+  assert.strictEqual(mail.statusText, '失败');
+  assert.strictEqual(mail.tone, 'fail');
+  assert.strictEqual(mail.attemptCount, 3);
+  assert.strictEqual(mail.attemptsText, 'smtp-email → smtp-email → console-email');
+  assert.strictEqual(mail.fallback, true);
+  assert.strictEqual(mail.durationText, '12.3 ms');
+  assert.strictEqual(mail.reason, '连接被拒绝');
+
+  const skipped = rows.find(function (r) { return r.id === 'e3'; });
+  assert.strictEqual(skipped.statusText, '跳过');
+  assert.strictEqual(skipped.tone, 'mute');
+  assert.strictEqual(skipped.attemptCount, 0);
+  assert.strictEqual(skipped.durationText, '—');
+});
+
+test('明细行排序：写入时刻倒序，同一秒按记录标识倒序', () => {
+  const rows = M.executionRows({
+    items: [
+      { id: 'a', channel: 'in_app', created_at: '2026-11-04T10:00:00+00:00' },
+      { id: 'c', channel: 'email', created_at: '2026-11-04T10:00:01+00:00' },
+      { id: 'b', channel: 'push', created_at: '2026-11-04T10:00:00+00:00' },
+    ],
+  });
+  assert.deepStrictEqual(plain(rows.map(function (r) { return r.id; })), ['c', 'b', 'a']);
+});
+
+test('明细行容错：缺 items、坏条目都不抛错', () => {
+  assert.deepStrictEqual(plain(M.executionRows(null)), []);
+  assert.deepStrictEqual(plain(M.executionRows({ items: 'oops' })), []);
+  const rows = M.executionRows({ items: [null, { channel: 'sms' }] });
+  assert.strictEqual(rows.length, 2);
+  // 缺 status 按已投递处理：存储里的老记录只有 sent，没有这一列
+  assert.strictEqual(rows[1].statusText, '已投递');
+  assert.strictEqual(rows[1].status, 'sent');
+});
+
+test('明细汇总：成功率分母不含跳过与未知状态', () => {
+  const rows = M.executionRows({
+    items: [
+      { id: '1', channel: 'in_app', status: 'sent' },
+      { id: '2', channel: 'email', status: 'sent' },
+      { id: '3', channel: 'sms', status: 'failed' },
+      { id: '4', channel: 'push', status: 'skipped' },
+      { id: '5', channel: 'chat', status: 'weird' },
+    ],
+  });
+  const sum = M.executionSummary(rows);
+  assert.strictEqual(sum.total, 5);
+  assert.strictEqual(sum.sent, 2);
+  assert.strictEqual(sum.failed, 1);
+  assert.strictEqual(sum.skipped, 1);
+  assert.strictEqual(sum.unknown, 1);
+  assert.strictEqual(sum.attempted, 3);
+  assert.strictEqual(sum.rateText, '66.7%');
+
+  const empty = M.executionSummary([]);
+  assert.strictEqual(empty.total, 0);
+  assert.strictEqual(empty.rateText, '—');
+});
+
+test('下钻视图：声明渠道、明细与缺口一起归一', () => {
+  const view = M.executionTrack(detail({
+    channels: ['in_app', 'email'],
+    executions: [{ id: '1', channel: 'in_app', status: 'sent' }],
+  }));
+  assert.deepStrictEqual(plain(view.declared), ['in_app', 'email']);
+  assert.strictEqual(view.rows.length, 1);
+  assert.deepStrictEqual(plain(view.missing), ['email']);
+  assert.strictEqual(view.complete, false);
+  assert.strictEqual(view.truncated, false);
+
+  // 服务端给了缺口就以它为准（它按同一口径比对过）
+  const fromServer = M.executionTrack(detail({
+    channels: ['in_app', 'email'],
+    executions: [{ id: '1', channel: 'in_app', status: 'sent' }],
+    missingChannels: [],
+  }));
+  assert.deepStrictEqual(plain(fromServer.missing), []);
+  assert.strictEqual(fromServer.complete, true);
+
+  // 字段缺失、空对象都不能抛错
+  const bare = M.executionTrack({});
+  assert.strictEqual(bare.rows.length, 0);
+  assert.strictEqual(bare.complete, true);
+  assert.strictEqual(M.executionTrack(null).summary.total, 0);
+});
+
+test('渠道缺口：按期望名单找未出现的渠道', () => {
+  const rows = M.executionRows({
+    items: [
+      { id: '1', channel: 'in_app', status: 'sent' },
+      { id: '2', channel: 'push', status: 'failed' },
+    ],
+  });
+  assert.deepStrictEqual(plain(X.missingChannels(['in_app', 'email', 'push'], rows)), ['email']);
+  assert.deepStrictEqual(plain(X.missingChannels([], rows)), []);
+  assert.deepStrictEqual(plain(X.missingChannels(['in_app', 'push'], rows)), []);
+});
+
+test('轮询判断：渠道齐了就停，条数不再增长也停，到上限兜底', () => {
+  // 声明的渠道都有记录：立即结束
+  const complete = X.pollDecision([], 1, { complete: true, missing: [] });
+  assert.strictEqual(complete.again, false);
+  assert.strictEqual(complete.reason, 'complete');
+
+  // 还没开始：继续等，缺口原样带出
+  const start = X.pollDecision([], 0, { complete: false, missing: ['email'] });
+  assert.strictEqual(start.again, true);
+  assert.strictEqual(start.reason, 'start');
+  assert.deepStrictEqual(plain(start.missing), ['email']);
+
+  // 一直是 0 条：继续等到上限
+  assert.strictEqual(X.pollDecision([0, 0], 2, {}).again, true);
+
+  // 条数在涨：说明还有渠道没写完
+  assert.strictEqual(X.pollDecision([1, 3], 2, {}).again, true);
+  assert.strictEqual(X.pollDecision([1, 3], 2, {}).reason, 'growing');
+
+  // 条数连着两次一样但渠道没齐：不再白等，缺口如实带出
+  const stalled = X.pollDecision([1, 1], 2, { complete: false, missing: ['email'] });
+  assert.strictEqual(stalled.again, false);
+  assert.strictEqual(stalled.reason, 'settled');
+  assert.deepStrictEqual(plain(stalled.missing), ['email']);
+
+  // 到上限：即使还在涨也停
+  const capped = X.pollDecision([1, 2], X.EXECUTION_POLL_MAX, { complete: false, missing: ['email'] });
+  assert.strictEqual(capped.again, false);
+  assert.strictEqual(capped.reason, 'timeout');
+});
+
+test('明细提示语区分「在等」「缺口」与「等完了」', () => {
+  assert.strictEqual(M.executionHint(M.executionSummary([]), { again: true, reason: 'empty', missing: [] }), '等待消费…');
+
+  const noRows = M.executionHint(M.executionSummary([]), {
+    again: false, reason: 'timeout', missing: ['email'],
+  });
+  assert.ok(noRows.includes('还没有明细'));
+  assert.ok(noRows.includes('Email'));
+
+  const partial = M.executionHint(
+    M.executionSummary(M.executionRows({
+      items: [
+        { id: '1', channel: 'in_app', status: 'sent' },
+        { id: '2', channel: 'email', status: 'failed' },
+        { id: '3', channel: 'push', status: 'skipped' },
+      ],
+    })),
+    { again: false, reason: 'complete', missing: [] }
+  );
+  assert.ok(partial.includes('共 3 条'));
+  assert.ok(partial.includes('成功 1'));
+  assert.ok(partial.includes('失败 1'));
+  assert.ok(partial.includes('跳过 1'));
+  assert.ok(partial.includes('成功率 50.0%'));
+  assert.ok(partial.indexOf('仍在写入') < 0);
+
+  const waiting = M.executionHint(M.executionSummary([]), { again: true, reason: 'growing', missing: [] });
+  assert.strictEqual(waiting, '等待消费…');
 });
