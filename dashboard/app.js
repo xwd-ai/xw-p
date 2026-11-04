@@ -71,9 +71,6 @@
   function showWfSkeleton() {
     document.getElementById('wf-list').innerHTML = skelRows(3);
   }
-  function showInboxSkeleton() {
-    document.getElementById('inbox-list').innerHTML = skelRows(4);
-  }
 
   /* ============ 空态 ============ */
   function emptyState(icon, title, desc) {
@@ -143,11 +140,9 @@
       .catch(() => { /* 后端未就绪：保留种子活动流，不打断页面 */ });
   }
 
-  /* ============ 收件箱（In-app 通知中心） ============ */
+  /* ============ 收件箱（组件见 inbox.js） ============ */
   // 默认创作者（demo 触发使用 creator_demo，收件箱默认读同一订阅者）
   const INBOX_SUBSCRIBER = 'creator_demo';
-  let inboxItems = [];
-  let inboxFilter = 'all';
 
   // 更新侧边栏未读角标
   function updateInboxBadge(unread) {
@@ -161,82 +156,21 @@
     }
   }
 
-  // 渲染收件箱列表（按当前 filter）
-  function renderInbox() {
-    const box = document.getElementById('inbox-list');
-    if (!box) return;
-    const list = inboxFilter === 'unread' ? inboxItems.filter(i => !i.read) : inboxItems;
-    if (!list.length) {
-      box.innerHTML = emptyState('✉',
-        inboxItems.length ? '没有未读消息' : '暂无站内通知',
-        inboxItems.length ? '所有消息均已读' : '触发一条互动事件后，站内通知会出现在这里');
-      return;
-    }
-    box.innerHTML = list.map(i => `
-      <div class="inbox-item${i.read ? '' : ' unread'}" data-id="${esc(i.message_id || i.trigger_id)}">
-        <div class="inbox-dot"></div>
-        <div class="inbox-body">
-          <div class="inbox-title">${esc(i.title || '通知')}</div>
-          ${i.body ? `<div class="inbox-text">${esc(i.body)}</div>` : ''}
-        </div>
-        <div class="inbox-ts">${esc(fmtTs(i.updated_at || i.created_at))}</div>
-      </div>`).join('');
+  // 组件自己负责分页、筛选、已读与实时推送，这里只把请求、转义与提示接过去。
+  const inbox = window.xwInbox.create({
+    subscriberId: INBOX_SUBSCRIBER,
+    api: apiTrack,
+    esc: esc,
+    baseUrl: window.xwData.API_BASE,
+    onUnread: updateInboxBadge,
+    notify: showToast,
+  });
+  inbox.mount(document.getElementById('inbox-root'));
 
-    box.querySelectorAll('.inbox-item').forEach(el => {
-      el.addEventListener('click', () => markInboxRead(el.dataset.id));
-    });
-  }
-
-  // 标记单条已读（按消息 ID；聚合卡片窗口内多次更新始终是同一条消息）
-  function markInboxRead(messageId) {
-    const item = inboxItems.find(i => (i.message_id || i.trigger_id) === messageId);
-    if (!item || item.read) return;
-    apiTrack('/v1/inbox/read', { method: 'POST', body: { subscriberId: INBOX_SUBSCRIBER, messageIds: [messageId] } })
-      .then(res => {
-        item.read = true;
-        if (typeof res.unread === 'number') updateInboxBadge(res.unread);
-        renderInbox();
-      })
-      .catch(() => { /* 后端未就绪：忽略，保留本地状态 */ });
-  }
-
-  // 加载收件箱
+  // 触发、重连等场景下让收件箱重新拉一次
   function loadInbox() {
-    showInboxSkeleton();
-    apiTrack('/v1/inbox?subscriberId=' + encodeURIComponent(INBOX_SUBSCRIBER))
-      .then(res => {
-        inboxItems = res.items || [];
-        updateInboxBadge(res.unread || 0);
-        renderInbox();
-      })
-      .catch(() => {
-        // 后端未就绪：保留空态兜底
-        inboxItems = [];
-        updateInboxBadge(0);
-        renderInbox();
-      });
+    return inbox.refresh();
   }
-
-  // 收件箱「全部已读」
-  document.getElementById('inbox-mark-all').addEventListener('click', () => {
-    apiTrack('/v1/inbox/read', { method: 'POST', body: { subscriberId: INBOX_SUBSCRIBER } })
-      .then(res => {
-        inboxItems.forEach(i => { i.read = true; });
-        updateInboxBadge(res.unread || 0);
-        renderInbox();
-      })
-      .catch(() => showToast('操作失败：请确认后端服务已启动'));
-  });
-
-  // 收件箱 tab 切换（全部 / 未读）
-  document.querySelectorAll('.inbox-tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-      document.querySelectorAll('.inbox-tab').forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      inboxFilter = tab.dataset.filter;
-      renderInbox();
-    });
-  });
 
   /* ============ 订阅者列表 ============ */
   function renderSubs() {
@@ -471,11 +405,11 @@
   }
 
   /* ============ 初始化 ============ */
+  // 收件箱在 mount 时已自行加载，这里不再重复请求
   renderSeed();
   renderSubs();
   renderChart();
   loadDashboardStats();
   loadActivity();
   loadWorkflows();
-  loadInbox();
 })();

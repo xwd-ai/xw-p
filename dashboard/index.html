@@ -97,17 +97,8 @@
     <!-- ===== Inbox ===== -->
     <section class="view" id="view-inbox">
       <h1>收件箱</h1>
-      <p class="sub">站内通知中心 · 未读消息与已读标记</p>
-      <div class="inbox-head">
-        <div class="inbox-tabs">
-          <button class="inbox-tab active" data-filter="all">全部</button>
-          <button class="inbox-tab" data-filter="unread">未读</button>
-        </div>
-        <div class="inbox-actions">
-          <button class="btn btn-ghost" id="inbox-mark-all" style="padding:7px 14px;font-size:12.5px">✓ 全部已读</button>
-        </div>
-      </div>
-      <div class="card"><div id="inbox-list"></div></div>
+      <p class="sub">站内通知中心 · 未读聚合、按工作流筛选、实时更新</p>
+      <div id="inbox-root"></div>
     </section>
 
     <!-- ===== Subscribers ===== -->
@@ -131,6 +122,7 @@
 
   <script src="data.js"></script>
   <script src="editor.js"></script>
+  <script src="inbox.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
