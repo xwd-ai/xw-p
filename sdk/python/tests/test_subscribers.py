@@ -40,6 +40,24 @@ def test_create_without_any_field_sends_empty_body():
     assert transport.last_json() == {}
 
 
+def test_device_token_parsed_from_subscriber_payload():
+    """订阅者接口回 ``device_token``（与 email / phone 同为下划线），不是驼峰。"""
+    payload = dict(SUBSCRIBER, device_token="fcm-token-9f2c1d")
+    client, _ = make_client(lambda request: json_response(200, payload))
+
+    assert client.subscribers.get("creator-1001").device_token == "fcm-token-9f2c1d"
+
+
+def test_device_token_accepts_camel_case_payload():
+    """触发请求体用 ``to.deviceToken``；同一份模型也认这个写法。"""
+    payload = dict(SUBSCRIBER)
+    payload.pop("device_token")
+    payload["deviceToken"] = "fcm-camel"
+    client, _ = make_client(lambda request: json_response(200, payload))
+
+    assert client.subscribers.get("creator-1001").device_token == "fcm-camel"
+
+
 def test_create_sends_channel_list_verbatim():
     client, transport = make_client(lambda request: json_response(201, SUBSCRIBER))
     client.subscribers.create(subscriber_id="c1", channels=["in_app", "push"])

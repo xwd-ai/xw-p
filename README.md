@@ -106,6 +106,8 @@ ack, err := client.Trigger(ctx,
 
 批量触发用 `client.TriggerBatch(ctx, events)`，逐条结果与请求等长且按下标对齐（被拒条目带原因）。
 
+完整的 SDK 指南见 [`docs/sdk.md`](docs/sdk.md)：安装、单条与批量触发、订阅者与三层偏好、收件箱分页、错误排查表，以及各接口与两个客户端的对照。
+
 ### 错误分类与重试约定
 
 两个 SDK 都按「接下来怎么办」给失败分类，而不是给每个状态码包一个类：

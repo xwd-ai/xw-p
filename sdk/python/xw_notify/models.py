@@ -238,7 +238,9 @@ class Subscriber:
             bindings={str(k): str(v) for k, v in dict(bindings).items()},
             email=_text(data.get("email")),
             phone=_text(data.get("phone")),
-            device_token=_text(data.get("deviceToken")),
+            # 订阅者接口回的是下划线命名（与 email / phone 一致），触发请求体里的
+            # ``to.deviceToken`` 才是驼峰。两种都认，避免换了部署就静默变成 None。
+            device_token=_text(data.get("device_token") or data.get("deviceToken")),
             created_at=_text(data.get("created_at")),
             updated_at=_text(data.get("updated_at")),
         )
