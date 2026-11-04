@@ -73,7 +73,7 @@ def create_workflow(body: WorkflowCreate) -> WorkflowOut:
     """创建一个工作流模板（版本号初始为 1）。"""
     steps = [
         Step(
-            id=str(uuid.uuid4()),
+            id=s.id or str(uuid.uuid4()),
             type=s.type,
             name=s.name,
             config=s.config,
@@ -129,7 +129,7 @@ def update_workflow(workflow_id: str, body: WorkflowUpdate) -> WorkflowOut:
     new_steps = existing.steps
     if body.steps is not None:
         new_steps = [
-            Step(id=str(uuid.uuid4()), type=s.type, name=s.name, config=s.config)
+            Step(id=s.id or str(uuid.uuid4()), type=s.type, name=s.name, config=s.config)
             for s in body.steps
         ]
 
