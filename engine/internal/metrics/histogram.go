@@ -157,6 +157,9 @@ type Latency struct {
 	// MaxMS / MeanMS 是观测到的最大与平均耗时。
 	MaxMS  float64 `json:"maxMs"`
 	MeanMS float64 `json:"meanMs"`
+	// SumMS 是样本总耗时；导出直方图的 `_sum` 用它，而不是均值乘样本数——
+	// 均值在对外结构里已收敛到三位小数，反推会和真实总和越差越远。
+	SumMS float64 `json:"sumMs"`
 	// P50MS / P90MS / P99MS 由直方图估算，桶宽决定精度。
 	P50MS float64 `json:"p50Ms"`
 	P90MS float64 `json:"p90Ms"`
@@ -173,6 +176,7 @@ func (h *histogram) snapshot() Latency {
 		Count:    h.n,
 		MaxMS:    round3(h.max),
 		MeanMS:   round3(h.mean()),
+		SumMS:    round3(h.sum),
 		P50MS:    round3(h.quantile(0.5)),
 		P90MS:    round3(h.quantile(0.9)),
 		P99MS:    round3(h.quantile(0.99)),

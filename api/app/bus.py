@@ -13,7 +13,7 @@ import queue
 import threading
 from typing import Iterable, Optional, Protocol
 
-from . import config
+from . import app_metrics, config
 from .schemas import QueuedMessage
 
 logger = logging.getLogger("xw.bus")
@@ -74,8 +74,21 @@ class RedisMessageBus:
         if self._client is None:
             import redis  # 延迟导入：仅 Redis 模式需要
 
-            self._client = redis.Redis.from_url(self._url, decode_responses=True)
+            # 必须带 socket 超时：没有它时 Redis 一旦半死不活（接受连接但不
+            # 回包），请求会一直挂在这里，就绪探测也拿不到结论。超时值大于
+            # 消费端的阻塞秒数（``consume`` 最多阻塞 1 秒），否则 BRPOP 会
+            # 在正常等待时被判成读超时。
+            self._client = redis.Redis.from_url(
+                self._url,
+                decode_responses=True,
+                socket_timeout=config.REDIS_TIMEOUT,
+                socket_connect_timeout=config.REDIS_TIMEOUT,
+            )
         return self._client
+
+    def ping(self) -> None:
+        """连通性探测，供就绪检查使用；失败时抛 redis 自己的异常。"""
+        self._get_client().ping()
 
     def publish(self, message: QueuedMessage) -> None:
         self._get_client().lpush(self._queue_key, _encode(message))
@@ -122,16 +135,22 @@ def publish_all(bus: MessageBus, messages: Iterable[QueuedMessage]) -> int:
     后端支持 ``publish_many`` 时走批量通道（Redis 下一次往返发完），否则
     退回逐条 ``publish``。回退分支是给外部注入的总线实现留的余地：批量
     只是吞吐优化，不该成为接入的硬要求。
+
+    入队计数在这里记而不在每个调用点：这是「消息真正进入队列」的唯一出口，
+    三个触发入口都经过它，放在调用点就得维护三份且迟早漏一处。
     """
     items = list(messages)
     if not items:
         return 0
     bulk = getattr(bus, "publish_many", None)
     if callable(bulk):
-        return int(bulk(items))
-    for message in items:
-        bus.publish(message)
-    return len(items)
+        count = int(bulk(items))
+    else:
+        for message in items:
+            bus.publish(message)
+        count = len(items)
+    app_metrics.record_enqueued(count)
+    return count
 
 
 def create_bus() -> MessageBus:

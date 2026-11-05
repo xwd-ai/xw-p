@@ -65,6 +65,10 @@ LOG_ACCESS = _flag_default(os.getenv("XW_LOG_ACCESS"), True)
 # Redis 连接（BUS_BACKEND=redis 时生效）
 REDIS_URL = _env("XW_REDIS_URL", "redis://localhost:6379/0")
 REDIS_QUEUE_KEY = _env("XW_REDIS_QUEUE_KEY", "xw:queue:events")
+# 单次 Redis 读写的等待上限（秒）。必须大于消费端 BRPOP 的阻塞秒数（1 秒），
+# 否则空闲队列会被判成读超时；同时要小于就绪探测的超时预算，依赖挂死时
+# 探测才能及时给出 503 而不是把探针一起拖住。
+REDIS_TIMEOUT = _env_float("XW_REDIS_TIMEOUT", 5.0, minimum=2.0)
 
 
 def api_worker_enabled(bus_backend: str, raw: str | None = None) -> bool:

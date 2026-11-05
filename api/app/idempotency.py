@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from typing import Any, Optional, Protocol
 
 from . import config
+from .app_metrics import record_idempotency
 
 logger = logging.getLogger("xw.idempotency")
 
@@ -171,10 +172,13 @@ def claim(
     :class:`IdempotencyConflict` 让调用方知道要做什么。
     """
     if store.put_if_absent(key, value, ttl):
+        record_idempotency("claimed")
         return Reservation(claimed=True)
     cached = store.get(key)
     if cached is None:
+        record_idempotency("conflict")
         raise IdempotencyConflict(key)
+    record_idempotency("replayed")
     return Reservation(claimed=False, cached=cached)
 
 

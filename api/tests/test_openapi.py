@@ -294,6 +294,9 @@ def test_environment_header_is_documented(schema):
     }
     assert without == {
         ("get", "/health"),
+        ("get", "/health/live"),
+        ("get", "/health/ready"),
+        ("get", "/metrics"),
         ("get", "/v1/dashboard/stats"),
         ("get", "/v1/providers"),
         ("get", "/v1/providers/{identifier}"),

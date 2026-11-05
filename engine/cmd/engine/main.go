@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 
@@ -260,11 +261,21 @@ func main() {
 	// 避免出现第二份「键名拼装」的实现。
 	if cfg.AdminAddr != "" {
 		wg.Add(1)
+		// 就绪只看「消费链路的前提还在不在」：Redis 不通时引擎取不到消息，
+		// 此时把实例摘出负载均衡是对的；渠道探测结果属于业务健康，有专门的
+		// /admin/providers 接口，混进就绪会让一次上游超时把整个消费集群判成
+		// 不可用。
+		redisProbe := admin.Probe{
+			Name:    "redis",
+			Timeout: 2 * time.Second,
+			Check:   func(ctx context.Context) error { return consumer.Ping(ctx) },
+		}
 		adminServer := admin.New(consumer, logger).
 			WithProviders(pipe.Registry(), pipe.Health(), checker).
 			WithMetrics(sink).
 			WithWebhookAudit(audit, callback).
-			WithEventFeed(feed)
+			WithEventFeed(feed).
+			WithProbes(redisProbe)
 		go func() {
 			defer wg.Done()
 			if err := adminServer.Run(ctx, cfg.AdminAddr); err != nil {

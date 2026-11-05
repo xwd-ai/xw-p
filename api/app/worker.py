@@ -69,6 +69,10 @@ class Worker:
         self._thread.start()
         logger.info("worker 已启动")
 
+    def is_running(self) -> bool:
+        """消费线程是否还活着（就绪检查用）。"""
+        return self._thread is not None and self._thread.is_alive()
+
     def stop(self) -> None:
         self._stop.set()
         if self._thread:

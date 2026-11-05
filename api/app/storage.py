@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -79,6 +80,20 @@ class JSONLStorage:
         except OSError:
             return "absent"
         return f"{st.st_size}:{st.st_mtime_ns}"
+
+    def ready(self) -> str:
+        """就绪探测：数据目录存在且可写。
+
+        只看目录权限而不落一个探针文件：就绪检查是周期性的，每次探测都写盘
+        会在数据目录里堆出一串空文件，也会让只读挂载的部署莫名其妙地产生
+        写流量。目录可写是「下一条消息能落盘」的充分条件。
+        """
+        parent = self._path.parent
+        if not parent.is_dir():
+            raise RuntimeError(f"数据目录不存在：{parent}")
+        if not os.access(parent, os.W_OK):
+            raise PermissionError(f"数据目录不可写：{parent}")
+        return "jsonl 后端，数据目录可写"
 
     def stats(self, trend_days: int = TREND_DAYS) -> dict[str, Any]:
         """流式逐行累加统计量，内存占用与记录条数无关。"""
@@ -165,6 +180,32 @@ class PostgresStorage:
         if row is None:
             return f"pg:{self._writes}"
         return f"pg:{row[0]}:{row[1]}:{row[2]}:{self._writes}"
+
+    def ready(self, timeout: float = 2.0) -> str:
+        """就绪探测：用一次独立的短连接执行 ``SELECT 1``。
+
+        不复用业务引擎是有意的：业务引擎的连接池按生产负载配置，可能排队
+        等几十秒；探测要的是一个「两秒内能不能连上并查一句」的确定答案。
+        独立连接还带上了连接与语句超时，数据库半死不活时探测自己会结束，
+        不会把探针和请求一起挂在 socket 上。
+        """
+        from sqlalchemy import create_engine, text
+        from sqlalchemy.pool import NullPool
+
+        kwargs: dict[str, Any] = {"poolclass": NullPool}
+        if self._url.startswith("postgresql"):
+            seconds = max(1, int(timeout))
+            kwargs["connect_args"] = {
+                "connect_timeout": seconds,
+                "options": f"-c statement_timeout={seconds * 1000}",
+            }
+        probe = create_engine(self._url, **kwargs)
+        try:
+            with probe.connect() as conn:
+                conn.execute(text("SELECT 1"))
+        finally:
+            probe.dispose()
+        return "postgres 连接正常"
 
     def read_all(self) -> list[dict[str, Any]]:
         """读取全部消息记录（导出/排查用，统计接口不再走这条路径）。"""

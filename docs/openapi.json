@@ -2103,7 +2103,7 @@
   "paths": {
     "/health": {
       "get": {
-        "description": "返回服务状态与当前总线里的待消费消息数。供负载均衡与部署脚本探测，不读环境头、不校验 Key。",
+        "description": "返回服务状态与当前总线里的待消费消息数。供负载均衡与部署脚本探测，不读环境头、不校验 Key。\n\n这是存活口径：不因为依赖不可用而返回非 200。需要按依赖判定的探针用 ``/health/ready``，只需要「进程还在」的用 ``/health/live``。",
         "operationId": "getHealth",
         "responses": {
           "200": {
@@ -2120,6 +2120,76 @@
           }
         },
         "summary": "健康检查",
+        "tags": [
+          "system"
+        ]
+      }
+    },
+    "/health/live": {
+      "get": {
+        "description": "只回答「进程还在跑」，不触碰任何外部依赖。容器编排的 livenessProbe 用它。",
+        "operationId": "getHealthLive",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Health Live Health Live Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "存活检查",
+        "tags": [
+          "system"
+        ]
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "description": "逐项检查外部依赖：消息总线（Redis PING）、持久化后端（目录可写或 ``SELECT 1``）、内置消费线程（仅在 ``XW_API_WORKER`` 开启时）。\n\n全部通过返回 200；任一失败返回 503 并给出失败项的原因，供编排器把实例摘出负载均衡。检查带超时，不会因为依赖挂死而拖住探针。",
+        "operationId": "getHealthReady",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "503": {
+            "description": "至少一项依赖不可用"
+          }
+        },
+        "summary": "就绪检查",
+        "tags": [
+          "system"
+        ]
+      }
+    },
+    "/metrics": {
+      "get": {
+        "description": "按 Prometheus 文本格式（version 0.0.4）输出本实例自启动以来的指标：\n\n- ``xw_http_requests_total`` / ``xw_http_request_duration_seconds``：按方法、路由模板与状态码的请求量与耗时；\n- ``xw_events_triggered_total``：按工作流、环境与结果（accepted / replayed / rejected）的互动事件受理数；\n- ``xw_idempotency_requests_total``：幂等键的三种处理结果；\n- ``xw_rate_limit_rejected_total``：被限流拒绝的请求数；\n- ``xw_queue_depth`` / ``xw_queue_enqueued_total``：队列深度与入队量；\n- ``xw_build_info``：版本与后端组合，值恒为 1。\n\n进程重启后计数归零，跨实例汇总由抓取端完成。",
+        "operationId": "getMetrics",
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "text/plain; version=0.0.4; charset=utf-8": {}
+            },
+            "description": "指标文本"
+          }
+        },
+        "summary": "Prometheus 指标",
         "tags": [
           "system"
         ]

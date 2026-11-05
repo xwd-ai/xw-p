@@ -48,6 +48,23 @@ type DeadLetterStore interface {
 	DiscardDeadLetters(ctx context.Context, ids []string) (int, error)
 }
 
+// Probe 是就绪检查的一项依赖探测。
+//
+// 每项自带超时而不是统一给一个预算：Redis 一次 PING 的合理上限与一次外部
+// 探测差着数量级，统一预算要么把快的拖慢、要么把慢的误判成失败。
+type Probe struct {
+	Name    string
+	Timeout time.Duration
+	Check   func(ctx context.Context) error
+}
+
+func (p Probe) timeout() time.Duration {
+	if p.Timeout > 0 {
+		return p.Timeout
+	}
+	return time.Second
+}
+
 // Server 承载管理接口的 HTTP 服务。
 type Server struct {
 	store  DeadLetterStore
@@ -66,6 +83,8 @@ type Server struct {
 	webhookReplayer WebhookReplayer
 	// feed 是事件总线上最近若干条事件的缓冲，供运维页面观察实时活动。
 	feed *eventbus.Feed
+	// probes 是就绪检查的依赖探测项；为空时就绪与存活等价。
+	probes []Probe
 }
 
 // WebhookReplayer 是回调重放能力，由 webhook.Dispatcher 实现。
@@ -111,9 +130,27 @@ func (s *Server) WithEventFeed(feed *eventbus.Feed) *Server {
 	return s
 }
 
+// WithProbes 装配就绪检查依赖，返回自身便于链式调用。
+func (s *Server) WithProbes(probes ...Probe) *Server {
+	for _, p := range probes {
+		if p.Name == "" || p.Check == nil {
+			continue
+		}
+		s.probes = append(s.probes, p)
+	}
+	return s
+}
+
 // Handler 返回路由。方法不匹配由路由层直接回 405。
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	// 存活与就绪不放在 /admin 前缀下：这两个是编排器与负载均衡打的，
+	// 与「运维人员主动调用」的 /admin/* 不是同一类流量，分开更好配网络策略。
+	mux.HandleFunc("GET /healthz", s.handleHealth)
+	mux.HandleFunc("GET /readyz", s.handleReady)
+	if s.metrics != nil {
+		mux.HandleFunc("GET /metrics", s.handlePrometheus)
+	}
 	mux.HandleFunc("GET /admin/health", s.handleHealth)
 	mux.HandleFunc("GET /admin/dead-letters", s.handleList)
 	mux.HandleFunc("POST /admin/dead-letters/replay", s.handleReplay)
@@ -184,6 +221,62 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleReady 跑一遍依赖探测：全部通过 200，任一失败 503。
+//
+// 失败原因要写在响应里：503 本身只告诉编排器「别送流量」，运维还得知道
+// 是 Redis 不通还是别的依赖没起来。错误文本来自驱动，可能包含地址，但管理
+// 接口本身已经是受控入口。
+func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
+	type check struct {
+		Name       string  `json:"name"`
+		Status     string  `json:"status"`
+		Error      string  `json:"error,omitempty"`
+		DurationMS float64 `json:"durationMs"`
+	}
+	results := make([]check, 0, len(s.probes))
+	healthy := true
+	for _, probe := range s.probes {
+		ctx, cancel := context.WithTimeout(r.Context(), probe.timeout())
+		started := time.Now()
+		err := probe.Check(ctx)
+		cancel()
+		item := check{
+			Name:       probe.Name,
+			Status:     "ok",
+			DurationMS: roundMillis(time.Since(started)),
+		}
+		if err != nil {
+			item.Status = "fail"
+			item.Error = err.Error()
+			healthy = false
+		}
+		results = append(results, item)
+	}
+	status := http.StatusOK
+	summary := "ok"
+	if !healthy {
+		status = http.StatusServiceUnavailable
+		summary = "degraded"
+	}
+	writeJSON(w, status, map[string]interface{}{"status": summary, "checks": results})
+}
+
+// handlePrometheus 输出 Prometheus 文本格式。
+//
+// 与 /admin/metrics 的 JSON 并存：页面与脚本读结构化数据，抓取端读文本，
+// 两边共用同一份快照，不存在两个口径。
+func (s *Server) handlePrometheus(w http.ResponseWriter, _ *http.Request) {
+	body := s.metrics.PrometheusText()
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, body)
+}
+
+func roundMillis(d time.Duration) float64 {
+	return float64(d.Microseconds()) / 1000
 }
 
 func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
@@ -374,7 +467,7 @@ func (s *Server) handleProbe(w http.ResponseWriter, r *http.Request) {
 //
 // 口径是单实例：进程重启即归零，跨实例汇总由抓取端按实例聚合。做成 JSON
 // 而不是文本格式，是因为消费方是运维脚本与后台页面，需要结构化的渠道/实现
-// 维度；指标格式的抓取端留给后续接入。
+// 维度；同一份快照另有 /metrics 的文本形态给抓取端。
 func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, s.metrics.Snapshot())
 }

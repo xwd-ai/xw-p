@@ -222,6 +222,12 @@ if errors.As(err, &apiErr) {
 
 API 与引擎默认输出一行一条 JSON（`XW_LOG_FORMAT=text` 换成文本），每个请求带 `X-Request-Id`：合规的外部标识原样沿用，否则生成新标识并回写响应头，同一次请求的访问日志与业务日志共用它。`XW_LOG_LEVEL` 调级别，`XW_LOG_ACCESS=0` 关掉访问日志。字段口径、级别映射与采集建议见 [docs/logging.md](docs/logging.md)。
 
+## 指标与健康检查
+
+两个进程都按 Prometheus 文本格式暴露 `GET /metrics`：请求量与耗时（按路由模板，不按原始路径）、事件受理、幂等结果、限流拒绝、队列深度，引擎侧还有按渠道与实现拆开的投递计数与耗时直方图。指标名与口径见 [docs/metrics.md](docs/metrics.md)。
+
+存活与就绪分开：`/health/live` 只回答「进程还在跑」，`/health/ready` 逐项检查总线、存储与内置消费线程，依赖不可用时返回 503 并点名失败项。引擎对应 `/healthz` 与 `/readyz`。检查项与编排示例见 [docs/health.md](docs/health.md)。
+
 ## API 文档
 
 服务跑起来后，`/docs` 是 Swagger UI，`/redoc` 是 ReDoc，`/openapi.json` 是 schema 本体。schema 由 `api/app/openapi.py` 统一装配，而不只是 FastAPI 的自动生成结果：
@@ -264,6 +270,9 @@ api/.venv/bin/python scripts/export_openapi.py --check
 ```bash
 # Python：API 与渠道实现
 api/.venv/bin/python -m pytest api/tests -q
+
+# 覆盖率：低于门槛（默认 85%）时非零退出，口径见 docs/testing.md
+api/.venv/bin/python scripts/coverage.py
 
 # Python 客户端
 api/.venv/bin/python -m pytest sdk/python/tests -q

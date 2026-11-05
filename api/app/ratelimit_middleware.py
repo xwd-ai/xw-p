@@ -18,6 +18,7 @@ from typing import Optional
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse
 
+from .app_metrics import record_rate_limited
 from .ratelimit import Decision, RateLimiter, client_ip, get_limiter
 
 logger = logging.getLogger("xw.ratelimit")
@@ -69,6 +70,7 @@ class RateLimitMiddleware:
 
         extra = decision.headers()
         if not decision.allowed:
+            record_rate_limited(decision.identity.dimension)
             self._log_rejection(decision)
             response = JSONResponse(
                 {"detail": decision.message()}, status_code=429, headers=extra

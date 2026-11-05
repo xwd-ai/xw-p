@@ -14,7 +14,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from . import config, openapi as openapi_docs, tokens
+from . import app_metrics, config, openapi as openapi_docs, tokens
 from .activity_log import build_activity, record_activities, record_activity
 from .admin_activity_routes import router as admin_activity_router
 from .admin_routes import router as admin_router
@@ -24,9 +24,13 @@ from .activity_routes import router as activity_router
 from .bus import get_bus, publish_all
 from .dashboard_routes import router as dashboard_router
 from .execution_routes import router as execution_router
+from .health import readiness
 from .idempotency import IdempotencyConflict, claim, get_idempotency_store
 from .inbox import router as inbox_router
 from .logging_setup import configure_from_config
+from .metrics_middleware import MetricsMiddleware
+from .metrics_routes import install_queue_depth
+from .metrics_routes import router as metrics_router
 from .preference_routes import router as preference_router
 from .ratelimit import get_limiter
 from .ratelimit_middleware import RateLimitMiddleware
@@ -90,6 +94,12 @@ async def lifespan(app: FastAPI):
     # 渠道注册表在启动时装配：配置写错直接暴露出来，而不是等到第一条消息
     # 投递失败才发现；尚未接入的种类与空着的渠道会在日志里逐条列出。
     provider_factory.get_registry()
+    # 进程身份写进指标：抓取端据此区分版本与后端组合，重发布后看板能立刻
+    # 分清新旧实例，而不是靠时间猜测。
+    app_metrics.mark_build_info(openapi_docs.API_VERSION, worker=config.API_WORKER)
+    # 队列深度在抓取时现算：它随流量变化，提前缓存一个值只会让人读到过期数据。
+    install_queue_depth(lambda: get_bus().size())
+    app_metrics.ensure_registered()
     # redis 总线由 Go 引擎消费；API 内置线程只在 memory 总线的单进程 demo 里起，
     # 否则两个消费者会抢同一条消息。
     if config.API_WORKER:
@@ -108,6 +118,10 @@ app = FastAPI(
     openapi_tags=openapi_docs.TAGS,
     lifespan=lifespan,
 )
+
+# 指标放在最内层：限流拒绝的 429 也要被统计到，但 CORS 的预检请求在它外面，
+# 不会被算成业务请求；请求标识与访问日志仍由更外层的中间件负责。
+app.add_middleware(MetricsMiddleware)
 
 # 限流注册在 CORS 之前：Starlette 里后注册的中间件在更外层，因此 CORS 会包住
 # 限流——被拒绝的 429 也带着跨源响应头，浏览器才读得到「为什么被限流」，
@@ -140,6 +154,7 @@ app.include_router(provider_router)
 app.include_router(subscriber_router)
 app.include_router(preference_router)
 app.include_router(topic_router)
+app.include_router(metrics_router)
 
 # 文档 schema 在路由注册完成后装配：分组说明、鉴权与公共错误响应都依赖最终
 # 的路由表，提前安装只会拿到一份不完整的 paths。
@@ -161,10 +176,49 @@ def _idempotency_conflict(_request: Request, exc: IdempotencyConflict) -> JSONRe
     "/health",
     tags=["system"],
     summary="健康检查",
-    description="返回服务状态与当前总线里的待消费消息数。供负载均衡与部署脚本探测，不读环境头、不校验 Key。",
+    description=(
+        "返回服务状态与当前总线里的待消费消息数。供负载均衡与部署脚本探测，"
+        "不读环境头、不校验 Key。\n\n"
+        "这是存活口径：不因为依赖不可用而返回非 200。需要按依赖判定的探针用 "
+        "``/health/ready``，只需要「进程还在」的用 ``/health/live``。"
+    ),
 )
 def health() -> dict:
-    return {"status": "ok", "queued": get_bus().size()}
+    # 队列长度要读总线，Redis 不可用时这里会抛异常。存活检查不能因此变成
+    # 500——那会把「依赖抖动」升级成「实例被编排器重启」，反而丢掉在途请求。
+    try:
+        queued = get_bus().size()
+    except Exception as exc:  # noqa: BLE001 - 探活不承担诊断职责
+        logger.warning("读取队列长度失败：%s", exc)
+        queued = None
+    return {"status": "ok", "queued": queued}
+
+
+@app.get(
+    "/health/live",
+    tags=["system"],
+    summary="存活检查",
+    description="只回答「进程还在跑」，不触碰任何外部依赖。容器编排的 livenessProbe 用它。",
+)
+def health_live() -> dict:
+    return {"status": "ok"}
+
+
+@app.get(
+    "/health/ready",
+    tags=["system"],
+    summary="就绪检查",
+    description=(
+        "逐项检查外部依赖：消息总线（Redis PING）、持久化后端（目录可写或 "
+        "``SELECT 1``）、内置消费线程（仅在 ``XW_API_WORKER`` 开启时）。\n\n"
+        "全部通过返回 200；任一失败返回 503 并给出失败项的原因，供编排器把"
+        "实例摘出负载均衡。检查带超时，不会因为依赖挂死而拖住探针。"
+    ),
+    responses={503: {"description": "至少一项依赖不可用"}},
+)
+def health_ready() -> JSONResponse:
+    status_code, body = readiness(worker=_worker)
+    return JSONResponse(status_code=status_code, content=body)
 
 
 @app.post(
@@ -211,6 +265,9 @@ def trigger_event(
     # 1. 模板查找：触发标识必须对应一个已启用的工作流（含环境匹配）。
     workflow = resolve_workflow(event.name, env.environment)
     if workflow is None:
+        # 名称不进标签：请求可以填任意字符串，按它建序列等于让调用方决定
+        # 指标基数。
+        app_metrics.record_event(None, env.environment, "rejected")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=missing_workflow_detail(event.name, env.environment),
@@ -223,6 +280,7 @@ def trigger_event(
         cached = store.get(idempotency_key)
         if cached is not None:
             logger.info("幂等命中：%s（返回缓存回执）", idempotency_key)
+            app_metrics.record_idempotency("replayed")
             return TriggerResponse(**cached)
 
     # 3. 生成回执并入队（消息携带工作流的步骤快照，引擎据此执行）
@@ -254,6 +312,10 @@ def trigger_event(
     )
 
     get_bus().publish(message)
+    # 单条入队不走 publish_all，计数在这里补一次；事件数按工作流维度记，
+    # 名称来自已匹配成功的模板，基数受配置约束。
+    app_metrics.record_enqueued(1)
+    app_metrics.record_event(event.name, env.environment, "accepted")
     logger.info("已触发：%s -> %s（ack=%s）", event.name, message.subscriber_id, message.trigger_id)
     return response
 
@@ -303,6 +365,7 @@ def trigger_events_batch(
         cached = store.get(idempotency_key)
         if cached is not None:
             logger.info("幂等命中：%s（返回缓存回执，%d 条）", idempotency_key, len(cached.get("results") or []))
+            app_metrics.record_idempotency("replayed")
             return BatchTriggerResponse(**cached)
 
     results: list[BatchTriggerItem] = []
@@ -312,6 +375,7 @@ def trigger_events_batch(
     for index, event in enumerate(payload.events):
         workflow = resolve_workflow(event.name, env.environment)
         if workflow is None:
+            app_metrics.record_event(None, env.environment, "rejected")
             results.append(
                 BatchTriggerItem(
                     index=index,
@@ -323,6 +387,7 @@ def trigger_events_batch(
             )
             continue
 
+        app_metrics.record_event(event.name, env.environment, "accepted")
         message = new_queued_message(event, workflow)
         messages.append(message)
         results.append(
