@@ -58,9 +58,29 @@ func (n busNotifier) Notify(ev webhook.Event) bool {
 	}) > 0
 }
 
+// newLogHandler 按 XW_LOG_FORMAT 选择日志格式：json 便于采集端按字段解析，
+// text 便于本地直接读。两者共用同一个写端与级别，切换只影响呈现方式。
+func newLogHandler(cfg config.Config, w io.Writer) *slog.Logger {
+	opts := &slog.HandlerOptions{
+		Level: cfg.LogLevelValue(),
+		// time.Duration 默认按纳秒整数输出（``"pollTimeout":2000000000``），
+		// 读的人还得自己换算；转成 ``2s`` 这样的字符串，两种格式都受益。
+		ReplaceAttr: func(_ []string, attr slog.Attr) slog.Attr {
+			if attr.Value.Kind() == slog.KindDuration {
+				return slog.String(attr.Key, attr.Value.Duration().String())
+			}
+			return attr
+		},
+	}
+	if cfg.LogFormatOrDefault() == config.LogFormatJSON {
+		return slog.New(slog.NewJSONHandler(w, opts))
+	}
+	return slog.New(slog.NewTextHandler(w, opts))
+}
+
 func main() {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	cfg := config.Load()
+	logger := newLogHandler(cfg, os.Stdout)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -78,6 +98,7 @@ func main() {
 	logger.Info("[engine] 启动",
 		"redis", cfg.RedisAddr,
 		"queue", cfg.QueueKey,
+		"logFormat", cfg.LogFormatOrDefault(),
 		"pollTimeout", cfg.PollTimeoutDuration(),
 		"claimLease", cfg.ClaimLeaseOrDefault(),
 		"reclaimInterval", cfg.ReclaimInterval,

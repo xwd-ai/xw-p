@@ -218,6 +218,10 @@ if errors.As(err, &apiErr) {
 
 `/v1` 下的接口共用一层令牌桶限流：带有效凭据的请求按凭据计，其余按来源 IP 计，超出额度返回 429 并给出 `Retry-After` 与剩余额度。默认关闭，配置 `XW_RATE_LIMIT_KEY_RPM` / `XW_RATE_LIMIT_IP_RPM` 开启；多实例部署让后端跟随 Redis（`XW_RATE_LIMIT_BACKEND=auto` 默认如此），同一份额度才会被共享。后端不可用时放行并标 `X-RateLimit-Degraded`，不让限流自己变成故障点。维度选择、桶参数与部署注意事项见 [docs/rate-limit.md](docs/rate-limit.md)。
 
+## 日志
+
+API 与引擎默认输出一行一条 JSON（`XW_LOG_FORMAT=text` 换成文本），每个请求带 `X-Request-Id`：合规的外部标识原样沿用，否则生成新标识并回写响应头，同一次请求的访问日志与业务日志共用它。`XW_LOG_LEVEL` 调级别，`XW_LOG_ACCESS=0` 关掉访问日志。字段口径、级别映射与采集建议见 [docs/logging.md](docs/logging.md)。
+
 ## API 文档
 
 服务跑起来后，`/docs` 是 Swagger UI，`/redoc` 是 ReDoc，`/openapi.json` 是 schema 本体。schema 由 `api/app/openapi.py` 统一装配，而不只是 FastAPI 的自动生成结果：

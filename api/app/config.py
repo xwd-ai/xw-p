@@ -41,9 +41,26 @@ def _flag(raw: str | None) -> bool:
     return str(raw or "").strip().lower() in {"1", "true", "on", "yes"}
 
 
+def _flag_default(raw: str | None, default: bool) -> bool:
+    """同上，但未设置时取默认值。
+
+    访问日志这类「默认开」的开关不能复用 ``_flag``：未设置时它返回假，
+    等于默认把日志关掉，而排查问题时最需要的恰恰是默认就有日志。
+    """
+    if raw is None or str(raw).strip() == "":
+        return default
+    return _flag(raw)
+
 
 # 消息总线后端：memory（默认）| redis
 BUS_BACKEND = _env("XW_BUS", "memory")
+
+# 日志：json（默认，一行一条，便于采集端按字段过滤）| text（本地看顺眼）。
+# 级别用名字而不是数字，配置文件里 DEBUG 比 10 好读；写错时回退 INFO。
+LOG_FORMAT = _env("XW_LOG_FORMAT", "json")
+LOG_LEVEL = _env("XW_LOG_LEVEL", "INFO").upper()
+# 每个请求一行访问日志。默认开；压测或本机调试嫌吵时关掉。
+LOG_ACCESS = _flag_default(os.getenv("XW_LOG_ACCESS"), True)
 
 # Redis 连接（BUS_BACKEND=redis 时生效）
 REDIS_URL = _env("XW_REDIS_URL", "redis://localhost:6379/0")

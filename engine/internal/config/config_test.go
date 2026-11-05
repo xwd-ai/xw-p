@@ -1,6 +1,7 @@
 package config
 
 import (
+	"log/slog"
 	"os"
 	"testing"
 	"time"
@@ -361,5 +362,53 @@ func TestProviderProbeConfig(t *testing.T) {
 		if cfg.ProviderProbeIntervalOrDefault() <= 0 {
 			t.Errorf("interval=%q 的兜底间隔应为正数", tc.interval)
 		}
+	}
+}
+
+// 日志格式与级别的归一化：写错的取值既不能拦住启动，也不能把日志静默关掉。
+func TestLogSettingsNormalization(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want string
+	}{
+		{"", LogFormatJSON},
+		{"json", LogFormatJSON},
+		{"JSON", LogFormatJSON},
+		{"text", "text"},
+		{" Text ", "text"},
+		{"yaml", LogFormatJSON},
+	}
+	for _, tc := range cases {
+		if got := (Config{LogFormat: tc.raw}).LogFormatOrDefault(); got != tc.want {
+			t.Errorf("LogFormat=%q 应归一化为 %q，实际 %q", tc.raw, tc.want, got)
+		}
+	}
+
+	levels := map[string]slog.Level{
+		"":         slog.LevelInfo,
+		"info":     slog.LevelInfo,
+		"DEBUG":    slog.LevelDebug,
+		"warning":  slog.LevelWarn,
+		"WARN":     slog.LevelWarn,
+		"ERROR":    slog.LevelError,
+		"critical": slog.LevelError,
+		"nonsense": slog.LevelInfo,
+	}
+	for raw, want := range levels {
+		if got := (Config{LogLevel: raw}).LogLevelValue(); got != want {
+			t.Errorf("LogLevel=%q 应解析为 %v，实际 %v", raw, want, got)
+		}
+	}
+}
+
+// 未配置时默认是结构化日志：与 API 侧同一套默认值，两个进程的日志能被同一条
+// 采集规则处理。
+func TestLogDefaults(t *testing.T) {
+	var zero Config
+	if zero.LogFormatOrDefault() != LogFormatJSON {
+		t.Error("未配置日志格式时应输出 JSON")
+	}
+	if zero.LogLevelValue() != slog.LevelInfo {
+		t.Error("未配置日志级别时应输出 INFO 及以上")
 	}
 }

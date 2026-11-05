@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -24,6 +25,11 @@ type Config struct {
 	QueueKey      string
 	PollTimeout   int // 秒
 	EnginePort    int
+	// LogFormat 选择日志输出：json（默认，一行一条，便于采集端按字段过滤）或
+	// text（本地阅读）。LogLevel 是最低输出级别，写错时回退 INFO——
+	// 一个拼错的值不该让引擎起不来，但也不能悄悄关掉全部日志。
+	LogFormat string
+	LogLevel  string
 	// DigestStore 选择聚合卡片存储：redis（跨实例共享，默认）或 memory（进程内）。
 	DigestStore string
 	// DigestPrefix 是聚合卡片在 Redis 里的键前缀，用于环境隔离。
@@ -121,6 +127,8 @@ func Load() Config {
 		QueueKey:      envOr("XW_REDIS_QUEUE_KEY", "xw:queue:events"),
 		PollTimeout:   envInt("XW_POLL_TIMEOUT", 2),
 		EnginePort:    envInt("ENGINE_PORT", 8081),
+		LogFormat:     envOr("XW_LOG_FORMAT", LogFormatJSON),
+		LogLevel:      envOr("XW_LOG_LEVEL", "INFO"),
 		DigestStore:   envOr("XW_DIGEST_STORE", "redis"),
 		DigestPrefix:  envOr("XW_DIGEST_PREFIX", "xw:digest"),
 		DelayStore:    envOr("XW_DELAY_STORE", "redis"),
@@ -162,6 +170,31 @@ func Load() Config {
 		CallbackEventFile:     strings.TrimSpace(envOr("XW_CALLBACK_EVENT_FILE", defaultCallbackEventFile)),
 
 		AdminAddr: adminListenAddr(),
+	}
+}
+
+// LogFormatJSON 是结构化日志的格式名；除 text 外的取值一律按它处理。
+const LogFormatJSON = "json"
+
+// LogFormatOrDefault 归一化日志格式：只认 text，其余（含空值、写错）走 json。
+func (c Config) LogFormatOrDefault() string {
+	if strings.EqualFold(strings.TrimSpace(c.LogFormat), "text") {
+		return "text"
+	}
+	return LogFormatJSON
+}
+
+// LogLevelValue 把级别名转成 slog 级别，无法识别时回退 INFO。
+func (c Config) LogLevelValue() slog.Level {
+	switch strings.ToUpper(strings.TrimSpace(c.LogLevel)) {
+	case "DEBUG":
+		return slog.LevelDebug
+	case "WARN", "WARNING":
+		return slog.LevelWarn
+	case "ERROR", "CRITICAL":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
 	}
 }
 

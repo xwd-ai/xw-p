@@ -26,11 +26,13 @@ from .dashboard_routes import router as dashboard_router
 from .execution_routes import router as execution_router
 from .idempotency import IdempotencyConflict, claim, get_idempotency_store
 from .inbox import router as inbox_router
+from .logging_setup import configure_from_config
 from .preference_routes import router as preference_router
 from .ratelimit import get_limiter
 from .ratelimit_middleware import RateLimitMiddleware
 from .providers import factory as provider_factory
 from .provider_routes import router as provider_router
+from .request_log import RequestLogMiddleware
 from .schemas import (
     BatchTriggerItem,
     BatchTriggerRequest,
@@ -46,7 +48,9 @@ from .trigger_core import missing_workflow_detail, resolve_workflow
 from .worker import Worker
 from .workflow_routes import router as workflow_router
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+# 日志按 XW_LOG_FORMAT / XW_LOG_LEVEL 装配；在导入时完成，uvicorn 的默认文本
+# handler 会被就地替换，启动过程本身也走同一套格式。
+configure_from_config()
 
 logger = logging.getLogger("xw.api")
 
@@ -119,6 +123,10 @@ app.add_middleware(
     allow_headers=["*"],
     max_age=600,
 )
+
+# 请求标识与访问日志放在最外层：限流的 429、鉴权的 401、未捕获异常的 500 都要
+# 带上同一个标识并回写响应头，只有包住全部内层才做得到。
+app.add_middleware(RequestLogMiddleware, access_log=config.LOG_ACCESS)
 
 app.include_router(auth_router)
 app.include_router(workflow_router)

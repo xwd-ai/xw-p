@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -245,5 +247,51 @@ func TestCloseProvidersReleasesClosers(t *testing.T) {
 	closeProviders(discardLogger(), registry)
 	if !tracker.closed {
 		t.Error("实现 io.Closer 的渠道应被关闭")
+	}
+}
+
+// 日志格式切换：JSON 一行一条、字段可解析；text 保留人类可读的键值形态。
+func TestNewLogHandlerJSON(t *testing.T) {
+	var buf bytes.Buffer
+	logger := newLogHandler(config.Config{LogFormat: "json", LogLevel: "WARN"}, &buf)
+
+	logger.Info("被级别过滤")
+	if buf.Len() != 0 {
+		t.Fatalf("低于级别的日志不应输出，实际：%s", buf.String())
+	}
+
+	logger.Warn("投递失败", "triggerId", "t-1", "channel", "email", "elapsed", 1500*time.Millisecond)
+	var entry map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &entry); err != nil {
+		t.Fatalf("输出不是合法 JSON：%v（%s）", err, buf.String())
+	}
+	if entry["level"] != "WARN" {
+		t.Errorf("level 应为 WARN，实际 %v", entry["level"])
+	}
+	if entry["msg"] != "投递失败" {
+		t.Errorf("msg 应保留原文，实际 %v", entry["msg"])
+	}
+	if entry["triggerId"] != "t-1" || entry["channel"] != "email" {
+		t.Errorf("业务字段应平铺在同一层，实际 %v", entry)
+	}
+	if _, ok := entry["time"]; !ok {
+		t.Errorf("缺少时间字段：%v", entry)
+	}
+	if entry["elapsed"] != "1.5s" {
+		t.Errorf("时长应转成可读字符串，实际 %v", entry["elapsed"])
+	}
+}
+
+func TestNewLogHandlerText(t *testing.T) {
+	var buf bytes.Buffer
+	logger := newLogHandler(config.Config{LogFormat: "text"}, &buf)
+	logger.Info("hello", "k", "v")
+
+	out := buf.String()
+	if !strings.Contains(out, "msg=hello") || !strings.Contains(out, "k=v") {
+		t.Fatalf("text 格式应输出键值对，实际：%s", out)
+	}
+	if json.Valid(bytes.TrimSpace(buf.Bytes())) {
+		t.Fatalf("显式 text 格式不应输出 JSON：%s", out)
 	}
 }
