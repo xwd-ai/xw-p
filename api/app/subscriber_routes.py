@@ -52,7 +52,20 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-@router.post("", response_model=SubscriberOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=SubscriberOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="创建订阅者",
+    description=(
+        "登记一个收件人：渠道绑定 + 各渠道的收件地址。标识可自带（把业务侧的用户 ID 带进来），"
+        "留空则生成 UUID。\n\n"
+        "**唯一性**：标识重复、或邮箱/手机号已被别人绑定，返回 409 并点名占用者，"
+        "而不是覆盖——渠道绑定被悄悄换掉比创建失败更难查。\n\n"
+        "**规范化**：邮箱统一存小写、手机号存 E.164，因此查重、渲染与投递看到的是同一个字符串。"
+        "只有本地手机号时按 ``XW_SUBSCRIBER_COUNTRY_CODE`` 补区号，没配就报错而不是按位数猜。"
+    ),
+)
 def create_subscriber(
     body: SubscriberCreate,
     env: EnvContext = Depends(require_env),
@@ -83,7 +96,17 @@ def create_subscriber(
     return to_subscriber_out(created)
 
 
-@router.get("", response_model=SubscriberListOut)
+@router.get(
+    "",
+    response_model=SubscriberListOut,
+    summary="列出订阅者",
+    description=(
+        "按创建顺序翻页返回订阅者；``channel`` 只保留启用了该渠道的条目，"
+        "用于回答「哪些人有邮箱」。``nextCursor`` 为空表示没有更多。\n\n"
+        "列表不按环境收窄：订阅者标识全局唯一，档案里带 ``environment`` 字段，"
+        "由调用方按需过滤。"
+    ),
+)
 def list_subscribers(
     channel: str | None = Query(default=None, description="只看启用了该渠道的订阅者"),
     limit: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
@@ -118,7 +141,12 @@ def list_subscribers(
     )
 
 
-@router.get("/{subscriber_id}", response_model=SubscriberOut)
+@router.get(
+    "/{subscriber_id}",
+    response_model=SubscriberOut,
+    summary="按标识读取订阅者",
+    description="读取单个档案，含渠道绑定与规范化后的地址。标识不存在返回 404。",
+)
 def get_subscriber(subscriber_id: str) -> SubscriberOut:
     """按标识读取订阅者。"""
     subscriber = get_subscriber_store().get(subscriber_id)
@@ -130,7 +158,16 @@ def get_subscriber(subscriber_id: str) -> SubscriberOut:
     return to_subscriber_out(subscriber)
 
 
-@router.put("/{subscriber_id}", response_model=SubscriberOut)
+@router.put(
+    "/{subscriber_id}",
+    response_model=SubscriberOut,
+    summary="更新订阅者",
+    description=(
+        "**部分更新**：只改请求里出现的字段，没写 ``phone`` 就保持原号，写空串才解绑；"
+        "``channels`` 给出即整体替换，空列表表示全部关闭。\n\n"
+        "改成别人已占用的邮箱或手机号返回 409；解绑之后再被别人认领是允许的。"
+    ),
+)
 def update_subscriber(
     subscriber_id: str,
     body: SubscriberUpdate,
@@ -170,7 +207,15 @@ def update_subscriber(
     return to_subscriber_out(saved)
 
 
-@router.delete("/{subscriber_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{subscriber_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="删除订阅者",
+    description=(
+        "删除档案并释放其占用的地址，之后同一个邮箱或手机号可以被别人认领。\n\n"
+        "历史消息与执行明细保留：它们是投递事实的记录，删档案不应连带抹掉排查线索。"
+    ),
+)
 def delete_subscriber(
     subscriber_id: str,
     _env: EnvContext = Depends(require_env),

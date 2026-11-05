@@ -63,6 +63,18 @@ class TopicCreate(BaseModel):
     name: Optional[str] = Field(default=None, description="分组名称；留空按标识回填")
     description: Optional[str] = Field(default=None, description="分组说明")
 
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "id": "post-P-2026-1001-subscribers",
+                    "name": "热帖 P-2026-1001 的订阅读者",
+                    "description": "这篇帖子的关注者，新评论时整组触达",
+                }
+            ]
+        }
+    }
+
     @field_validator("id")
     @classmethod
     def _validate_id(cls, value: Optional[str]) -> Optional[str]:

@@ -93,6 +93,16 @@ class PreferenceUpsert(BaseModel):
     )
     enabled: bool = Field(default=True, description="true 接收，false 不接收")
 
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {"scope": "channel", "target": "email", "enabled": False},
+                {"scope": "workflow", "target": "post_liked", "enabled": False},
+                {"scope": "global", "enabled": True},
+            ]
+        }
+    }
+
     @model_validator(mode="after")
     def _check_target(self) -> "PreferenceUpsert":
         try:

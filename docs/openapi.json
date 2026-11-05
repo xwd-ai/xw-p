@@ -1,0 +1,6480 @@
+{
+  "components": {
+    "schemas": {
+      "BatchTriggerItem": {
+        "description": "批量触发中单条事件的处理结果。",
+        "properties": {
+          "acknowledgmentId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acknowledgmentid"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "被拒原因",
+            "title": "Error"
+          },
+          "index": {
+            "description": "该事件在请求列表中的下标，从 0 开始",
+            "title": "Index",
+            "type": "integer"
+          },
+          "name": {
+            "description": "事件对应的工作流标识",
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "description": "处理结果：accepted 已入队 / rejected 被拒",
+            "title": "Status",
+            "type": "string"
+          },
+          "subscriberId": {
+            "description": "订阅者标识",
+            "title": "Subscriberid",
+            "type": "string"
+          },
+          "transactionId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transactionid"
+          },
+          "triggerId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "触发标识（被拒时为空）",
+            "title": "Triggerid"
+          }
+        },
+        "required": [
+          "index",
+          "name",
+          "subscriberId",
+          "status"
+        ],
+        "title": "BatchTriggerItem",
+        "type": "object"
+      },
+      "BatchTriggerRequest": {
+        "description": "批量触发请求体。\n\n``events`` 逐条按单条触发的语义处理：工作流不存在、未启用或环境不匹配\n的条目单独判失败，不影响同批其它事件入队。\n\n示例（一次提交同一篇帖子的多条互动）：::\n\n    {\n        \"events\": [\n            {\"name\": \"post_liked\", \"to\": {\"subscriberId\": \"creator-1001\"},\n             \"payload\": {\"post_id\": \"P-2026-1001\", \"actor\": \"小林\"}},\n            {\"name\": \"post_commented\", \"to\": {\"subscriberId\": \"creator-1001\",\n             \"email\": \"creator@example.com\"},\n             \"payload\": {\"post_id\": \"P-2026-1001\", \"actor\": \"阿澈\", \"comment\": \"求教程\"}}\n        ]\n    }",
+        "properties": {
+          "events": {
+            "description": "待触发的事件列表，1–100 条",
+            "items": {
+              "$ref": "#/components/schemas/TriggerEvent"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Events",
+            "type": "array"
+          }
+        },
+        "required": [
+          "events"
+        ],
+        "title": "BatchTriggerRequest",
+        "type": "object"
+      },
+      "BatchTriggerResponse": {
+        "description": "批量触发回执：整批计数 + 逐条结果。\n\n结果按请求顺序给出且与请求等长，调用方按下标对齐即可，不必依赖\n「成功的那几条按顺序出现」这种隐含约定。",
+        "properties": {
+          "accepted": {
+            "description": "已入队的条数",
+            "title": "Accepted",
+            "type": "integer"
+          },
+          "acknowledged": {
+            "default": true,
+            "description": "整批是否已受理（部分被拒仍为 true）",
+            "title": "Acknowledged",
+            "type": "boolean"
+          },
+          "rejected": {
+            "description": "被拒的条数",
+            "title": "Rejected",
+            "type": "integer"
+          },
+          "results": {
+            "description": "逐条结果，与请求顺序一致",
+            "items": {
+              "$ref": "#/components/schemas/BatchTriggerItem"
+            },
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "accepted",
+          "rejected",
+          "results"
+        ],
+        "title": "BatchTriggerResponse",
+        "type": "object"
+      },
+      "Channel": {
+        "description": "通知投递渠道。\n\n使用 ``str`` 混入便于序列化与 JSON 往返，值即存储/传输标识。",
+        "enum": [
+          "in_app",
+          "email",
+          "sms",
+          "push",
+          "chat",
+          "delay",
+          "digest"
+        ],
+        "title": "Channel",
+        "type": "string"
+      },
+      "Environment": {
+        "description": "隔离环境：development / production。\n\n同一套实体在不同环境间数据隔离，API Key 按环境区分（后续 Phase 落地）。",
+        "enum": [
+          "development",
+          "production"
+        ],
+        "title": "Environment",
+        "type": "string"
+      },
+      "Error": {
+        "description": "错误响应。`detail` 为可直接展示的说明；参数校验失败时是逐字段的问题列表。",
+        "examples": [
+          {
+            "detail": "未知环境：staging（支持：development, production）"
+          },
+          {
+            "detail": [
+              {
+                "loc": [
+                  "body",
+                  "to",
+                  "subscriberId"
+                ],
+                "msg": "Field required",
+                "type": "missing"
+              }
+            ]
+          }
+        ],
+        "properties": {
+          "detail": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "properties": {
+                    "loc": {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "integer"
+                          }
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    "msg": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            ]
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "Error",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "PreferenceDeleteOut": {
+        "description": "删除回执：实际删掉的条数，0 表示本来就没有。",
+        "properties": {
+          "removed": {
+            "title": "Removed",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "removed"
+        ],
+        "title": "PreferenceDeleteOut",
+        "type": "object"
+      },
+      "PreferenceListOut": {
+        "description": "某个订阅者的全部偏好记录。",
+        "properties": {
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "各层级的记录条数，三个键恒在",
+            "title": "Counts",
+            "type": "object"
+          },
+          "default_allowed": {
+            "default": true,
+            "description": "三层都没有记录时的结论：按接收处理",
+            "title": "Default Allowed",
+            "type": "boolean"
+          },
+          "items": {
+            "description": "按具体程度排序：渠道 → 工作流 → 全局",
+            "items": {
+              "$ref": "#/components/schemas/PreferenceOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "subscriber_id": {
+            "title": "Subscriber Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "subscriber_id"
+        ],
+        "title": "PreferenceListOut",
+        "type": "object"
+      },
+      "PreferenceOut": {
+        "description": "一条偏好记录的对外表示。",
+        "properties": {
+          "enabled": {
+            "description": "是否接收",
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "scope": {
+            "description": "层级：global / workflow / channel",
+            "title": "Scope",
+            "type": "string"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "工作流名或渠道；全局层级为空",
+            "title": "Target"
+          },
+          "updated_at": {
+            "description": "最近一次写入时刻（UTC）",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "enabled",
+          "updated_at"
+        ],
+        "title": "PreferenceOut",
+        "type": "object"
+      },
+      "PreferenceUpsert": {
+        "description": "写入一条偏好。\n\n三层对 ``target`` 的要求不同，校验复用存储层的同一处判定，避免接口与\n存储在「什么算合法目标」上各写一套。",
+        "examples": [
+          {
+            "enabled": false,
+            "scope": "channel",
+            "target": "email"
+          },
+          {
+            "enabled": false,
+            "scope": "workflow",
+            "target": "post_liked"
+          },
+          {
+            "enabled": true,
+            "scope": "global"
+          }
+        ],
+        "properties": {
+          "enabled": {
+            "default": true,
+            "description": "true 接收，false 不接收",
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/Scope",
+            "description": "层级：global / workflow / channel"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "工作流名或渠道；全局层级不要传",
+            "title": "Target"
+          }
+        },
+        "required": [
+          "scope"
+        ],
+        "title": "PreferenceUpsert",
+        "type": "object"
+      },
+      "PreferenceWriteOut": {
+        "description": "写入回执：记录本身 + 这次是新建还是更新。",
+        "properties": {
+          "created": {
+            "description": "true 表示新建，false 表示覆盖了已有记录",
+            "title": "Created",
+            "type": "boolean"
+          },
+          "enabled": {
+            "description": "是否接收",
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "scope": {
+            "description": "层级：global / workflow / channel",
+            "title": "Scope",
+            "type": "string"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "工作流名或渠道；全局层级为空",
+            "title": "Target"
+          },
+          "updated_at": {
+            "description": "最近一次写入时刻（UTC）",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "enabled",
+          "updated_at",
+          "created"
+        ],
+        "title": "PreferenceWriteOut",
+        "type": "object"
+      },
+      "ProviderCreateRequest": {
+        "description": "新增渠道配置。\n\n``id`` 留空时按渠道自动编号；``credentials`` 的取值统一按字符串处理，\n数字与布尔会被转成对应的字面量（``port: 587`` → ``\"587\"``）。",
+        "properties": {
+          "channel": {
+            "description": "投递渠道：in_app / email / sms / push / chat",
+            "title": "Channel",
+            "type": "string"
+          },
+          "credentials": {
+            "additionalProperties": true,
+            "description": "实现所需的凭据，按键取值；不认识的键会被拒绝",
+            "title": "Credentials",
+            "type": "object"
+          },
+          "enabled": {
+            "default": true,
+            "description": "是否参与取用",
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "default": "",
+            "description": "条目标识；留空则按渠道自动编号",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "description": "实现种类，如 console / smtp / twilio / inapp / push-mock",
+            "title": "Kind",
+            "type": "string"
+          },
+          "persist": {
+            "default": false,
+            "description": "是否同时写回渠道配置文件",
+            "title": "Persist",
+            "type": "boolean"
+          },
+          "priority": {
+            "default": 100,
+            "description": "数值小的先取用",
+            "minimum": 0.0,
+            "title": "Priority",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "channel",
+          "kind"
+        ],
+        "title": "ProviderCreateRequest",
+        "type": "object"
+      },
+      "ProviderUpdateRequest": {
+        "description": "修改渠道配置；只有传进来的字段会变。\n\n``credentials`` 是整组替换而不是逐键合并：删掉一个可选凭证与改一个值同样\n常见，合并语义下前者做不到。``channel`` 可以带上，但必须与原值一致——\n把一个标识从 email 挪到 sms 会让执行明细里的历史记录指向另一件事。",
+        "properties": {
+          "channel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "仅用于校验，必须与原值一致",
+            "title": "Channel"
+          },
+          "credentials": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "整组替换的凭据；不传则保持原样",
+            "title": "Credentials"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "是否参与取用",
+            "title": "Enabled"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "实现种类",
+            "title": "Kind"
+          },
+          "persist": {
+            "default": false,
+            "description": "是否同时写回渠道配置文件",
+            "title": "Persist",
+            "type": "boolean"
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "数值小的先取用",
+            "title": "Priority"
+          }
+        },
+        "title": "ProviderUpdateRequest",
+        "type": "object"
+      },
+      "ReadRequest": {
+        "description": "标记已读请求体。\n\n``messageIds`` 是当前接口的写法；``triggerIds`` 保留给早期调用方，\n服务端会按 trigger_id 反查对应的消息 ID。",
+        "properties": {
+          "messageIds": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "要标记为已读的消息 ID 列表；缺省表示全部已读",
+            "title": "Messageids"
+          },
+          "subscriberId": {
+            "description": "订阅者唯一标识",
+            "minLength": 1,
+            "title": "Subscriberid",
+            "type": "string"
+          },
+          "triggerIds": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "按 trigger_id 标记已读（兼容旧调用方）",
+            "title": "Triggerids"
+          }
+        },
+        "required": [
+          "subscriberId"
+        ],
+        "title": "ReadRequest",
+        "type": "object"
+      },
+      "ResolutionOut": {
+        "description": "一次偏好解析的结论。",
+        "properties": {
+          "allowed": {
+            "description": "这条通知能不能发",
+            "title": "Allowed",
+            "type": "boolean"
+          },
+          "matched": {
+            "description": "是否命中了某条记录",
+            "title": "Matched",
+            "type": "boolean"
+          },
+          "reason": {
+            "description": "可读的原因，直接用于排查与展示",
+            "title": "Reason",
+            "type": "string"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "最终生效的层级",
+            "title": "Scope"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "生效层级的目标",
+            "title": "Target"
+          }
+        },
+        "required": [
+          "allowed",
+          "matched",
+          "reason"
+        ],
+        "title": "ResolutionOut",
+        "type": "object"
+      },
+      "Scope": {
+        "description": "偏好的层级。",
+        "enum": [
+          "global",
+          "workflow",
+          "channel"
+        ],
+        "title": "Scope",
+        "type": "string"
+      },
+      "StepIn": {
+        "description": "创建/更新时的步骤定义。",
+        "properties": {
+          "config": {
+            "additionalProperties": true,
+            "description": "步骤配置（可含 depends_on）",
+            "title": "Config",
+            "type": "object"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "步骤标识。留空由服务端生成；带值则按原样保存，客户端维护 config.depends_on 时需要它保持稳定",
+            "title": "Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "可读名称",
+            "title": "Name"
+          },
+          "type": {
+            "$ref": "#/components/schemas/Channel",
+            "description": "步骤类型（渠道或编排步骤）"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "StepIn",
+        "type": "object"
+      },
+      "StepOut": {
+        "description": "步骤的对外表示。",
+        "properties": {
+          "config": {
+            "additionalProperties": true,
+            "title": "Config",
+            "type": "object"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "type"
+        ],
+        "title": "StepOut",
+        "type": "object"
+      },
+      "SubscriberCreate": {
+        "description": "创建订阅者。标识可留空，由服务端生成。",
+        "examples": [
+          {
+            "channels": [
+              "in_app",
+              "push",
+              "email"
+            ],
+            "device_token": "fcm-token-9f2c1d",
+            "email": "Creator@Example.com",
+            "id": "creator-1001",
+            "phone": "+86 138 0000 0000"
+          }
+        ],
+        "properties": {
+          "channels": {
+            "description": "启用的渠道：in_app / email / sms / push / chat",
+            "items": {
+              "$ref": "#/components/schemas/Channel"
+            },
+            "title": "Channels",
+            "type": "array"
+          },
+          "device_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "推送设备 token",
+            "title": "Device Token"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "邮箱地址",
+            "title": "Email"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "订阅者标识；留空自动生成",
+            "title": "Id"
+          },
+          "phone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "手机号（E.164 或本地格式）",
+            "title": "Phone"
+          }
+        },
+        "title": "SubscriberCreate",
+        "type": "object"
+      },
+      "SubscriberListOut": {
+        "description": "订阅者列表：``nextCursor`` 为空表示没有下一页。",
+        "properties": {
+          "hasMore": {
+            "default": false,
+            "title": "Hasmore",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SubscriberOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextcursor"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "SubscriberListOut",
+        "type": "object"
+      },
+      "SubscriberOut": {
+        "description": "订阅者的对外表示。",
+        "properties": {
+          "bindings": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "渠道 → 收件地址；只列出实际可投递的渠道",
+            "title": "Bindings",
+            "type": "object"
+          },
+          "channels": {
+            "description": "启用的渠道",
+            "items": {
+              "type": "string"
+            },
+            "title": "Channels",
+            "type": "array"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "device_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Token"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "environment": {
+            "title": "Environment",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "phone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phone"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "environment",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "SubscriberOut",
+        "type": "object"
+      },
+      "SubscriberTarget": {
+        "description": "触发目标订阅者。",
+        "properties": {
+          "channels": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "分发渠道列表，如 in_app / email / sms / push",
+            "title": "Channels"
+          },
+          "deviceToken": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "移动推送的 device token（渠道含 push 时用）",
+            "title": "Devicetoken"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "接收邮件的地址（渠道含 email 时用）",
+            "title": "Email"
+          },
+          "phone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "接收短信的手机号（渠道含 sms 时用）",
+            "title": "Phone"
+          },
+          "subscriberId": {
+            "description": "订阅者唯一标识",
+            "minLength": 1,
+            "title": "Subscriberid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "subscriberId"
+        ],
+        "title": "SubscriberTarget",
+        "type": "object"
+      },
+      "SubscriberUpdate": {
+        "description": "更新订阅者：未出现的字段保持不变，显式给空串表示解除绑定。",
+        "properties": {
+          "channels": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Channel"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "启用的渠道；给出即整体替换，空列表表示全部关闭",
+            "title": "Channels"
+          },
+          "device_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "设备 token；空串表示解绑",
+            "title": "Device Token"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "邮箱地址；空串表示解绑",
+            "title": "Email"
+          },
+          "phone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "手机号；空串表示解绑",
+            "title": "Phone"
+          }
+        },
+        "title": "SubscriberUpdate",
+        "type": "object"
+      },
+      "ToggleRequest": {
+        "description": "启停请求。",
+        "properties": {
+          "enabled": {
+            "description": "true 启用 / false 停用",
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "persist": {
+            "default": false,
+            "description": "是否同时写回渠道配置文件（XW_PROVIDERS_FILE），使重启后仍然生效",
+            "title": "Persist",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "ToggleRequest",
+        "type": "object"
+      },
+      "TopicBroadcastItem": {
+        "description": "广播中单个成员的处理结果。",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "跳过原因",
+            "title": "Error"
+          },
+          "index": {
+            "description": "该成员在名单中的下标，从 0 开始",
+            "title": "Index",
+            "type": "integer"
+          },
+          "status": {
+            "description": "处理结果：accepted 已入队 / skipped 未发",
+            "title": "Status",
+            "type": "string"
+          },
+          "subscriberId": {
+            "title": "Subscriberid",
+            "type": "string"
+          },
+          "transactionId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transactionid"
+          },
+          "triggerId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "触发标识（跳过时为空）",
+            "title": "Triggerid"
+          }
+        },
+        "required": [
+          "index",
+          "subscriberId",
+          "status"
+        ],
+        "title": "TopicBroadcastItem",
+        "type": "object"
+      },
+      "TopicBroadcastRequest": {
+        "description": "按分组广播的请求体。\n\n与单条触发相比少了 ``to``：收件人来自分组成员，地址来自各自的订阅者档案。\n事件名与载荷仍是同一套语义，逐人渲染。\n\n示例（新帖发布，广播给关注该作者的读者）：::\n\n    {\n        \"name\": \"post_published\",\n        \"payload\": {\"post_id\": \"P-2026-1001\", \"post_title\": \"我的第一支 Vlog\",\n                    \"author\": \"阿澈\"}\n    }",
+        "properties": {
+          "name": {
+            "description": "工作流/模板标识，例如 post_liked / post_commented",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "overrides": {
+            "additionalProperties": true,
+            "description": "覆盖模板默认配置",
+            "title": "Overrides",
+            "type": "object"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "description": "渲染变量（键值对）",
+            "title": "Payload",
+            "type": "object"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "TopicBroadcastRequest",
+        "type": "object"
+      },
+      "TopicBroadcastResponse": {
+        "description": "广播回执：成员规模 + 受理/跳过计数 + 逐人结果。\n\n``memberCount`` 是广播时刻的成员名单长度，等于 ``accepted + skipped``：\n三者放在一起才能回答「名单里 20 个人，为什么只发了 18 条」。",
+        "properties": {
+          "accepted": {
+            "description": "已入队的条数",
+            "title": "Accepted",
+            "type": "integer"
+          },
+          "acknowledged": {
+            "default": true,
+            "description": "整批是否已受理（部分跳过仍为 true）",
+            "title": "Acknowledged",
+            "type": "boolean"
+          },
+          "memberCount": {
+            "description": "广播时的成员数",
+            "title": "Membercount",
+            "type": "integer"
+          },
+          "name": {
+            "description": "本次广播使用的工作流标识",
+            "title": "Name",
+            "type": "string"
+          },
+          "results": {
+            "description": "逐人结果，与成员名单顺序一致",
+            "items": {
+              "$ref": "#/components/schemas/TopicBroadcastItem"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "skipped": {
+            "description": "未发起的条数（档案缺失或没有可投递渠道）",
+            "title": "Skipped",
+            "type": "integer"
+          },
+          "topicId": {
+            "title": "Topicid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "topicId",
+          "name",
+          "memberCount",
+          "accepted",
+          "skipped",
+          "results"
+        ],
+        "title": "TopicBroadcastResponse",
+        "type": "object"
+      },
+      "TopicCreate": {
+        "description": "创建分组。标识可留空，由服务端生成 UUID。",
+        "examples": [
+          {
+            "description": "这篇帖子的关注者，新评论时整组触达",
+            "id": "post-P-2026-1001-subscribers",
+            "name": "热帖 P-2026-1001 的订阅读者"
+          }
+        ],
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "分组说明",
+            "title": "Description"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "分组标识；留空自动生成",
+            "title": "Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "分组名称；留空按标识回填",
+            "title": "Name"
+          }
+        },
+        "title": "TopicCreate",
+        "type": "object"
+      },
+      "TopicListOut": {
+        "description": "分组列表：``nextCursor`` 为空表示没有下一页。",
+        "properties": {
+          "hasMore": {
+            "default": false,
+            "title": "Hasmore",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TopicOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextcursor"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "TopicListOut",
+        "type": "object"
+      },
+      "TopicMemberListOut": {
+        "description": "成员列表：``total`` 是全量成员数，不受分页影响。",
+        "properties": {
+          "hasMore": {
+            "default": false,
+            "title": "Hasmore",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TopicMemberOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "memberLimit": {
+            "default": 0,
+            "description": "分组成员上限",
+            "title": "Memberlimit",
+            "type": "integer"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextcursor"
+          },
+          "topicId": {
+            "title": "Topicid",
+            "type": "string"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "topicId",
+          "items"
+        ],
+        "title": "TopicMemberListOut",
+        "type": "object"
+      },
+      "TopicMemberOut": {
+        "description": "成员条目。",
+        "properties": {
+          "addedAt": {
+            "title": "Addedat",
+            "type": "string"
+          },
+          "subscriberId": {
+            "title": "Subscriberid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "subscriberId",
+          "addedAt"
+        ],
+        "title": "TopicMemberOut",
+        "type": "object"
+      },
+      "TopicMembershipIn": {
+        "description": "加入分组的请求体。",
+        "properties": {
+          "subscriberId": {
+            "description": "订阅者标识",
+            "title": "Subscriberid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "subscriberId"
+        ],
+        "title": "TopicMembershipIn",
+        "type": "object"
+      },
+      "TopicMembershipOut": {
+        "description": "加入分组的回执。\n\n``added`` 区分「这次真的加进去了」与「本来就是成员」：重复加入是幂等的，\n但调用方需要知道本次是否产生了变更（比如据此决定要不要重算广播规模）。\n``memberLimit`` 给出当前分组的成员上限，调用方据此判断还剩多少余量，\n不必再单独查一次配置。",
+        "properties": {
+          "added": {
+            "title": "Added",
+            "type": "boolean"
+          },
+          "memberCount": {
+            "title": "Membercount",
+            "type": "integer"
+          },
+          "memberLimit": {
+            "default": 0,
+            "description": "分组成员上限",
+            "title": "Memberlimit",
+            "type": "integer"
+          },
+          "subscriberId": {
+            "title": "Subscriberid",
+            "type": "string"
+          },
+          "topicId": {
+            "title": "Topicid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "topicId",
+          "subscriberId",
+          "added",
+          "memberCount"
+        ],
+        "title": "TopicMembershipOut",
+        "type": "object"
+      },
+      "TopicOut": {
+        "description": "分组的对外表示。",
+        "properties": {
+          "createdAt": {
+            "title": "Createdat",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "environment": {
+            "title": "Environment",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "memberCount": {
+            "default": 0,
+            "description": "成员数",
+            "title": "Membercount",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "updatedAt": {
+            "title": "Updatedat",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "environment",
+          "createdAt",
+          "updatedAt"
+        ],
+        "title": "TopicOut",
+        "type": "object"
+      },
+      "TopicUpdate": {
+        "description": "更新分组：只改请求里出现的字段，说明传空串表示清空。",
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "分组说明；空串表示清空",
+            "title": "Description"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "分组名称",
+            "title": "Name"
+          }
+        },
+        "title": "TopicUpdate",
+        "type": "object"
+      },
+      "TriggerEvent": {
+        "description": "触发请求体。\n\n一条互动事件触发后，按 ``name`` 匹配工作流模板，渲染 ``payload`` 中的变量，\n并将通知分发到 ``to`` 指定的订阅者所在的多个渠道。\n\n示例（帖子收到评论，站内信 + 推送 + 邮件多渠道触达）：::\n\n    {\n        \"name\": \"post_commented\",\n        \"to\": {\n            \"subscriberId\": \"creator-1001\",\n            \"email\": \"creator@example.com\",\n            \"phone\": \"+8613800000000\",\n            \"deviceToken\": \"fcm-token-9f2c1d\",\n            \"channels\": [\"in_app\", \"push\", \"email\"]\n        },\n        \"payload\": {\n            \"post_id\": \"P-2026-1001\",\n            \"post_title\": \"我的第一支 Vlog\",\n            \"actor\": \"小林\",\n            \"comment\": \"拍得真好，求教程！\"\n        }\n    }",
+        "examples": [
+          {
+            "name": "post_commented",
+            "overrides": {},
+            "payload": {
+              "actor": "小林",
+              "comment": "拍得真好，求教程！",
+              "post_id": "P-2026-1001",
+              "post_title": "我的第一支 Vlog"
+            },
+            "to": {
+              "channels": [
+                "in_app",
+                "push",
+                "email"
+              ],
+              "deviceToken": "fcm-token-9f2c1d",
+              "email": "creator@example.com",
+              "phone": "+8613800000000",
+              "subscriberId": "creator-1001"
+            }
+          }
+        ],
+        "properties": {
+          "name": {
+            "description": "工作流/模板标识，例如 post_liked / post_commented / post_mentioned",
+            "examples": [
+              "post_commented"
+            ],
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "overrides": {
+            "additionalProperties": true,
+            "description": "覆盖模板默认配置",
+            "title": "Overrides",
+            "type": "object"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "description": "渲染变量（键值对）",
+            "title": "Payload",
+            "type": "object"
+          },
+          "to": {
+            "$ref": "#/components/schemas/SubscriberTarget",
+            "description": "触发目标订阅者及其渠道"
+          }
+        },
+        "required": [
+          "name",
+          "to"
+        ],
+        "title": "TriggerEvent",
+        "type": "object"
+      },
+      "TriggerResponse": {
+        "description": "触发成功后的回执。",
+        "properties": {
+          "acknowledged": {
+            "default": true,
+            "description": "是否已受理",
+            "title": "Acknowledged",
+            "type": "boolean"
+          },
+          "acknowledgmentId": {
+            "description": "回执标识，与 trigger_id 一致",
+            "title": "Acknowledgmentid",
+            "type": "string"
+          },
+          "transactionId": {
+            "description": "事务标识（幂等键未命中时生成）",
+            "title": "Transactionid",
+            "type": "string"
+          },
+          "triggerId": {
+            "description": "触发事件唯一标识",
+            "title": "Triggerid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "triggerId",
+          "transactionId",
+          "acknowledgmentId"
+        ],
+        "title": "TriggerResponse",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "WorkflowActivationIn": {
+        "description": "启停请求体。",
+        "properties": {
+          "active": {
+            "description": "true 启用、false 停用；重复设置同一状态不产生写入",
+            "title": "Active",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "active"
+        ],
+        "title": "WorkflowActivationIn",
+        "type": "object"
+      },
+      "WorkflowActivationOut": {
+        "description": "启停回执：改后的模板与本次是否真的写入了。",
+        "properties": {
+          "changed": {
+            "description": "是否发生状态变化；重复调用返回 false",
+            "title": "Changed",
+            "type": "boolean"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowOut"
+          }
+        },
+        "required": [
+          "workflow",
+          "changed"
+        ],
+        "title": "WorkflowActivationOut",
+        "type": "object"
+      },
+      "WorkflowCreate": {
+        "description": "创建工作流请求体。",
+        "examples": [
+          {
+            "description": "同一篇帖子的点赞在 10 分钟内聚合成一张卡片，再发站内信与推送",
+            "environment": "development",
+            "name": "post_liked_digest",
+            "steps": [
+              {
+                "config": {
+                  "key": "payload.post_id",
+                  "title": "《{{payload.post_title}}》收到新的点赞",
+                  "window": "10m"
+                },
+                "id": "digest",
+                "name": "按帖子聚合点赞",
+                "type": "digest"
+              },
+              {
+                "config": {
+                  "depends_on": [
+                    "digest"
+                  ],
+                  "template": "{{payload.actor}} 赞了你的帖子《{{payload.post_title}}》"
+                },
+                "id": "inapp",
+                "name": "站内信",
+                "type": "in_app"
+              },
+              {
+                "config": {
+                  "depends_on": [
+                    "digest"
+                  ],
+                  "template": "{{payload.actor}} 赞了你的帖子"
+                },
+                "id": "push",
+                "name": "推送",
+                "type": "push"
+              }
+            ]
+          }
+        ],
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "描述",
+            "title": "Description"
+          },
+          "environment": {
+            "$ref": "#/components/schemas/Environment",
+            "default": "development"
+          },
+          "name": {
+            "description": "工作流标识（业务侧使用）",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "steps": {
+            "description": "步骤序列（有序）",
+            "items": {
+              "$ref": "#/components/schemas/StepIn"
+            },
+            "title": "Steps",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "WorkflowCreate",
+        "type": "object"
+      },
+      "WorkflowDuplicateIn": {
+        "description": "复制请求体（整体可选：不带请求体时按源模板自动命名）。",
+        "properties": {
+          "active": {
+            "default": false,
+            "description": "副本是否立即启用，默认关闭（副本先当草稿）",
+            "title": "Active",
+            "type": "boolean"
+          },
+          "environment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Environment"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "副本所属环境，留空跟随源模板"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "副本名称，留空按「源名称 + _copy」生成",
+            "title": "Name"
+          }
+        },
+        "title": "WorkflowDuplicateIn",
+        "type": "object"
+      },
+      "WorkflowOut": {
+        "description": "工作流对外表示。",
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "environment": {
+            "title": "Environment",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/StepOut"
+            },
+            "title": "Steps",
+            "type": "array"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "steps",
+          "version",
+          "environment",
+          "active",
+          "created_at"
+        ],
+        "title": "WorkflowOut",
+        "type": "object"
+      },
+      "WorkflowUpdate": {
+        "description": "更新工作流请求体（全部可选，仅更新传入字段）。",
+        "properties": {
+          "active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "environment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Environment"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "steps": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/StepIn"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Steps"
+          }
+        },
+        "title": "WorkflowUpdate",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "ApiKeyAuth": {
+        "description": "环境级 API Key；目标环境未配置 Key 时可省略。",
+        "in": "header",
+        "name": "X-Api-Key",
+        "type": "apiKey"
+      }
+    }
+  },
+  "externalDocs": {
+    "description": "仓库文档：README 与 SDK 使用指南",
+    "url": "https://github.com/xwd-ai/xw-p#readme"
+  },
+  "info": {
+    "description": "内容社区互动触达服务：点赞、评论、@提及等互动事件触发后，按工作流模板把通知\n分发到创作者所在的多个渠道（站内信 / 推送 / 邮件 / 短信）。\n\n## 请求约定\n\n**环境隔离**：环境按接口粒度参与。触发、订阅者写入、偏好、分组与渠道配置的\n接口从 `X-Environment` 取环境（`development` 默认 / `production`），写错直接 400\n而不是退回默认值——静默落到另一套环境比报错更难查。查询类接口（活动日志、\n执行明细、管理视图）用显式的 `environment` 参数限定范围，收件箱按订阅者标识\n寻址：这些接口的调用方通常是运营后台，一次要跨环境看数据，强制带环境头反而\n要在前端做无意义的切换。\n\n**鉴权**：读取 `X-Environment` 的环境配置了 API Key 时，请求必须带 `X-Api-Key`，\n不匹配返回 401。未配置 Key 的环境放行，便于本地与演示环境直接调用；不读环境头\n的查询接口因此也不校验 Key。\n\n**幂等**：触发类接口接受 `Idempotency-Key` 头。相同键重复提交返回首次回执、\n不重复入队；不带该头则每次都是新的一次触发。键的取值由调用方决定，通常用\n业务侧的事件标识。\n\n**分页**：列表接口用游标而不是页码。响应里的 `nextCursor` 为空表示没有更多，\n把它原样回传即可取下一页；游标编码了上一页最后一条的排序键，翻页期间有新\n数据写入也不会重复或漏掉。\n\n**时间**：请求与响应里的时间均为 ISO 8601，带时区；不带时区的入参按 UTC 解释。\n\n## 数据模型里的几个概念\n\n- **渠道**：`in_app` / `email` / `sms` / `push` / `chat` 是可投递渠道；\n  `delay` 与 `digest` 是编排步骤，不能作为投递渠道写入偏好或步骤类型。\n- **聚合（digest）**：按 `payload.post_id` 一类的聚合键 + 时间窗口把同一篇帖子的\n  互动合并成一条卡片，计数在原地累加。聚合由引擎执行，走内存总线时每条互动\n  是独立消息。\n- **跳过（skipped）**：被订阅者偏好拦下的渠道既没成功也没失败，不计入成功率\n  分母；整条消息的渠道全被拦下时消息状态是 `skipped` 而不是 `failed`。\n\n## 文档\n\n`GET /openapi.json` 返回本页对应的 schema，`GET /docs` 是 Swagger UI，\n`GET /redoc` 是 ReDoc。仓库里的 `docs/openapi.json` 是同一份内容的导出，\n可用 `scripts/export_openapi.py` 重新生成。\n",
+    "license": {
+      "identifier": "MIT",
+      "name": "MIT"
+    },
+    "title": "xw-notify API",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/health": {
+      "get": {
+        "description": "返回服务状态与当前总线里的待消费消息数。供负载均衡与部署脚本探测，不读环境头、不校验 Key。",
+        "operationId": "getHealth",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Health Health Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "健康检查",
+        "tags": [
+          "system"
+        ]
+      }
+    },
+    "/v1/activity": {
+      "get": {
+        "description": "按时间倒序返回触发记录，支持订阅者、工作流、触发标识、状态、时间区间与环境过滤。\n\n排序键是 ``(创建时间, 触发标识)``：时间只到秒级，同一秒写入的多条记录若只按时间排，翻页时两次请求会算出不同顺序，同一条会重复出现或被漏掉。``nextCursor`` 编码上一页最后一条的排序键，原样回传即可取下一页；为空表示没有更多。",
+        "operationId": "getV1Activity",
+        "parameters": [
+          {
+            "description": "按订阅者过滤",
+            "in": "query",
+            "name": "subscriberId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按订阅者过滤",
+              "title": "Subscriberid"
+            }
+          },
+          {
+            "description": "按工作流名过滤",
+            "in": "query",
+            "name": "workflow",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按工作流名过滤",
+              "title": "Workflow"
+            }
+          },
+          {
+            "description": "按触发唯一标识精确查询",
+            "in": "query",
+            "name": "triggerId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按触发唯一标识精确查询",
+              "title": "Triggerid"
+            }
+          },
+          {
+            "description": "按活动状态过滤（triggered/sent/failed）",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按活动状态过滤（triggered/sent/failed）",
+              "title": "Status"
+            }
+          },
+          {
+            "description": "起始时间（ISO 8601，含）",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "起始时间（ISO 8601，含）",
+              "title": "Since"
+            }
+          },
+          {
+            "description": "截止时间（ISO 8601，含）",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "截止时间（ISO 8601，含）",
+              "title": "Until"
+            }
+          },
+          {
+            "description": "按隔离环境过滤（development/production）",
+            "in": "query",
+            "name": "environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按隔离环境过滤（development/production）",
+              "title": "Environment"
+            }
+          },
+          {
+            "description": "单页条数上限",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "单页条数上限",
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "上一页返回的 nextCursor",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "上一页返回的 nextCursor",
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Activity V1 Activity Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "列出一页活动日志",
+        "tags": [
+          "activity"
+        ]
+      }
+    },
+    "/v1/admin/activity": {
+      "get": {
+        "description": "按环境、订阅者、工作流、触发标识、状态、渠道与关键词检索活动记录，最新在前。\n\n默认跨环境返回，与前端活动流（默认只看当前环境）不同——排查问题时往往要同时看两套环境。\n``keyword`` 是大小写不敏感的子串匹配，覆盖标题、工作流与订阅者标识；``channel`` 命中记录声明的目标渠道之一。\n\n``total`` 是本页条数，精确总数请用 ``/activity/summary``：每次翻页都扫完命中集合代价太大。",
+        "operationId": "getV1AdminActivity",
+        "parameters": [
+          {
+            "description": "按环境过滤；留空表示所有环境",
+            "in": "query",
+            "name": "environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按环境过滤；留空表示所有环境",
+              "title": "Environment"
+            }
+          },
+          {
+            "description": "按订阅者过滤",
+            "in": "query",
+            "name": "subscriberId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按订阅者过滤",
+              "title": "Subscriberid"
+            }
+          },
+          {
+            "description": "按工作流名过滤",
+            "in": "query",
+            "name": "workflow",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按工作流名过滤",
+              "title": "Workflow"
+            }
+          },
+          {
+            "description": "按触发唯一标识精确查询",
+            "in": "query",
+            "name": "triggerId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按触发唯一标识精确查询",
+              "title": "Triggerid"
+            }
+          },
+          {
+            "description": "按状态过滤（triggered/sent/failed/skipped）",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按状态过滤（triggered/sent/failed/skipped）",
+              "title": "Status"
+            }
+          },
+          {
+            "description": "按目标渠道过滤",
+            "in": "query",
+            "name": "channel",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按目标渠道过滤",
+              "title": "Channel"
+            }
+          },
+          {
+            "description": "标题/工作流/订阅者标识的子串匹配（最多 120 字符）",
+            "in": "query",
+            "name": "keyword",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "标题/工作流/订阅者标识的子串匹配（最多 120 字符）",
+              "title": "Keyword"
+            }
+          },
+          {
+            "description": "起始时间（ISO 8601，含）",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "起始时间（ISO 8601，含）",
+              "title": "Since"
+            }
+          },
+          {
+            "description": "截止时间（ISO 8601，含）",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "截止时间（ISO 8601，含）",
+              "title": "Until"
+            }
+          },
+          {
+            "description": "单页条数上限",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "单页条数上限",
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "上一页返回的 nextCursor",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "上一页返回的 nextCursor",
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin List Activity V1 Admin Activity Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "检索活动日志",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/activity/summary": {
+      "get": {
+        "description": "对命中过滤条件的全部记录做一次流式扫描，给出状态分布、工作流与渠道排行、环境分布、去重订阅者数与首末时间；不受分页与游标影响。\n\n订阅者集合设了上限，超过后停止扩张并标 ``capped``，汇总的内存占用因此不随流量增长。\n\n路由声明顺序上必须排在 ``/activity/{triggerId}`` 之前，否则 ``summary`` 会被当成一个触发标识。",
+        "operationId": "getV1AdminActivitySummary",
+        "parameters": [
+          {
+            "description": "按环境过滤；留空表示所有环境",
+            "in": "query",
+            "name": "environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按环境过滤；留空表示所有环境",
+              "title": "Environment"
+            }
+          },
+          {
+            "in": "query",
+            "name": "subscriberId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subscriberid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workflow",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Workflow"
+            }
+          },
+          {
+            "in": "query",
+            "name": "triggerId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Triggerid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "channel",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Channel"
+            }
+          },
+          {
+            "in": "query",
+            "name": "keyword",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Keyword"
+            }
+          },
+          {
+            "description": "起始时间（ISO 8601，含）",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "起始时间（ISO 8601，含）",
+              "title": "Since"
+            }
+          },
+          {
+            "description": "截止时间（ISO 8601，含）",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "截止时间（ISO 8601，含）",
+              "title": "Until"
+            }
+          },
+          {
+            "description": "榜单返回条数",
+            "in": "query",
+            "name": "top",
+            "required": false,
+            "schema": {
+              "default": 5,
+              "description": "榜单返回条数",
+              "maximum": 20,
+              "minimum": 1,
+              "title": "Top",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Activity Summary V1 Admin Activity Summary Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "汇总活动日志",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/activity/{trigger_id}": {
+      "get": {
+        "description": "把一次触发的活动记录与逐渠道执行明细并排返回，并给出两类缺口：\n\n- ``missingChannels``：活动记录里声明了、却没有对应明细——典型原因是消息还压在队列里；\n- ``undeclaredChannels``：有明细、但触发记录里没声明——说明数据本身有问题。\n\n一次请求拿齐这三样，调用方不必自己比对「工作流会投哪些渠道」：同一条工作流在不同订阅者身上展开的渠道不同（没有邮箱就没有邮件），只有活动记录里那份是真正入队的列表。",
+        "operationId": "getV1AdminActivityByTriggerId",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "trigger_id",
+            "required": true,
+            "schema": {
+              "title": "Trigger Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "按环境过滤；留空表示所有环境",
+            "in": "query",
+            "name": "environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按环境过滤；留空表示所有环境",
+              "title": "Environment"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Activity Detail V1 Admin Activity  Trigger Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "单次触发下钻",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/stats": {
+      "get": {
+        "description": "按执行明细聚合一段时间内的投递结果。\n\n**返回内容**：``totals`` 为整体计数与成功率、平均/分位/最大耗时；``channels`` 按渠道拆分（尝试数、成功、失败、跳过、成功率、耗时）；``providers`` 与 ``workflows`` 给出实际完成投递的实现与工作流排行；``failure_reasons`` 是失败原因归并后的榜单；``trend`` 按天给出成败分布。\n\n**窗口**：``days`` 与 ``since`` 互斥，``until`` 可与任一搭配；窗口最长 90 天。\n\n**口径**：一条记录对应一次「触发 × 渠道」的投递；``skipped`` 表示该渠道被订阅者偏好关闭，没有尝试投递，不计入成功率分母。耗时分位由固定桶直方图估算，受桶边界粒度约束。",
+        "operationId": "getV1AdminStats",
+        "parameters": [
+          {
+            "description": "统计窗口天数（默认 7，与 since 互斥）",
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 90,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "统计窗口天数（默认 7，与 since 互斥）",
+              "title": "Days"
+            }
+          },
+          {
+            "description": "窗口起点（ISO 8601，含）",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "窗口起点（ISO 8601，含）",
+              "title": "Since"
+            }
+          },
+          {
+            "description": "窗口终点（ISO 8601，含，默认当前时刻）",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "窗口终点（ISO 8601，含，默认当前时刻）",
+              "title": "Until"
+            }
+          },
+          {
+            "description": "各榜单返回条数",
+            "in": "query",
+            "name": "top",
+            "required": false,
+            "schema": {
+              "default": 5,
+              "description": "各榜单返回条数",
+              "maximum": 20,
+              "minimum": 1,
+              "title": "Top",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Stats V1 Admin Stats Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "统计结果"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "窗口参数冲突或区间不合法"
+          },
+          "422": {
+            "description": "参数越界（days / top）"
+          }
+        },
+        "summary": "管理统计：渠道成败、耗时分布与失败原因",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/dashboard/stats": {
+      "get": {
+        "description": "按消息记录聚合：总量、成功率、渠道分布与最近 7 日趋势。\n\n口径是「一条消息一个整体状态」，适合看整体发送量与趋势；要分清同一条消息里哪个渠道失败，请用 ``GET /v1/admin/stats``，那里按逐渠道执行明细聚合。成功率的分母只算实际尝试投递的消息，被偏好整条拦下的 ``skipped`` 不进分母。",
+        "operationId": "getV1DashboardStats",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Dashboard Stats V1 Dashboard Stats Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "仪表盘统计（按消息记录）",
+        "tags": [
+          "dashboard"
+        ]
+      }
+    },
+    "/v1/events/trigger": {
+      "post": {
+        "description": "触发一条内容社区互动事件（点赞 / 评论 / @提及），按 ``name`` 匹配工作流模板，将通知分发到订阅者所在的多个渠道（站内信 / 邮件 / 短信 / 推送）。\n\n处理链路：鉴权（环境 + API Key）→ 模板查找 → 幂等去重 → 入队 → 返回回执。\n\n**环境隔离**：通过 ``X-Environment`` 指定隔离环境（默认 ``development``），模板查找与活动日志均打上该环境标记；配置了 API Key 的环境需携带 ``X-Api-Key`` 头。\n\n**幂等语义**：携带 ``Idempotency-Key`` 的请求若此前已成功处理，直接返回缓存回执，不会重复入队；未携带则每次请求都会生成新回执。",
+        "operationId": "postV1EventsTrigger",
+        "parameters": [
+          {
+            "description": "幂等键：相同键重复请求返回首次回执",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "幂等键：相同键重复请求返回首次回执",
+              "examples": [
+                "post-commented-P-2026-1001"
+              ],
+              "title": "Idempotency-Key"
+            }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TriggerEvent"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriggerResponse"
+                }
+              }
+            },
+            "description": "触发成功，返回回执（acknowledged=true）"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "入参校验失败或未知环境"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或不匹配"
+          },
+          "404": {
+            "description": "工作流模板不存在或未启用"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "触发一条互动事件通知",
+        "tags": [
+          "trigger"
+        ]
+      }
+    },
+    "/v1/events/trigger/batch": {
+      "post": {
+        "description": "一次提交多条互动事件，按单条触发的同一套语义逐条处理：模板查找、环境匹配、生成回执，最后一次性把受理的事件写进队列。\n\n**为什么批量**：逐条触发时每条消息都要一次 HTTP 往返加一次 Redis 往返，互动高峰（比如一条热帖短时间涌入大量点赞）下往返开销会超过业务本身；这个接口把整批压成一次入队、一次活动日志写入。\n\n**部分失败**：某条事件的工作流不存在、未启用或环境不匹配时，该条记为 ``rejected`` 并给出原因，同批其余事件照常入队；回执里的 ``results`` 与请求顺序一致，调用方按下标对齐即可。全部被拒时同样返回 200，逐条原因看 ``error``。\n\n**幂等语义**：``Idempotency-Key`` 作用于整批——相同键重复请求返回首次的回执，不会重复入队；逐条事件不带独立的幂等键。",
+        "operationId": "postV1EventsTriggerBatch",
+        "parameters": [
+          {
+            "description": "整批幂等键：相同键重复请求返回首次回执",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "整批幂等键：相同键重复请求返回首次回执",
+              "examples": [
+                "post-liked-P-2026-1001-burst-1"
+              ],
+              "title": "Idempotency-Key"
+            }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchTriggerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchTriggerResponse"
+                }
+              }
+            },
+            "description": "整批已处理，逐条结果见 results"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "未知环境"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或不匹配"
+          },
+          "422": {
+            "description": "事件列表为空或超过上限"
+          }
+        },
+        "summary": "批量触发互动事件通知",
+        "tags": [
+          "trigger"
+        ]
+      }
+    },
+    "/v1/executions": {
+      "get": {
+        "description": "一次触发 × 一个渠道一条记录，最新在前。字段里能看到实际完成投递的实现、尝试链路（含回退与重试）、耗时，以及失败或跳过原因。\n\n状态三档：``sent`` 成功、``failed`` 失败、``skipped`` 被订阅者偏好拦下——跳过既不是成功也不是失败，统计时不计入成功率分母。\n\n``nextCursor`` 为空表示没有更多，原样回传取下一页。",
+        "operationId": "getV1Executions",
+        "parameters": [
+          {
+            "description": "按触发唯一标识过滤",
+            "in": "query",
+            "name": "triggerId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按触发唯一标识过滤",
+              "title": "Triggerid"
+            }
+          },
+          {
+            "description": "按投递渠道过滤",
+            "in": "query",
+            "name": "channel",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按投递渠道过滤",
+              "title": "Channel"
+            }
+          },
+          {
+            "description": "按投递结果过滤（sent/failed/skipped）",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按投递结果过滤（sent/failed/skipped）",
+              "title": "Status"
+            }
+          },
+          {
+            "description": "起始时间（ISO 8601，含）",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "起始时间（ISO 8601，含）",
+              "title": "Since"
+            }
+          },
+          {
+            "description": "截止时间（ISO 8601，含）",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "截止时间（ISO 8601，含）",
+              "title": "Until"
+            }
+          },
+          {
+            "description": "单页条数上限",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "单页条数上限",
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "上一页返回的 nextCursor",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "上一页返回的 nextCursor",
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Executions V1 Executions Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "列出一页执行明细",
+        "tags": [
+          "execution"
+        ]
+      }
+    },
+    "/v1/inbox": {
+      "get": {
+        "description": "返回某订阅者的 In-app 消息与未读计数，按「排序时间 + 消息标识」倒序。\n\n**计数口径**：``unread`` / ``total`` 覆盖全部消息，不受筛选与 ``limit`` 影响；``matched`` 是本次筛选命中的条数，翻页时以它为准。同一张聚合卡片无论被多少次互动改写都只算一条消息，所以点赞涨到 99 条未读也不会变成 99。\n\n**翻页**：游标编码上一页最后一条的排序键，从它的严格后一条继续；翻页期间顶上来的新消息不会重复返回，游标指向的消息被删掉也不会卡住。游标解析失败返回 400，而不是静默回到第一页。",
+        "operationId": "getV1Inbox",
+        "parameters": [
+          {
+            "description": "订阅者唯一标识",
+            "in": "query",
+            "name": "subscriberId",
+            "required": true,
+            "schema": {
+              "description": "订阅者唯一标识",
+              "minLength": 1,
+              "title": "Subscriberid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "每页条数",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "每页条数",
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "上一页返回的 nextCursor",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "上一页返回的 nextCursor",
+              "title": "Cursor"
+            }
+          },
+          {
+            "description": "只看未读",
+            "in": "query",
+            "name": "unread",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "只看未读",
+              "title": "Unread",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "只看某个工作流的消息，如 post_liked",
+            "in": "query",
+            "name": "workflow",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "只看某个工作流的消息，如 post_liked",
+              "title": "Workflow"
+            }
+          },
+          {
+            "description": "时间下界（含），ISO 8601",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "时间下界（含），ISO 8601",
+              "title": "Since"
+            }
+          },
+          {
+            "description": "时间上界（不含），ISO 8601",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "时间上界（不含），ISO 8601",
+              "title": "Until"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Inbox V1 Inbox Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "读取收件箱",
+        "tags": [
+          "inbox"
+        ]
+      }
+    },
+    "/v1/inbox/read": {
+      "post": {
+        "description": "支持三种粒度：给 ``messageIds`` 标记若干条、给 ``triggerIds`` 按触发粒度标记（兼容早期调用方）、两者都不给则整份标记已读。\n\n回执给出本次实际变更的条数（``marked``）与最新未读数。重复标记是幂等的；标记一条不存在的消息不会报错，``marked=0`` 就是结论——调用方的目的已经达成。",
+        "operationId": "postV1InboxRead",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Mark Read V1 Inbox Read Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "标记消息已读",
+        "tags": [
+          "inbox"
+        ]
+      }
+    },
+    "/v1/inbox/stream": {
+      "get": {
+        "description": "以 ``text/event-stream`` 持续推送收件箱变化：首帧 ``ready`` 给出当前未读数、总数与最近消息，之后每次来源或已读状态变化推一帧 ``inbox``。\n\n事件格式::\n\n    event: inbox\n    data: {\"unread\": 3, \"total\": 12, \"items\": [...]}\n\n连接空闲时每 15 个轮询周期发一条注释心跳（``: keep-alive``），避免中间代理掐掉长时间无数据的连接。客户端断开即结束。",
+        "operationId": "getV1InboxStream",
+        "parameters": [
+          {
+            "description": "订阅者唯一标识",
+            "in": "query",
+            "name": "subscriberId",
+            "required": true,
+            "schema": {
+              "description": "订阅者唯一标识",
+              "minLength": 1,
+              "title": "Subscriberid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "每帧携带的条数",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "每帧携带的条数",
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "轮询间隔（秒），越小越实时，越大越省资源",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "default": 1.0,
+              "description": "轮询间隔（秒），越小越实时，越大越省资源",
+              "maximum": 30.0,
+              "minimum": 0.1,
+              "title": "Interval",
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "example": "event: ready\ndata: {\"unread\": 2, \"total\": 7, \"items\": [{\"message_id\": \"trg-1:in_app\", \"title\": \"小林赞了你的帖子\"}]}\n\nevent: inbox\ndata: {\"unread\": 3, \"total\": 8, \"items\": []}\n\n",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "实时订阅收件箱变化（SSE）",
+        "tags": [
+          "inbox"
+        ]
+      }
+    },
+    "/v1/inbox/unread": {
+      "get": {
+        "description": "返回该订阅者的未读总数、消息总数、按工作流分组的未读分布，以及最近一条消息的时间。只统计 In-app 消息，口径与 ``GET /v1/inbox`` 一致：同一张聚合卡片无论被多少次互动改写都只算一条。结果按版本号缓存，任一来源写入或标记已读后自动重算。",
+        "operationId": "getV1InboxUnread",
+        "parameters": [
+          {
+            "description": "订阅者唯一标识",
+            "in": "query",
+            "name": "subscriberId",
+            "required": true,
+            "schema": {
+              "description": "订阅者唯一标识",
+              "minLength": 1,
+              "title": "Subscriberid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Unread Summary V1 Inbox Unread Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "未读计数聚合（按工作流）",
+        "tags": [
+          "inbox"
+        ]
+      }
+    },
+    "/v1/providers": {
+      "get": {
+        "description": "返回注册表里的全部条目，按取用顺序排列。",
+        "operationId": "getV1Providers",
+        "parameters": [
+          {
+            "description": "只看某个渠道（如 email）",
+            "in": "query",
+            "name": "channel",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "只看某个渠道（如 email）",
+              "title": "Channel"
+            }
+          },
+          {
+            "description": "是否做在线探测（会对渠道发起连接）",
+            "in": "query",
+            "name": "deep",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "是否做在线探测（会对渠道发起连接）",
+              "title": "Deep",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "忽略缓存重新检查",
+            "in": "query",
+            "name": "refresh",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "忽略缓存重新检查",
+              "title": "Refresh",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Providers V1 Providers Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "列出渠道实现及其健康状态",
+        "tags": [
+          "providers"
+        ]
+      },
+      "post": {
+        "description": "登记一条渠道配置并构造对应实现。``credentials`` 的取值统一按字符串处理（``port: 587`` 与 ``\"587\"`` 等价），不认识的键会被拒绝并给出大小写近似建议。\n\n``priority`` 数值小的先取用，同优先级按登记顺序；``persist=true`` 时同时写回配置文件，重启后仍然生效。标识重复返回 409，实现种类与渠道不匹配返回 400。",
+        "operationId": "postV1Providers",
+        "parameters": [
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Provider V1 Providers Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "配置不合法"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "409": {
+            "description": "标识已存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "新增渠道配置",
+        "tags": [
+          "providers"
+        ]
+      }
+    },
+    "/v1/providers/{identifier}": {
+      "delete": {
+        "description": "摘除条目与实现；``persist=true`` 时一并从配置文件里删除。",
+        "operationId": "deleteV1ProvidersByIdentifier",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "title": "Identifier",
+              "type": "string"
+            }
+          },
+          {
+            "description": "是否同时从渠道配置文件里移除",
+            "in": "query",
+            "name": "persist",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "是否同时从渠道配置文件里移除",
+              "title": "Persist",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Delete Provider V1 Providers  Identifier  Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "404": {
+            "description": "未登记"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "删除渠道配置",
+        "tags": [
+          "providers"
+        ]
+      },
+      "get": {
+        "description": "按标识查询一个条目：渠道、实现种类、优先级、启停状态与健康快照；未登记时 404。\n\n``deep=true`` 会让实现做一次在线探测（SMTP 停在连接层、站内信检查收件箱文件可追加写），``refresh=true`` 则忽略缓存重新检查。健康状态只用于判断「这个实现大概还能不能用」，投递路径不依赖它做拦截。",
+        "operationId": "getV1ProvidersByIdentifier",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "title": "Identifier",
+              "type": "string"
+            }
+          },
+          {
+            "description": "是否做在线探测",
+            "in": "query",
+            "name": "deep",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "是否做在线探测",
+              "title": "Deep",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "忽略缓存重新检查",
+            "in": "query",
+            "name": "refresh",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "忽略缓存重新检查",
+              "title": "Refresh",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Provider V1 Providers  Identifier  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "单个渠道实现的健康状态",
+        "tags": [
+          "providers"
+        ]
+      },
+      "put": {
+        "description": "按字段修改一条配置；未传的字段保持原样。",
+        "operationId": "putV1ProvidersByIdentifier",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "title": "Identifier",
+              "type": "string"
+            }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Provider V1 Providers  Identifier  Put",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "配置不合法"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "404": {
+            "description": "未登记"
+          },
+          "409": {
+            "description": "试图修改渠道"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "修改渠道配置",
+        "tags": [
+          "providers"
+        ]
+      }
+    },
+    "/v1/providers/{identifier}/enabled": {
+      "put": {
+        "description": "切换运行期启停状态，并可选择写回配置文件。",
+        "operationId": "putV1ProvidersByIdentifierEnabled",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "title": "Identifier",
+              "type": "string"
+            }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToggleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Set Provider Enabled V1 Providers  Identifier  Enabled Put",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "启用或停用一个渠道实现",
+        "tags": [
+          "providers"
+        ]
+      }
+    },
+    "/v1/subscribers": {
+      "get": {
+        "description": "按创建顺序翻页返回订阅者；``channel`` 只保留启用了该渠道的条目，用于回答「哪些人有邮箱」。``nextCursor`` 为空表示没有更多。\n\n列表不按环境收窄：订阅者标识全局唯一，档案里带 ``environment`` 字段，由调用方按需过滤。",
+        "operationId": "getV1Subscribers",
+        "parameters": [
+          {
+            "description": "只看启用了该渠道的订阅者",
+            "in": "query",
+            "name": "channel",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "只看启用了该渠道的订阅者",
+              "title": "Channel"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "上一页返回的 nextCursor",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "上一页返回的 nextCursor",
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriberListOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "列出订阅者",
+        "tags": [
+          "subscribers"
+        ]
+      },
+      "post": {
+        "description": "登记一个收件人：渠道绑定 + 各渠道的收件地址。标识可自带（把业务侧的用户 ID 带进来），留空则生成 UUID。\n\n**唯一性**：标识重复、或邮箱/手机号已被别人绑定，返回 409 并点名占用者，而不是覆盖——渠道绑定被悄悄换掉比创建失败更难查。\n\n**规范化**：邮箱统一存小写、手机号存 E.164，因此查重、渲染与投递看到的是同一个字符串。只有本地手机号时按 ``XW_SUBSCRIBER_COUNTRY_CODE`` 补区号，没配就报错而不是按位数猜。",
+        "operationId": "postV1Subscribers",
+        "parameters": [
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubscriberCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriberOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "创建订阅者",
+        "tags": [
+          "subscribers"
+        ]
+      }
+    },
+    "/v1/subscribers/{subscriber_id}": {
+      "delete": {
+        "description": "删除档案并释放其占用的地址，之后同一个邮箱或手机号可以被别人认领。\n\n历史消息与执行明细保留：它们是投递事实的记录，删档案不应连带抹掉排查线索。",
+        "operationId": "deleteV1SubscribersBySubscriberId",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "subscriber_id",
+            "required": true,
+            "schema": {
+              "title": "Subscriber Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "删除订阅者",
+        "tags": [
+          "subscribers"
+        ]
+      },
+      "get": {
+        "description": "读取单个档案，含渠道绑定与规范化后的地址。标识不存在返回 404。",
+        "operationId": "getV1SubscribersBySubscriberId",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "subscriber_id",
+            "required": true,
+            "schema": {
+              "title": "Subscriber Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriberOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "按标识读取订阅者",
+        "tags": [
+          "subscribers"
+        ]
+      },
+      "put": {
+        "description": "**部分更新**：只改请求里出现的字段，没写 ``phone`` 就保持原号，写空串才解绑；``channels`` 给出即整体替换，空列表表示全部关闭。\n\n改成别人已占用的邮箱或手机号返回 409；解绑之后再被别人认领是允许的。",
+        "operationId": "putV1SubscribersBySubscriberId",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "subscriber_id",
+            "required": true,
+            "schema": {
+              "title": "Subscriber Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubscriberUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriberOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "更新订阅者",
+        "tags": [
+          "subscribers"
+        ]
+      }
+    },
+    "/v1/subscribers/{subscriber_id}/preferences": {
+      "delete": {
+        "description": "按层级 + 目标删除一条，或整份清空。\n\n清空相当于「恢复默认」：三层都没有记录时按接收处理，这正是新订阅者的\n初始状态。删除一条本来就不存在的记录返回 ``removed=0`` 而不是 404——\n调用方的目的（这条记录不要存在）已经达成。",
+        "operationId": "deleteV1SubscribersBySubscriberIdPreferences",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "subscriber_id",
+            "required": true,
+            "schema": {
+              "title": "Subscriber Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "要删除的层级；不传表示清空该订阅者的全部偏好",
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "要删除的层级；不传表示清空该订阅者的全部偏好",
+              "title": "Scope"
+            }
+          },
+          {
+            "description": "该层级的目标（工作流名或渠道）",
+            "in": "query",
+            "name": "target",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该层级的目标（工作流名或渠道）",
+              "title": "Target"
+            }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreferenceDeleteOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "删除订阅者的发送偏好",
+        "tags": [
+          "preferences"
+        ]
+      },
+      "get": {
+        "description": "列出该订阅者设置的偏好记录。\n\n只返回**显式设置过**的记录：没有记录的层级意味着「没表态」，解析时继续\n往上一层找，三层都空按接收处理。把默认值也铺成记录会让「用户关了这个\n渠道」与「用户没表过态」在数据里看不出区别。",
+        "operationId": "getV1SubscribersBySubscriberIdPreferences",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "subscriber_id",
+            "required": true,
+            "schema": {
+              "title": "Subscriber Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "只看某一层级：global / workflow / channel",
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "只看某一层级：global / workflow / channel",
+              "title": "Scope"
+            }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreferenceListOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "查询订阅者的发送偏好",
+        "tags": [
+          "preferences"
+        ]
+      },
+      "put": {
+        "description": "新建或覆盖一条偏好记录。\n\n覆盖写而不是追加：同一个 ``(层级, 目标)`` 只有一条记录，重复提交只更新\n开关与时刻，因此调用方不需要先查再改。``enabled=true`` 是一条**有意义的**\n记录——它比上层（更宽）的关闭更具体，能单独把某个渠道或某类互动放开。",
+        "operationId": "putV1SubscribersBySubscriberIdPreferences",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "subscriber_id",
+            "required": true,
+            "schema": {
+              "title": "Subscriber Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreferenceUpsert"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreferenceWriteOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "写入一条发送偏好",
+        "tags": [
+          "preferences"
+        ]
+      }
+    },
+    "/v1/subscribers/{subscriber_id}/preferences/resolve": {
+      "get": {
+        "description": "按「渠道 → 工作流 → 全局」的顺序解析，返回结论与原因。\n\n三个参数都可以不传，此时只看全局总开关。解析只读当前快照，不做写入，\n也不会因为某层没有记录而报错——「没设置」本身就是一个合法的结论。",
+        "operationId": "getV1SubscribersBySubscriberIdPreferencesResolve",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "subscriber_id",
+            "required": true,
+            "schema": {
+              "title": "Subscriber Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "工作流名，如 post_liked",
+            "in": "query",
+            "name": "workflow",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "工作流名，如 post_liked",
+              "title": "Workflow"
+            }
+          },
+          {
+            "description": "渠道，如 email",
+            "in": "query",
+            "name": "channel",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "渠道，如 email",
+              "title": "Channel"
+            }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolutionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "解析某条通知是否会发出",
+        "tags": [
+          "preferences"
+        ]
+      }
+    },
+    "/v1/topics": {
+      "get": {
+        "description": "按创建顺序翻页返回当前环境的分组；``nextCursor`` 为空表示没有更多。",
+        "operationId": "getV1Topics",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "上一页返回的 nextCursor",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "上一页返回的 nextCursor",
+              "title": "Cursor"
+            }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TopicListOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "列出分组",
+        "tags": [
+          "topics"
+        ]
+      },
+      "post": {
+        "description": "建一个可整体广播的收件人集合。标识可自带（业务侧的话题名、作者名带进来都可读），留空生成 UUID；同名标识重复返回 409 而不是覆盖。名称留空时按标识回填，避免列表里出现空白项。",
+        "operationId": "postV1Topics",
+        "parameters": [
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TopicCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TopicOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "创建分组",
+        "tags": [
+          "topics"
+        ]
+      }
+    },
+    "/v1/topics/{topic_id}": {
+      "delete": {
+        "description": "删除分组并连带清掉成员关系，不会留下「分组没了、成员还挂着」的行。订阅者档案本身不受影响。",
+        "operationId": "deleteV1TopicsByTopicId",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "topic_id",
+            "required": true,
+            "schema": {
+              "title": "Topic Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "删除分组",
+        "tags": [
+          "topics"
+        ]
+      },
+      "get": {
+        "description": "读取分组本身（名称、说明、成员上限）。成员列表走 ``/subscribers`` 子路径。",
+        "operationId": "getV1TopicsByTopicId",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "topic_id",
+            "required": true,
+            "schema": {
+              "title": "Topic Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TopicOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "按标识读取分组",
+        "tags": [
+          "topics"
+        ]
+      },
+      "put": {
+        "description": "只改请求里出现的字段：没写 ``name`` 就保持原名，``description`` 传空串表示清空说明。标识不可改——它是指向成员关系的键，改名会让已有成员挂空。",
+        "operationId": "putV1TopicsByTopicId",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "topic_id",
+            "required": true,
+            "schema": {
+              "title": "Topic Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TopicUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TopicOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "更新分组",
+        "tags": [
+          "topics"
+        ]
+      }
+    },
+    "/v1/topics/{topic_id}/subscribers": {
+      "get": {
+        "description": "按加入时刻翻页返回成员。``total`` 是全量成员数，不受分页影响——广播规模要能一眼看到，而不是把每页加起来。",
+        "operationId": "getV1TopicsByTopicIdSubscribers",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "topic_id",
+            "required": true,
+            "schema": {
+              "title": "Topic Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "上一页返回的 nextCursor",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "上一页返回的 nextCursor",
+              "title": "Cursor"
+            }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TopicMemberListOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "列出分组成员",
+        "tags": [
+          "topics"
+        ]
+      },
+      "post": {
+        "description": "把订阅者加入分组。订阅者必须存在且属于同一环境，否则 404——分组指向一个不存在的标识，广播时只会产生一条无法投递的消息。\n\n加入是集合语义：重复加入返回 ``added=false`` 且不刷新加入时刻，成员顺序因此不会随重复调用漂移。组满时返回 409 并给出上限，重复加入一个已在名单里的成员不占新名额、也不因满员报错。",
+        "operationId": "postV1TopicsByTopicIdSubscribers",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "topic_id",
+            "required": true,
+            "schema": {
+              "title": "Topic Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TopicMembershipIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TopicMembershipOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "加入分组",
+        "tags": [
+          "topics"
+        ]
+      }
+    },
+    "/v1/topics/{topic_id}/subscribers/{subscriber_id}": {
+      "delete": {
+        "description": "把订阅者移出分组并释放名额。订阅者档案是否还在不影响这一步：档案被删掉之后，残留的成员关系更要能清掉。不在名单里返回 404。",
+        "operationId": "deleteV1TopicsByTopicIdSubscribersBySubscriberId",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "topic_id",
+            "required": true,
+            "schema": {
+              "title": "Topic Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "subscriber_id",
+            "required": true,
+            "schema": {
+              "title": "Subscriber Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "移出分组",
+        "tags": [
+          "topics"
+        ]
+      }
+    },
+    "/v1/topics/{topic_id}/trigger": {
+      "post": {
+        "description": "把一条互动事件分发给分组里的全部成员：工作流按 ``name`` 解析一次，每位成员各自生成一条消息（地址取自其订阅者档案），活动日志与入队各走一次批量通道。\n\n**逐人回执**：``results`` 与成员名单顺序一致。档案已被删除、或没有任何可投递渠道的成员记为 ``skipped`` 并给出原因——「按设置不发」与「发失败」分开记，广播结果的成败才判得清。\n\n**幂等语义**：``Idempotency-Key`` 作用于整次广播，相同键重复请求返回首次回执。",
+        "operationId": "postV1TopicsByTopicIdTrigger",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "topic_id",
+            "required": true,
+            "schema": {
+              "title": "Topic Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "整次广播的幂等键：相同键重复请求返回首次回执",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "整次广播的幂等键：相同键重复请求返回首次回执",
+              "examples": [
+                "topic-hot-authors-P-2026-1001"
+              ],
+              "title": "Idempotency-Key"
+            }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TopicBroadcastRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TopicBroadcastResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "按分组广播一条互动事件",
+        "tags": [
+          "topics"
+        ]
+      }
+    },
+    "/v1/workflows": {
+      "get": {
+        "description": "返回模板列表，包含全部环境（条目里带 ``environment`` 字段），客户端按需过滤。列表不分页：模板数量由运营维护，量级与消息量无关。",
+        "operationId": "getV1Workflows",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/WorkflowOut"
+                  },
+                  "title": "Response List Workflows V1 Workflows Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "列出工作流模板",
+        "tags": [
+          "workflows"
+        ]
+      },
+      "post": {
+        "description": "创建一个工作流模板，版本号从 1 开始，默认启用。\n\n步骤按数组顺序执行；步骤标识可以自带（客户端维护 ``config.depends_on`` 时需要它稳定），留空由服务端生成。同名工作流在同一环境内唯一，重复创建返回 409。\n\n创建时会按步骤类型校验依赖：悬空引用、自依赖与依赖环都在这一层拒绝，不会等到第一条消息投递失败才暴露。",
+        "operationId": "postV1Workflows",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "创建工作流模板",
+        "tags": [
+          "workflows"
+        ]
+      }
+    },
+    "/v1/workflows/{workflow_id}": {
+      "delete": {
+        "description": "删除模板后不再能触发，已入队的消息按快照跑完。只删模板而不清理历史，活动日志与执行明细里的旧记录仍然可查——排查历史投递时它们仍是唯一线索。",
+        "operationId": "deleteV1WorkflowsByWorkflowId",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workflow_id",
+            "required": true,
+            "schema": {
+              "title": "Workflow Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "删除工作流模板",
+        "tags": [
+          "workflows"
+        ]
+      },
+      "get": {
+        "description": "读取单个模板的当前版本。已停用的模板照样能读到，``active`` 标明状态。",
+        "operationId": "getV1WorkflowsByWorkflowId",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workflow_id",
+            "required": true,
+            "schema": {
+              "title": "Workflow Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "按标识读取工作流模板",
+        "tags": [
+          "workflows"
+        ]
+      },
+      "put": {
+        "description": "整体更新模板内容，版本号自增 1。只改请求里出现的字段：没传 ``steps`` 就保留原步骤，没传 ``active`` 就保留当前启停状态。\n\n版本号是「模板内容改过一次」的标记。只是启停请走 ``PUT /v1/workflows/{id}/active``，那条路径不动版本号，按版本回溯模板时才分得清哪一版是真正的改动。\n\n已入队并携带步骤快照的消息按快照执行，不受本次更新影响。",
+        "operationId": "putV1WorkflowsByWorkflowId",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workflow_id",
+            "required": true,
+            "schema": {
+              "title": "Workflow Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "更新工作流模板",
+        "tags": [
+          "workflows"
+        ]
+      }
+    },
+    "/v1/workflows/{workflow_id}/active": {
+      "put": {
+        "description": "翻转模板的 ``active`` 状态。与 ``PUT /v1/workflows/{id}`` 的区别：\n\n- 版本号不变——启停是运营状态，不是模板内容的一次修改；\n- 停用后触发链路（单条 / 批量 / 分组广播）按「模板不存在或未启用」拒绝新事件；\n- 已经入队并携带步骤快照的消息照常执行，撤销一条已受理的通知比多发一条更难解释。\n\n重复设置同一状态不产生写入，回执里 ``changed=false``。",
+        "operationId": "putV1WorkflowsByWorkflowIdActive",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workflow_id",
+            "required": true,
+            "schema": {
+              "title": "Workflow Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowActivationIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowActivationOut"
+                }
+              }
+            },
+            "description": "启停结果"
+          },
+          "404": {
+            "description": "工作流不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "启用或停用一个工作流",
+        "tags": [
+          "workflows"
+        ]
+      }
+    },
+    "/v1/workflows/{workflow_id}/duplicate": {
+      "post": {
+        "description": "按源模板复制出一份新模板：新标识、新步骤标识，``depends_on`` 按原步骤标识重映射，``config`` 深拷贝，版本号从 1 开始。\n\n副本默认不启用（``active=false``），确认步骤与文案后再启用；也可以在请求体里直接给 ``active=true``。\n\n``name`` 留空时按「源名称 + ``_copy``」生成，重复复制依次得到 ``_copy2`` / ``_copy3``；显式指定的名称已被占用返回 409，不会悄悄改名。",
+        "operationId": "postV1WorkflowsByWorkflowIdDuplicate",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workflow_id",
+            "required": true,
+            "schema": {
+              "title": "Workflow Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/WorkflowDuplicateIn"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowOut"
+                }
+              }
+            },
+            "description": "副本已创建"
+          },
+          "404": {
+            "description": "源工作流不存在"
+          },
+          "409": {
+            "description": "指定的名称已存在"
+          },
+          "422": {
+            "description": "名称或环境不合法"
+          }
+        },
+        "summary": "复制一个工作流",
+        "tags": [
+          "workflows"
+        ]
+      }
+    }
+  },
+  "security": [
+    {
+      "ApiKeyAuth": []
+    },
+    {}
+  ],
+  "servers": [
+    {
+      "description": "当前部署（同源相对路径）",
+      "url": "/"
+    }
+  ],
+  "tags": [
+    {
+      "description": "健康检查与服务状态。供负载均衡与部署脚本探测，不读环境头。",
+      "name": "system"
+    },
+    {
+      "description": "互动事件触发。把点赞、评论、@提及等事件按名称匹配工作流模板，分发到订阅者所在的多个渠道。单条与批量两个入口共用同一套校验与幂等语义。",
+      "name": "trigger"
+    },
+    {
+      "description": "工作流模板：步骤序列、聚合窗口、渠道与编排步骤。模板支持启停与复制，启停不改变版本号，副本默认不启用。",
+      "name": "workflows"
+    },
+    {
+      "description": "活动日志：每次触发一条记录，含声明的渠道与受理状态，按时间倒序翻页。",
+      "name": "activity"
+    },
+    {
+      "description": "执行明细：一次触发 × 一个渠道一条记录，含实际投递的实现、尝试链路、耗时与失败/跳过原因。",
+      "name": "execution"
+    },
+    {
+      "description": "站内信收件箱：列表、未读聚合、标记已读与 SSE 实时推送。同一张聚合卡片无论被多少次互动改写都只算一条消息。",
+      "name": "inbox"
+    },
+    {
+      "description": "订阅者档案：渠道绑定与收件地址。邮箱按规范存小写、手机号存 E.164，地址在环境内唯一。",
+      "name": "subscribers"
+    },
+    {
+      "description": "发送偏好：全局 / 工作流 / 渠道三级，解析时从最具体的一层往上找、命中即止，三层都没有记录按接收处理。",
+      "name": "preferences"
+    },
+    {
+      "description": "分组与广播：一次事件展开成每位成员一条消息，逐人回执按成员名单顺序对齐。",
+      "name": "topics"
+    },
+    {
+      "description": "渠道实现：注册表、健康状态与运行期启停，支持写回配置文件。",
+      "name": "providers"
+    },
+    {
+      "description": "仪表盘统计：按消息记录聚合的发送量、成功率、渠道分布与七日趋势。",
+      "name": "dashboard"
+    },
+    {
+      "description": "管理视图：按执行明细聚合的统计、活动检索与单次触发下钻。与仪表盘的区别是数据源换成逐渠道明细，能分清「邮件失败、站内信成功」。",
+      "name": "admin"
+    }
+  ]
+}

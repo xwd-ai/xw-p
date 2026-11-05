@@ -233,6 +233,12 @@ def list_providers(
     "",
     status_code=status.HTTP_201_CREATED,
     summary="新增渠道配置",
+    description=(
+        "登记一条渠道配置并构造对应实现。``credentials`` 的取值统一按字符串处理"
+        "（``port: 587`` 与 ``\"587\"`` 等价），不认识的键会被拒绝并给出大小写近似建议。\n\n"
+        "``priority`` 数值小的先取用，同优先级按登记顺序；``persist=true`` 时同时写回"
+        "配置文件，重启后仍然生效。标识重复返回 409，实现种类与渠道不匹配返回 400。"
+    ),
     responses={400: {"description": "配置不合法"}, 409: {"description": "标识已存在"}},
 )
 def create_provider(
@@ -275,7 +281,16 @@ def create_provider(
     return _mutation_response(provider_factory.get_registry(), result)
 
 
-@router.get("/{identifier}", summary="单个渠道实现的健康状态")
+@router.get(
+    "/{identifier}",
+    summary="单个渠道实现的健康状态",
+    description=(
+        "按标识查询一个条目：渠道、实现种类、优先级、启停状态与健康快照；未登记时 404。\n\n"
+        "``deep=true`` 会让实现做一次在线探测（SMTP 停在连接层、站内信检查收件箱文件"
+        "可追加写），``refresh=true`` 则忽略缓存重新检查。健康状态只用于判断「这个实现"
+        "大概还能不能用」，投递路径不依赖它做拦截。"
+    ),
+)
 def get_provider(
     identifier: str,
     deep: bool = Query(default=_DEFAULT_DEEP, description="是否做在线探测"),

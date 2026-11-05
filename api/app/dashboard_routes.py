@@ -31,7 +31,16 @@ def _compute_stats(records: list[dict]) -> dict:
     return compute_stats(records)
 
 
-@router.get("/stats")
+@router.get(
+    "/stats",
+    summary="仪表盘统计（按消息记录）",
+    description=(
+        "按消息记录聚合：总量、成功率、渠道分布与最近 7 日趋势。\n\n"
+        "口径是「一条消息一个整体状态」，适合看整体发送量与趋势；要分清同一条消息里"
+        "哪个渠道失败，请用 ``GET /v1/admin/stats``，那里按逐渠道执行明细聚合。"
+        "成功率的分母只算实际尝试投递的消息，被偏好整条拦下的 ``skipped`` 不进分母。"
+    ),
+)
 def dashboard_stats() -> dict:
     """返回仪表盘聚合统计。"""
     return get_storage().stats(trend_days=_TREND_DAYS)

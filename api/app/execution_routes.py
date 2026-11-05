@@ -77,7 +77,17 @@ def _cursor_of(item: dict) -> Optional[str]:
     return encode_position(created_at, str(item.get("id") or ""))
 
 
-@router.get("/executions")
+@router.get(
+    "/executions",
+    summary="列出一页执行明细",
+    description=(
+        "一次触发 × 一个渠道一条记录，最新在前。字段里能看到实际完成投递的实现、"
+        "尝试链路（含回退与重试）、耗时，以及失败或跳过原因。\n\n"
+        "状态三档：``sent`` 成功、``failed`` 失败、``skipped`` 被订阅者偏好拦下——"
+        "跳过既不是成功也不是失败，统计时不计入成功率分母。\n\n"
+        "``nextCursor`` 为空表示没有更多，原样回传取下一页。"
+    ),
+)
 def list_executions(
     trigger_id: Optional[str] = Query(default=None, alias="triggerId", description="按触发唯一标识过滤"),
     channel: Optional[str] = Query(default=None, description="按投递渠道过滤"),

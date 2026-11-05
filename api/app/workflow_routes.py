@@ -68,7 +68,19 @@ def _workflow_out(workflow: Workflow) -> WorkflowOut:
     )
 
 
-@router.post("", response_model=WorkflowOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=WorkflowOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="创建工作流模板",
+    description=(
+        "创建一个工作流模板，版本号从 1 开始，默认启用。\n\n"
+        "步骤按数组顺序执行；步骤标识可以自带（客户端维护 ``config.depends_on`` 时需要它稳定），"
+        "留空由服务端生成。同名工作流在同一环境内唯一，重复创建返回 409。\n\n"
+        "创建时会按步骤类型校验依赖：悬空引用、自依赖与依赖环都在这一层拒绝，"
+        "不会等到第一条消息投递失败才暴露。"
+    ),
+)
 def create_workflow(body: WorkflowCreate) -> WorkflowOut:
     """创建一个工作流模板（版本号初始为 1）。"""
     steps = [
@@ -103,13 +115,26 @@ def create_workflow(body: WorkflowCreate) -> WorkflowOut:
     return _workflow_out(created)
 
 
-@router.get("", response_model=list[WorkflowOut])
+@router.get(
+    "",
+    response_model=list[WorkflowOut],
+    summary="列出工作流模板",
+    description=(
+        "返回模板列表，包含全部环境（条目里带 ``environment`` 字段），"
+        "客户端按需过滤。列表不分页：模板数量由运营维护，量级与消息量无关。"
+    ),
+)
 def list_workflows() -> list[WorkflowOut]:
     """列出所有工作流模板。"""
     return [_workflow_out(wf) for wf in get_workflow_store().list()]
 
 
-@router.get("/{workflow_id}", response_model=WorkflowOut)
+@router.get(
+    "/{workflow_id}",
+    response_model=WorkflowOut,
+    summary="按标识读取工作流模板",
+    description="读取单个模板的当前版本。已停用的模板照样能读到，``active`` 标明状态。",
+)
 def get_workflow(workflow_id: str) -> WorkflowOut:
     """按 id 查询工作流模板。"""
     workflow = get_workflow_store().get(workflow_id)
@@ -118,7 +143,18 @@ def get_workflow(workflow_id: str) -> WorkflowOut:
     return _workflow_out(workflow)
 
 
-@router.put("/{workflow_id}", response_model=WorkflowOut)
+@router.put(
+    "/{workflow_id}",
+    response_model=WorkflowOut,
+    summary="更新工作流模板",
+    description=(
+        "整体更新模板内容，版本号自增 1。只改请求里出现的字段：没传 ``steps`` 就保留原步骤，"
+        "没传 ``active`` 就保留当前启停状态。\n\n"
+        "版本号是「模板内容改过一次」的标记。只是启停请走 ``PUT /v1/workflows/{id}/active``，"
+        "那条路径不动版本号，按版本回溯模板时才分得清哪一版是真正的改动。\n\n"
+        "已入队并携带步骤快照的消息按快照执行，不受本次更新影响。"
+    ),
+)
 def update_workflow(workflow_id: str, body: WorkflowUpdate) -> WorkflowOut:
     """更新工作流模板（版本号自增 1）。"""
     store = get_workflow_store()
@@ -158,7 +194,16 @@ def update_workflow(workflow_id: str, body: WorkflowUpdate) -> WorkflowOut:
     return _workflow_out(result)
 
 
-@router.delete("/{workflow_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{workflow_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="删除工作流模板",
+    description=(
+        "删除模板后不再能触发，已入队的消息按快照跑完。"
+        "只删模板而不清理历史，活动日志与执行明细里的旧记录仍然可查——"
+        "排查历史投递时它们仍是唯一线索。"
+    ),
+)
 def delete_workflow(workflow_id: str) -> None:
     """删除工作流模板。"""
     deleted = get_workflow_store().delete(workflow_id)

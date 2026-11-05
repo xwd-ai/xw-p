@@ -67,6 +67,48 @@ class WorkflowCreate(BaseModel):
     steps: list[StepIn] = Field(default_factory=list, description="步骤序列（有序）")
     environment: Environment = Field(default=Environment.DEVELOPMENT)
 
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "name": "post_liked_digest",
+                    "description": "同一篇帖子的点赞在 10 分钟内聚合成一张卡片，再发站内信与推送",
+                    "environment": "development",
+                    "steps": [
+                        {
+                            "id": "digest",
+                            "type": "digest",
+                            "name": "按帖子聚合点赞",
+                            "config": {
+                                "key": "payload.post_id",
+                                "window": "10m",
+                                "title": "《{{payload.post_title}}》收到新的点赞",
+                            },
+                        },
+                        {
+                            "id": "inapp",
+                            "type": "in_app",
+                            "name": "站内信",
+                            "config": {
+                                "depends_on": ["digest"],
+                                "template": "{{payload.actor}} 赞了你的帖子《{{payload.post_title}}》",
+                            },
+                        },
+                        {
+                            "id": "push",
+                            "type": "push",
+                            "name": "推送",
+                            "config": {
+                                "depends_on": ["digest"],
+                                "template": "{{payload.actor}} 赞了你的帖子",
+                            },
+                        },
+                    ],
+                }
+            ]
+        }
+    }
+
 
 class WorkflowUpdate(BaseModel):
     """更新工作流请求体（全部可选，仅更新传入字段）。"""

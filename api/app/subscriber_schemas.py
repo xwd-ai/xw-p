@@ -52,6 +52,20 @@ class SubscriberCreate(BaseModel):
         default_factory=list, description="启用的渠道：in_app / email / sms / push / chat"
     )
 
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "id": "creator-1001",
+                    "email": "Creator@Example.com",
+                    "phone": "+86 138 0000 0000",
+                    "device_token": "fcm-token-9f2c1d",
+                    "channels": ["in_app", "push", "email"],
+                }
+            ]
+        }
+    }
+
     @field_validator("id", "device_token")
     @classmethod
     def _trim(cls, value: Optional[str]) -> Optional[str]:

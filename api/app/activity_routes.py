@@ -81,7 +81,16 @@ def _cursor_of(item: dict) -> Optional[str]:
     )
 
 
-@router.get("/activity")
+@router.get(
+    "/activity",
+    summary="列出一页活动日志",
+    description=(
+        "按时间倒序返回触发记录，支持订阅者、工作流、触发标识、状态、时间区间与环境过滤。\n\n"
+        "排序键是 ``(创建时间, 触发标识)``：时间只到秒级，同一秒写入的多条记录若只按时间排，"
+        "翻页时两次请求会算出不同顺序，同一条会重复出现或被漏掉。``nextCursor`` 编码上一页最后"
+        "一条的排序键，原样回传即可取下一页；为空表示没有更多。"
+    ),
+)
 def list_activity(
     subscriber_id: Optional[str] = Query(default=None, alias="subscriberId", description="按订阅者过滤"),
     workflow: Optional[str] = Query(default=None, description="按工作流名过滤"),

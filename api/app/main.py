@@ -13,7 +13,7 @@ from typing import Optional
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import config
+from . import config, openapi as openapi_docs
 from .activity_log import build_activity, record_activities, record_activity
 from .admin_activity_routes import router as admin_activity_router
 from .admin_routes import router as admin_router
@@ -70,12 +70,10 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="xw-notify API",
-    version="0.1.0",
-    description=(
-        "内容社区互动触达触发 API：点赞/评论/@提及等互动事件，触发后分发到创作者"
-        "所在的多个渠道（站内信 / 邮件 / 短信 / 推送）。"
-    ),
+    title=openapi_docs.API_TITLE,
+    version=openapi_docs.API_VERSION,
+    description=openapi_docs.API_DESCRIPTION,
+    openapi_tags=openapi_docs.TAGS,
     lifespan=lifespan,
 )
 
@@ -101,8 +99,17 @@ app.include_router(subscriber_router)
 app.include_router(preference_router)
 app.include_router(topic_router)
 
+# 文档 schema 在路由注册完成后装配：分组说明、鉴权与公共错误响应都依赖最终
+# 的路由表，提前安装只会拿到一份不完整的 paths。
+openapi_docs.install(app)
 
-@app.get("/health", tags=["system"], summary="健康检查")
+
+@app.get(
+    "/health",
+    tags=["system"],
+    summary="健康检查",
+    description="返回服务状态与当前总线里的待消费消息数。供负载均衡与部署脚本探测，不读环境头、不校验 Key。",
+)
 def health() -> dict:
     return {"status": "ok", "queued": get_bus().size()}
 

@@ -98,7 +98,17 @@ def _load_topic(topic_id: str, environment: Environment) -> Topic:
     return topic
 
 
-@router.post("", response_model=TopicOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=TopicOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="创建分组",
+    description=(
+        "建一个可整体广播的收件人集合。标识可自带（业务侧的话题名、作者名带进来都可读），"
+        "留空生成 UUID；同名标识重复返回 409 而不是覆盖。名称留空时按标识回填，"
+        "避免列表里出现空白项。"
+    ),
+)
 def create_topic(
     body: TopicCreate,
     env: EnvContext = Depends(require_env),
@@ -127,7 +137,12 @@ def create_topic(
     return _to_out(created, 0)
 
 
-@router.get("", response_model=TopicListOut)
+@router.get(
+    "",
+    response_model=TopicListOut,
+    summary="列出分组",
+    description="按创建顺序翻页返回当前环境的分组；``nextCursor`` 为空表示没有更多。",
+)
 def list_topics(
     env: EnvContext = Depends(require_env),
     limit: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
@@ -149,7 +164,12 @@ def list_topics(
     )
 
 
-@router.get("/{topic_id}", response_model=TopicOut)
+@router.get(
+    "/{topic_id}",
+    response_model=TopicOut,
+    summary="按标识读取分组",
+    description="读取分组本身（名称、说明、成员上限）。成员列表走 ``/subscribers`` 子路径。",
+)
 def get_topic(topic_id: str, env: EnvContext = Depends(require_env)) -> TopicOut:
     """按标识读取分组。"""
     environment = _environment(env.environment)
@@ -157,7 +177,15 @@ def get_topic(topic_id: str, env: EnvContext = Depends(require_env)) -> TopicOut
     return _to_out(topic, get_topic_store().member_count(topic.id))
 
 
-@router.put("/{topic_id}", response_model=TopicOut)
+@router.put(
+    "/{topic_id}",
+    response_model=TopicOut,
+    summary="更新分组",
+    description=(
+        "只改请求里出现的字段：没写 ``name`` 就保持原名，``description`` 传空串表示清空说明。"
+        "标识不可改——它是指向成员关系的键，改名会让已有成员挂空。"
+    ),
+)
 def update_topic(
     topic_id: str,
     body: TopicUpdate,
@@ -188,7 +216,15 @@ def update_topic(
     return _to_out(saved, store.member_count(saved.id))
 
 
-@router.delete("/{topic_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{topic_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="删除分组",
+    description=(
+        "删除分组并连带清掉成员关系，不会留下「分组没了、成员还挂着」的行。"
+        "订阅者档案本身不受影响。"
+    ),
+)
 def delete_topic(topic_id: str, env: EnvContext = Depends(require_env)) -> Response:
     """删除分组及其全部成员关系。"""
     environment = _environment(env.environment)
@@ -201,7 +237,15 @@ def delete_topic(topic_id: str, env: EnvContext = Depends(require_env)) -> Respo
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.get("/{topic_id}/subscribers", response_model=TopicMemberListOut)
+@router.get(
+    "/{topic_id}/subscribers",
+    response_model=TopicMemberListOut,
+    summary="列出分组成员",
+    description=(
+        "按加入时刻翻页返回成员。``total`` 是全量成员数，不受分页影响——"
+        "广播规模要能一眼看到，而不是把每页加起来。"
+    ),
+)
 def list_topic_members(
     topic_id: str,
     env: EnvContext = Depends(require_env),
@@ -238,6 +282,14 @@ def list_topic_members(
     "/{topic_id}/subscribers",
     response_model=TopicMembershipOut,
     status_code=status.HTTP_200_OK,
+    summary="加入分组",
+    description=(
+        "把订阅者加入分组。订阅者必须存在且属于同一环境，否则 404——分组指向一个"
+        "不存在的标识，广播时只会产生一条无法投递的消息。\n\n"
+        "加入是集合语义：重复加入返回 ``added=false`` 且不刷新加入时刻，成员顺序因此"
+        "不会随重复调用漂移。组满时返回 409 并给出上限，重复加入一个已在名单里的成员"
+        "不占新名额、也不因满员报错。"
+    ),
 )
 def add_topic_member(
     topic_id: str,
@@ -281,6 +333,11 @@ def add_topic_member(
 @router.delete(
     "/{topic_id}/subscribers/{subscriber_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    summary="移出分组",
+    description=(
+        "把订阅者移出分组并释放名额。订阅者档案是否还在不影响这一步：档案被删掉之后，"
+        "残留的成员关系更要能清掉。不在名单里返回 404。"
+    ),
 )
 def remove_topic_member(
     topic_id: str,

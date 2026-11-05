@@ -917,7 +917,19 @@ def get_unread_summary(
     }
 
 
-@router.get("")
+@router.get(
+    "",
+    summary="读取收件箱",
+    description=(
+        "返回某订阅者的 In-app 消息与未读计数，按「排序时间 + 消息标识」倒序。\n\n"
+        "**计数口径**：``unread`` / ``total`` 覆盖全部消息，不受筛选与 ``limit`` 影响；"
+        "``matched`` 是本次筛选命中的条数，翻页时以它为准。同一张聚合卡片无论被多少次"
+        "互动改写都只算一条消息，所以点赞涨到 99 条未读也不会变成 99。\n\n"
+        "**翻页**：游标编码上一页最后一条的排序键，从它的严格后一条继续；翻页期间顶上来的"
+        "新消息不会重复返回，游标指向的消息被删掉也不会卡住。游标解析失败返回 400，"
+        "而不是静默回到第一页。"
+    ),
+)
 def get_inbox(
     subscriber_id: str = Query(alias="subscriberId", min_length=1, description="订阅者唯一标识"),
     limit: int = Query(
@@ -983,7 +995,16 @@ def get_inbox(
     }
 
 
-@router.post("/read")
+@router.post(
+    "/read",
+    summary="标记消息已读",
+    description=(
+        "支持三种粒度：给 ``messageIds`` 标记若干条、给 ``triggerIds`` 按触发粒度标记"
+        "（兼容早期调用方）、两者都不给则整份标记已读。\n\n"
+        "回执给出本次实际变更的条数（``marked``）与最新未读数。重复标记是幂等的；标记一条不存在的"
+        "消息不会报错，``marked=0`` 就是结论——调用方的目的已经达成。"
+    ),
+)
 def mark_read(req: ReadRequest) -> dict:
     """标记消息已读，返回本次操作影响的消息数与最新未读计数。"""
     store = get_read_store()

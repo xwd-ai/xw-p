@@ -99,7 +99,17 @@ def _cursor_of(item: dict) -> Optional[str]:
     )
 
 
-@router.get("/activity")
+@router.get(
+    "/activity",
+    summary="检索活动日志",
+    description=(
+        "按环境、订阅者、工作流、触发标识、状态、渠道与关键词检索活动记录，最新在前。\n\n"
+        "默认跨环境返回，与前端活动流（默认只看当前环境）不同——排查问题时往往要同时看两套环境。\n"
+        "``keyword`` 是大小写不敏感的子串匹配，覆盖标题、工作流与订阅者标识；"
+        "``channel`` 命中记录声明的目标渠道之一。\n\n"
+        "``total`` 是本页条数，精确总数请用 ``/activity/summary``：每次翻页都扫完命中集合代价太大。"
+    ),
+)
 def admin_list_activity(
     environment: Optional[str] = Query(
         default=None, description="按环境过滤；留空表示所有环境"
@@ -156,7 +166,16 @@ def admin_list_activity(
     }
 
 
-@router.get("/activity/summary")
+@router.get(
+    "/activity/summary",
+    summary="汇总活动日志",
+    description=(
+        "对命中过滤条件的全部记录做一次流式扫描，给出状态分布、工作流与渠道排行、"
+        "环境分布、去重订阅者数与首末时间；不受分页与游标影响。\n\n"
+        "订阅者集合设了上限，超过后停止扩张并标 ``capped``，汇总的内存占用因此不随流量增长。\n\n"
+        "路由声明顺序上必须排在 ``/activity/{triggerId}`` 之前，否则 ``summary`` 会被当成一个触发标识。"
+    ),
+)
 def admin_activity_summary(
     environment: Optional[str] = Query(default=None, description="按环境过滤；留空表示所有环境"),
     subscriber_id: Optional[str] = Query(default=None, alias="subscriberId"),
@@ -191,7 +210,17 @@ def admin_activity_summary(
     }
 
 
-@router.get("/activity/{trigger_id}")
+@router.get(
+    "/activity/{trigger_id}",
+    summary="单次触发下钻",
+    description=(
+        "把一次触发的活动记录与逐渠道执行明细并排返回，并给出两类缺口：\n\n"
+        "- ``missingChannels``：活动记录里声明了、却没有对应明细——典型原因是消息还压在队列里；\n"
+        "- ``undeclaredChannels``：有明细、但触发记录里没声明——说明数据本身有问题。\n\n"
+        "一次请求拿齐这三样，调用方不必自己比对「工作流会投哪些渠道」：同一条工作流在不同订阅者"
+        "身上展开的渠道不同（没有邮箱就没有邮件），只有活动记录里那份是真正入队的列表。"
+    ),
+)
 def admin_activity_detail(
     trigger_id: str,
     environment: Optional[str] = Query(default=None, description="按环境过滤；留空表示所有环境"),

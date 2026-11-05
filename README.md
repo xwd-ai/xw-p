@@ -169,6 +169,28 @@ if errors.As(err, &apiErr) {
 
 工作流编排页（`dashboard/index.html` 的「工作流编排」）是一个手写 SVG 编辑器：左侧选模板，中间画布按数组顺序把步骤排成执行链，右侧列出步骤并在选中后给出字段表单。添加步骤按当前选中位置插入，排序用行内上下按钮或直接拖拽列表，删除一个步骤会同时清掉其它步骤对它的 `depends_on` 引用（否则整份保存会被服务端以「依赖不存在」拒绝）。保存时按原样带上步骤标识，因此 `depends_on` 在多次保存之间保持有效；改步骤类型会保留依赖与模板，丢弃与类型无关的键（聚合键、延迟时长）。保存前先跑一遍与后端同源的校验：空步骤、缺少延迟时长、聚合窗口写法、悬空依赖与依赖环都会在发出请求之前指出具体是哪一步。
 
+## API 文档
+
+服务跑起来后，`/docs` 是 Swagger UI，`/redoc` 是 ReDoc，`/openapi.json` 是 schema 本体。schema 由 `api/app/openapi.py` 统一装配，而不只是 FastAPI 的自动生成结果：
+
+- **分组**：12 个分组各有说明，按「读 → 写 → 运维」排列，Swagger 里不再是一长串按注册顺序堆叠的路径。
+- **鉴权**：`X-Api-Key` 声明为**可选**——`security` 同时给出「带 Key」与「匿名」两种备选，与「环境配置了 Key 才校验」的实际行为一致。只写前者会让读者以为不带 Key 一定失败。
+- **公共错误面**：读 `X-Environment` 的接口统一声明 400（环境头写错、参数冲突）与 401（Key 不匹配），并给出可解析的 `Error` 响应体：校验失败时 `detail` 是逐字段的问题数组，业务错误时是字符串，调用方不必按状态码分两套解析。
+- **操作标识**：由方法与路径推导，例如 `GET /v1/admin/activity/{trigger_id}` → `getV1AdminActivityByTriggerId`。函数名是实现细节，重构时不该让调用方生成的 SDK 方法名跟着变。
+- **示例**：触发、订阅者、偏好、分组与工作流的请求体都带可直接提交的示例；示例本身在测试里跑过一遍（含地址规范化与工作流结构校验），不会出现「从文档复制一段就 422」。
+
+`docs/openapi.json` 是同一份内容的导出，让接口变更能在合并请求里被 diff 出来：
+
+```bash
+# 重新导出
+api/.venv/bin/python scripts/export_openapi.py
+
+# 只校验：代码改了却忘了导出时退出码为 1
+api/.venv/bin/python scripts/export_openapi.py --check
+```
+
+导出按路径与 JSON 键排序，同一份代码重复导出的字节一致。独立域名部署时用 `--server-url https://notify.example.com`（或环境变量 `XW_OPENAPI_SERVER_URL`）写入 `servers`，Swagger 的「Try it out」才不会打到本地。
+
 ## 能力亮点
 
 - **可靠投递**：至少一次语义——消息取出即登记在途、处理成功才确认，租约过期的消息由回收流程重新入队，进程崩溃不丢消息。
@@ -196,6 +218,9 @@ cd sdk/go && go test ./...
 
 # Go：引擎（含并发路径的竞态检测）
 cd engine && go test ./... && go test -race ./internal/provider/ ./internal/pipeline/ ./internal/runner/ ./internal/webhook/ ./cmd/engine/
+
+# OpenAPI 导出文件与当前实现是否一致
+api/.venv/bin/python scripts/export_openapi.py --check
 
 # 前端：收件箱组件与运营后台的纯逻辑测试（Node 内置 runner，无第三方依赖）
 node --test 'dashboard/tests/*.test.js'
