@@ -58,7 +58,7 @@ func TestNewEventBuildsDeliveries(t *testing.T) {
 	if ev.Status != StatusPartial {
 		t.Errorf("一成一败应为 partial，实际 %q", ev.Status)
 	}
-	if ev.Summary != (Summary{Total: 2, Sent: 1, Failed: 1}) {
+	if ev.Summary == nil || *ev.Summary != (Summary{Total: 2, Sent: 1, Failed: 1}) {
 		t.Errorf("汇总不符: %+v", ev.Summary)
 	}
 	if ev.TriggerID != "trig-1" || ev.TransactionID != "tx-1" || ev.Workflow != "post_commented" || ev.SubscriberID != "creator_1" {
@@ -208,6 +208,7 @@ func TestEventValidate(t *testing.T) {
 		OccurredAt: occurredAtNow(),
 		TriggerID:  "trig-1",
 		Status:     StatusSent,
+		Summary:    &Summary{Total: 1, Sent: 1},
 		Deliveries: []Delivery{{Channel: "in_app", Status: StatusSent}},
 	}
 	if err := good.Validate(); err != nil {
@@ -217,9 +218,12 @@ func TestEventValidate(t *testing.T) {
 	cases := map[string]func(Event) Event{
 		"缺 id":         func(e Event) Event { e.ID = ""; return e },
 		"缺事件名":         func(e Event) Event { e.Event = ""; return e },
+		"未知事件名":        func(e Event) Event { e.Event = "delivery.maybe"; return e },
 		"缺 trigger_id": func(e Event) Event { e.TriggerID = " "; return e },
 		"未知状态":         func(e Event) Event { e.Status = "done"; return e },
 		"没有明细":         func(e Event) Event { e.Deliveries = nil; return e },
+		"缺汇总":          func(e Event) Event { e.Summary = nil; return e },
+		"汇总与明细不一致":     func(e Event) Event { e.Summary = &Summary{Total: 2, Sent: 2}; return e },
 		"缺时间":          func(e Event) Event { e.OccurredAt = occurredAtZero(); return e },
 	}
 	for name, mutate := range cases {

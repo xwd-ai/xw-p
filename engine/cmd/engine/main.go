@@ -348,11 +348,20 @@ func newCallbackDispatcher(logger *slog.Logger, cfg config.Config) (*webhook.Dis
 		return nil, func() {}
 	}
 
+	// 订阅的事件类型：配错（拼错类型名）时不悄悄退回默认集合，而是不装配
+	// 回调并说明原因——「订阅了却收不到」比「一条都没配」难查得多。
+	selection, err := webhook.ParseSelection(cfg.CallbackEvents)
+	if err != nil {
+		logger.Error("[engine] 回调事件类型配置不合法，本次不回调", "error", err)
+		return nil, func() {}
+	}
+
 	opts := webhook.Options{
 		Workers:   cfg.CallbackWorkers,
 		QueueSize: cfg.CallbackQueue,
 		Timeout:   cfg.CallbackTimeout,
 		Retry:     cfg.CallbackRetry(),
+		Selection: selection,
 		Logger:    logger,
 	}.Normalized()
 
@@ -367,6 +376,7 @@ func newCallbackDispatcher(logger *slog.Logger, cfg config.Config) (*webhook.Dis
 		"workers", opts.Workers,
 		"queue", opts.QueueSize,
 		"signed", signer != nil,
+		"events", opts.Selection.String(),
 		"retry", opts.Retry.String(),
 	)
 
@@ -391,6 +401,7 @@ func newCallbackDispatcher(logger *slog.Logger, cfg config.Config) (*webhook.Dis
 			"failed", stats.Failed,
 			"retried", stats.Retried,
 			"dropped", stats.Dropped,
+			"filtered", stats.Filtered,
 		)
 	}
 }

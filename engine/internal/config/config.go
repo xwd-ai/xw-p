@@ -95,6 +95,9 @@ type Config struct {
 	CallbackRetryAttempts int
 	CallbackRetryBase     time.Duration
 	CallbackRetryMax      time.Duration
+	// CallbackEvents 是订阅的事件类型，逗号分隔（all 表示全部）；为空时
+	// 只订阅汇总事件 delivery.result。
+	CallbackEvents string
 
 	// AdminAddr 是运维接口（死信查询/重放）的监听地址。
 	// 空字符串表示不启动；未配置 XW_ADMIN_ADDR 时沿用 ENGINE_PORT。
@@ -150,6 +153,7 @@ func Load() Config {
 		CallbackRetryAttempts: envInt("XW_CALLBACK_RETRY_ATTEMPTS", webhook.DefaultRetryAttempts),
 		CallbackRetryBase:     envDuration("XW_CALLBACK_RETRY_BASE", webhook.DefaultRetryBase),
 		CallbackRetryMax:      envDuration("XW_CALLBACK_RETRY_MAX", webhook.DefaultRetryMax),
+		CallbackEvents:        strings.TrimSpace(os.Getenv("XW_CALLBACK_EVENTS")),
 
 		AdminAddr: adminListenAddr(),
 	}

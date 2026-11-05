@@ -248,8 +248,12 @@ func TestLoadReadsCallbackEnv(t *testing.T) {
 	if cfg.CallbackQueue != webhook.DefaultQueueSize {
 		t.Errorf("队列默认值应为 %d，实际 %d", webhook.DefaultQueueSize, cfg.CallbackQueue)
 	}
+	if cfg.CallbackEvents != "" {
+		t.Errorf("未配置事件类型时应为空（由装配方取默认集合），实际 %q", cfg.CallbackEvents)
+	}
 
 	t.Setenv("XW_CALLBACK_URL", "  https://community.example.com/hooks/xw  ")
+	t.Setenv("XW_CALLBACK_EVENTS", "  trigger.received,delivery.failed  ")
 	t.Setenv("XW_CALLBACK_TIMEOUT", "3s")
 	t.Setenv("XW_CALLBACK_WORKERS", "4")
 	t.Setenv("XW_CALLBACK_QUEUE", "128")
@@ -260,6 +264,9 @@ func TestLoadReadsCallbackEnv(t *testing.T) {
 	cfg = Load()
 	if cfg.CallbackURL != "https://community.example.com/hooks/xw" {
 		t.Errorf("XW_CALLBACK_URL 应去空白，实际 %q", cfg.CallbackURL)
+	}
+	if cfg.CallbackEvents != "trigger.received,delivery.failed" {
+		t.Errorf("XW_CALLBACK_EVENTS 应去空白，实际 %q", cfg.CallbackEvents)
 	}
 	if cfg.CallbackDisabled() {
 		t.Error("配置了地址时不应判定为关闭")

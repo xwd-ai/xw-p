@@ -48,6 +48,8 @@ type Options struct {
 	// Retry 是单条事件的重试曲线；MaxAttempts 为 0 时用缺省曲线
 	// （三次尝试），写 1 表示不重试。
 	Retry backoff.Policy
+	// Selection 是订阅的事件类型；零值按 DefaultSelection 处理。
+	Selection Selection
 	// Logger 为空时用默认 logger。
 	Logger *slog.Logger
 }
@@ -73,6 +75,7 @@ func (o Options) Normalized() Options {
 		o.Timeout = MaxTimeout
 	}
 	o.Retry = normalizeRetryPolicy(o.Retry)
+	o.Selection = o.Selection.Normalized()
 	if o.Logger == nil {
 		o.Logger = slog.Default()
 	}
@@ -89,6 +92,9 @@ type Stats struct {
 	Retried int64
 	// Dropped 是因队列已满或已关闭而丢弃的事件数。
 	Dropped int64
+	// Filtered 是按订阅集合筛掉、没有发出的数量。它不算丢弃：没订阅就是
+	// 本来不该发，与「订阅了但队列满」是两件事。
+	Filtered int64
 	// Pending 是当前排队等待发送的事件数。
 	Pending int
 }
@@ -98,12 +104,13 @@ type Stats struct {
 // 消费路径调用 Notify 只做一次非阻塞入队，HTTP 请求在独立 goroutine 里
 // 发生；因此接收方变慢不会拖长消息处理时间，也不会占住队列租约。
 type Dispatcher struct {
-	target  Target
-	sender  Sender
-	logger  *slog.Logger
-	timeout time.Duration
-	retry   backoff.Policy
-	queue   chan Event
+	target    Target
+	sender    Sender
+	logger    *slog.Logger
+	timeout   time.Duration
+	retry     backoff.Policy
+	selection Selection
+	queue     chan Event
 
 	mu     sync.RWMutex
 	closed bool
@@ -119,6 +126,7 @@ type Dispatcher struct {
 	failed    atomic.Int64
 	retried   atomic.Int64
 	dropped   atomic.Int64
+	filtered  atomic.Int64
 }
 
 // NewDispatcher 创建分发器并启动发送 goroutine。
@@ -132,13 +140,14 @@ func NewDispatcher(target Target, sender Sender, opts Options) *Dispatcher {
 	opts = opts.Normalized()
 
 	d := &Dispatcher{
-		target:  target,
-		sender:  sender,
-		logger:  opts.Logger,
-		timeout: opts.Timeout,
-		retry:   opts.Retry,
-		queue:   make(chan Event, opts.QueueSize),
-		stop:    make(chan struct{}),
+		target:    target,
+		sender:    sender,
+		logger:    opts.Logger,
+		timeout:   opts.Timeout,
+		retry:     opts.Retry,
+		selection: opts.Selection,
+		queue:     make(chan Event, opts.QueueSize),
+		stop:      make(chan struct{}),
 	}
 	d.wg.Add(opts.Workers)
 	for i := 0; i < opts.Workers; i++ {
@@ -156,6 +165,12 @@ func (d *Dispatcher) Target() Target { return d.target }
 // 的回调能把整个消费池拖停。丢弃要能看见，所以计数并记 Warn。
 func (d *Dispatcher) Notify(ev Event) bool {
 	if d == nil {
+		return false
+	}
+	// 先按订阅筛，再校验：没订阅的类型本来就不该发，为它记一条「事件不合法」
+	// 的告警只会让日志里出现与自己无关的噪音。
+	if !d.selection.Allows(ev.Event) {
+		d.filtered.Add(1)
 		return false
 	}
 	if err := ev.Validate(); err != nil {
@@ -254,8 +269,17 @@ func (d *Dispatcher) Stats() Stats {
 		Failed:    d.failed.Load(),
 		Retried:   d.retried.Load(),
 		Dropped:   d.dropped.Load(),
+		Filtered:  d.filtered.Load(),
 		Pending:   len(d.queue),
 	}
+}
+
+// Selection 返回生效的事件订阅集合。
+func (d *Dispatcher) Selection() Selection {
+	if d == nil {
+		return DefaultSelection()
+	}
+	return d.selection
 }
 
 // Retry 返回生效的重试曲线。

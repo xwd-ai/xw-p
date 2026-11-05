@@ -114,3 +114,57 @@ func TestNewCallbackDispatcherInvalidSecret(t *testing.T) {
 	}
 	closeFn()
 }
+
+// 订阅的事件类型随配置生效；不配置时只订阅汇总事件。
+func TestNewCallbackDispatcherEventSelection(t *testing.T) {
+	cfg := config.Config{CallbackURL: "https://community.example.com/cb"}
+	dispatcher, closeFn := newCallbackDispatcher(discardLogger(), cfg)
+	if dispatcher == nil {
+		t.Fatal("合法地址应装配回调")
+	}
+	if got := dispatcher.Selection().String(); got != webhook.EventDeliveryResult {
+		t.Errorf("默认只订阅汇总事件，实际 %q", got)
+	}
+	closeFn()
+
+	cfg.CallbackEvents = "trigger.received,delivery.sent,delivery.failed,digest.updated"
+	dispatcher, closeFn = newCallbackDispatcher(discardLogger(), cfg)
+	if dispatcher == nil {
+		t.Fatal("合法的事件列表应装配回调")
+	}
+	for _, name := range []string{
+		webhook.EventTriggerReceived, webhook.EventDeliverySent,
+		webhook.EventDeliveryFailed, webhook.EventDigestUpdated,
+	} {
+		if !dispatcher.Selection().Allows(name) {
+			t.Errorf("配置了 %s 却未订阅", name)
+		}
+	}
+	if dispatcher.Selection().Allows(webhook.EventDeliveryResult) {
+		t.Error("未列出的汇总事件不应订阅")
+	}
+	closeFn()
+
+	cfg.CallbackEvents = "all"
+	dispatcher, closeFn = newCallbackDispatcher(discardLogger(), cfg)
+	if dispatcher == nil {
+		t.Fatal("all 应装配回调")
+	}
+	if !dispatcher.Selection().All() {
+		t.Error("all 应订阅全部类型")
+	}
+	closeFn()
+}
+
+// 类型名写错时不装配回调：订阅了却收不到，比一条都没配更难查。
+func TestNewCallbackDispatcherInvalidEventSelection(t *testing.T) {
+	cfg := config.Config{
+		CallbackURL:    "https://community.example.com/cb",
+		CallbackEvents: "trigger.received,delivery.maybe",
+	}
+	dispatcher, closeFn := newCallbackDispatcher(discardLogger(), cfg)
+	if dispatcher != nil {
+		t.Error("事件类型不合法时不应装配回调")
+	}
+	closeFn()
+}

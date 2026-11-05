@@ -451,7 +451,7 @@ func TestPhase3IntegrationChannelsDeliverEverywhere(t *testing.T) {
 	if rep.Recorded != 4 {
 		t.Errorf("执行明细应写入 4 条，实际 %d 条", rep.Recorded)
 	}
-	if !rep.Notified {
+	if rep.Notified == 0 {
 		t.Error("有投递动作时应产生回调事件")
 	}
 
@@ -557,7 +557,7 @@ func TestPhase3IntegrationChannelsDeliverEverywhere(t *testing.T) {
 	if ev.Event != webhook.EventDeliveryResult || ev.Status != webhook.StatusSent {
 		t.Errorf("回调事件 = %s / %s", ev.Event, ev.Status)
 	}
-	if ev.Summary.Total != 4 || ev.Summary.Sent != 4 || ev.Summary.Failed != 0 {
+	if ev.Summary == nil || ev.Summary.Total != 4 || ev.Summary.Sent != 4 || ev.Summary.Failed != 0 {
 		t.Errorf("回调汇总 = %+v", ev.Summary)
 	}
 	if ev.TriggerID != "t-phase3-comment" || ev.Workflow != "post_commented" {

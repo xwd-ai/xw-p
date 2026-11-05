@@ -20,7 +20,7 @@ func sampleEvent() Event {
 		TriggerID:  "trig-1",
 		Workflow:   "post_liked",
 		Status:     StatusSent,
-		Summary:    Summary{Total: 1, Sent: 1},
+		Summary:    &Summary{Total: 1, Sent: 1},
 		Deliveries: []Delivery{{StepID: "notify", Channel: "in_app", Status: StatusSent}},
 	}
 }

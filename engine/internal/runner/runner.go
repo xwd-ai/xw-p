@@ -52,9 +52,10 @@ type Report struct {
 	Rejected string
 	// Recorded 是回写到执行明细的条数（未启用回写时为 0）。
 	Recorded int
-	// Notified 表示本次执行的结果事件已交给回调队列（未配置回调、
-	// 没有投递动作或队列已满时为 false）。
-	Notified bool
+	// Notified 是交给回调队列的事件条数：受理事件一条，结果事件按渠道与
+	// 聚合步骤各一条，加一条汇总。未配置回调、没有投递动作、队列已满或
+	// 事件类型未被订阅时相应的事件不计入。
+	Notified int
 	// Duration 是这次执行耗时。
 	Duration time.Duration
 }
@@ -129,6 +130,12 @@ func (r *Runner) Run(msg queue.QueuedMessage) (Report, error) {
 	rep.FromSnapshot = fromSnapshot
 	rep.Version = wf.Version
 
+	// 受理事件在动手之前发：它描述的是「即将执行」，放到结果之后再发，
+	// 接入方会先收到结果、后收到受理，顺序与事实相反。
+	if NotifyTrigger(r.notifier, msg, wf, fromSnapshot) {
+		rep.Notified++
+	}
+
 	results := r.pipe.Run(pipeline.NewContext(msg), wf)
 	rep.summarize(results)
 	rep.Duration = time.Since(start)
@@ -152,7 +159,7 @@ func (r *Runner) Run(msg queue.QueuedMessage) (Report, error) {
 
 	// 回调与明细同源：接入方不必轮询执行明细接口就能拿到结果。
 	// 入队即返回，HTTP 提交在回调侧异步完成。
-	rep.Notified = NotifyResults(r.notifier, msg, results)
+	rep.Notified += NotifyResults(r.notifier, msg, results)
 
 	r.logReport(&rep)
 	return rep, nil
