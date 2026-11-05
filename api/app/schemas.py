@@ -230,8 +230,13 @@ def new_queued_message(
     租户与环境取自请求上下文（鉴权依赖已写入）：消息把两者一起带给引擎，
     引擎写执行明细与收件箱时才能落到正确的分区。后台线程没有请求上下文，
     需要显式传入。
+
+    环境必须读请求上下文而不是部署配置：``XW_ENV`` 只说明这套服务默认跑在
+    哪个环境，请求头 ``X-Environment`` 才是本次事件归属。读配置会让生产环境
+    触发的事件带着默认环境落到引擎，执行明细与收件箱因此被记到另一套环境名下
+    ——活动记录是按请求头写的，两处口径随即对不上。
     """
-    from . import config, tenancy
+    from . import tenancy
 
     return QueuedMessage(
         trigger_id=str(uuid.uuid4()),
@@ -245,6 +250,6 @@ def new_queued_message(
         payload=event.payload,
         overrides=event.overrides,
         tenant=tenant or tenancy.current_tenant(),
-        environment=environment or config.ENV,
+        environment=environment or tenancy.current_environment(),
         workflow=WorkflowSnapshot.from_workflow(workflow) if workflow is not None else None,
     )

@@ -163,3 +163,50 @@ def test_trigger_snapshot_includes_crud_workflow(client_and_bus, monkeypatch):
     assert msg.workflow is not None
     assert [s.id for s in msg.workflow.steps] == ["step-1", "step-2"]
     assert msg.workflow.steps[0].config["template"] == "{{ payload.actor }} 关注了你"
+
+
+def test_queued_message_follows_request_environment():
+    """入队消息的环境取请求上下文，而不是部署默认值。
+
+    后台线程与引擎都按消息里的环境写执行明细与收件箱；这里读部署配置，
+    生产环境受理的事件会带着默认环境落库，活动记录与明细随即可对不上。
+    """
+    from app import tenancy
+
+    token = tenancy.use_environment("production")
+    try:
+        msg = new_queued_message(_event())
+        assert msg.environment == "production"
+    finally:
+        tenancy._environment.reset(token)
+
+    # 显式传入优先于上下文（后台线程与批量续跑场景使用）。
+    explicit = new_queued_message(_event(), environment="development")
+    assert explicit.environment == "development"
+
+
+def test_trigger_message_carries_header_environment(client_and_bus, monkeypatch):
+    """接口层：触发请求头指明的环境一路带到队列消息。"""
+    import app.workflow_store as ws_mod
+    from app.models.entities import Environment, Step, Workflow
+
+    workflow = Workflow(
+        id="wf-prod-liked",
+        name="post_liked_prod",
+        environment=Environment.PRODUCTION,
+        steps=[Step(id="step-inapp", type="in_app", name="站内信", config={})],
+    )
+    monkeypatch.setattr(ws_mod, "_store", ws_mod.MemoryWorkflowStore(seed=[workflow]))
+
+    client, bus = client_and_bus
+    resp = client.post(
+        "/v1/events/trigger",
+        json={
+            "name": "post_liked_prod",
+            "to": {"subscriberId": "creator_1", "channels": ["in_app"]},
+            "payload": {"post_id": "P-2026-1002", "actor": "小林"},
+        },
+        headers={"X-Environment": "production"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert bus.published[0].environment == "production"

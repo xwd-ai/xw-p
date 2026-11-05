@@ -39,11 +39,13 @@ logger = logging.getLogger("xw.worker")
 
 
 def _record(msg: QueuedMessage, **fields) -> dict:
-    """写一条执行明细，补齐该消息的租户与环境。
+    """写一条执行明细，补齐该消息的租户、环境与工作流。
 
     后台线程没有请求上下文，租户必须从消息里取；漏掉这一补，租户 B 的投递
-    明细会落在默认租户下，只有默认租户看得见。
+    明细会落在默认租户下，只有默认租户看得见。工作流名一并带上，管理统计
+    才能按模板给出排行。
     """
+    fields.setdefault("workflow", msg.name)
     return record_execution(
         trigger_id=msg.trigger_id,
         tenant=msg.tenant,
@@ -162,6 +164,7 @@ class Worker:
                 status="sent" if result.sent else "failed",
                 reason=result.reason,
                 duration_ms=result.duration_ms,
+                provider=result.provider_id,
             )
             if result.sent:
                 sent += 1

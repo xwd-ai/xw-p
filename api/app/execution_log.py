@@ -511,16 +511,23 @@ def record_execution(
     duration_ms: int = 0,
     tenant: Optional[str] = None,
     environment: Optional[str] = None,
+    workflow: Optional[str] = None,
+    provider: Optional[str] = None,
 ) -> dict[str, Any]:
     """写入一条执行明细并返回落库记录。
 
     供 worker 在逐渠道投递时调用：每个 ``(trigger_id, channel)`` 各写一条。
+
+    ``workflow`` 与 ``provider`` 是排查用的归属信息：管理统计按它们给出工作流
+    排行与实现排行。引擎回写的记录本来就有这两项，内置消费者这条路径此前漏了，
+    同一份统计在 demo 下会得到一张空排行。Postgres 后端的建表脚本暂时只有固定
+    几列，这两项在内存与 JSONL 后端生效。
     """
     if tenant is None or environment is None:
         from . import tenancy
 
         tenant = tenant or tenancy.current_tenant()
-        environment = environment or config.ENV
+        environment = environment or tenancy.current_environment()
     record = {
         "id": uuid.uuid4().hex,
         "tenant": tenant,
@@ -532,6 +539,10 @@ def record_execution(
         "duration_ms": duration_ms,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    if workflow:
+        record["workflow"] = workflow
+    if provider:
+        record["provider"] = provider
     get_execution_store().append(record)
     return record
 
