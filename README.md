@@ -288,7 +288,12 @@ api/.venv/bin/python scripts/export_openapi.py --check
 
 # 前端：收件箱组件与运营后台的纯逻辑测试（Node 内置 runner，无第三方依赖）
 node --test 'dashboard/tests/*.test.js'
+
+# 端到端场景验收：自起 Redis / API / 引擎三个真实进程跑多场景链路
+api/.venv/bin/python scripts/e2e_scenarios.py
 ```
+
+CI（GitHub Actions）按同样的口径跑 lint 与上面这些测试。容器化部署与一键启动见 [docs/deploy.md](docs/deploy.md)。
 
 ## License
 

@@ -40,7 +40,7 @@ from .timeutil import Cursor, parse_dt
 
 logger = logging.getLogger("xw.activity_log")
 
-_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+_DATA_DIR = config.data_dir()
 # 落盘位置可由 ``XW_ACTIVITY_FILE`` 覆盖：多实例压测与集成测试需要把活动日志
 # 写进临时目录，否则每跑一次都会往本地 demo 数据里追加记录。
 JSONL_FILE = Path(config.ACTIVITY_FILE or _DATA_DIR / "activity.jsonl")

@@ -24,7 +24,7 @@ from .stats import TREND_DAYS, StatsAccumulator, build_stats
 
 logger = logging.getLogger("xw.storage")
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+DATA_DIR = config.data_dir()
 JSONL_FILE = DATA_DIR / "messages.jsonl"
 
 

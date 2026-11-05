@@ -19,11 +19,41 @@ node --test 'dashboard/tests/*.test.js'
 
 # OpenAPI 导出文件与实现是否一致
 api/.venv/bin/python scripts/export_openapi.py --check
+
+# 端到端场景验收（自起 Redis / API / 引擎三个真实进程）
+api/.venv/bin/python scripts/e2e_scenarios.py
+api/.venv/bin/python scripts/e2e_scenarios.py --scenario digest,idem   # 只跑部分场景
 ```
 
 本机需要 `HTTP_PROXY` / `HTTPS_PROXY` 指向代理时，跑 Python 测试要先把它们去掉
 （`env -u HTTP_PROXY -u HTTPS_PROXY ...`），否则测试里起的本地服务会走代理，
 表现为「连不上」。`scripts/coverage.py` 已经代为清理。
+
+## 端到端场景验收
+
+`scripts/e2e_scenarios.py` 与 `api/tests` 的分工：单测与集成测试用进程内存储
+验证「接口与组件协作一致」，端到端脚本跨进程验证「API 入队 → Redis 队列 →
+Go 引擎消费 → 落库 → API 读回」这条真实链路。脚本自起临时 redis-server、
+uvicorn 与编译出的引擎二进制，跑完即销毁，不碰 `api/data` 下的任何文件。
+
+当前覆盖五个场景：
+
+| 场景 | 验证点 |
+| --- | --- |
+| `chain` | 一次评论触发三个渠道，执行明细逐渠道 `sent`，收件箱可见渲染后的正文 |
+| `digest` | 同一篇帖子三次点赞收敛为一张聚合卡片，计数累加到 3 |
+| `idem` | 同一 `Idempotency-Key` 两次触发只入队一次，回执标识一致 |
+| `pref` | 关闭 email 偏好后该渠道记 `skipped`，其余渠道不受影响 |
+| `env` | 生产环境触发的事件只出现在生产收件箱，开发环境看不见 |
+
+前置依赖：本机 `redis-server`、Go 工具链（脚本会自动编译引擎）、`api`
+虚拟环境或已装 `api/requirements.txt` 的解释器。排查失败用 `--keep` 保留
+临时目录，`--scenario` 只跑指定场景；进程日志在 `<临时目录>/api.log` 与
+`<临时目录>/engine.log`。
+
+一个真实的坑：触发请求的 `to` 里必须带 `deviceToken` / `email` 等收件地址——
+引擎从消息本身取地址、不回查订阅者档案，缺令牌的 push 步骤会失败并短路
+后续渠道，场景要验的「各渠道各自的结果」会被这一条失败带偏。
 
 ## 覆盖率门槛
 

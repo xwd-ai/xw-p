@@ -44,13 +44,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Optional, Protocol
 
+from . import config
+
 from .models.channel import Channel
 from .models.entities import Environment, Subscriber
 from .subscriber_identity import ADDRESS_FIELDS, address_key
 
 logger = logging.getLogger("xw.subscribers")
 
-_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+_DATA_DIR = config.data_dir()
 DEFAULT_SUBSCRIBERS_PATH = _DATA_DIR / "subscribers.jsonl"
 
 #: 单页条数的默认值与上限。上限存在的意义是防止一次请求把整张表拖出来。

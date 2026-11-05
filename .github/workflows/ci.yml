@@ -1,0 +1,104 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: engine/go.mod
+          cache-dependency-path: engine/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Go 格式与静态检查
+        run: |
+          cd engine
+          test -z "$(gofmt -l .)" || { gofmt -l .; echo "存在未格式化的 Go 文件"; exit 1; }
+          go vet ./...
+      - name: Go SDK 格式与静态检查
+        run: |
+          cd sdk/go
+          test -z "$(gofmt -l .)" || { gofmt -l .; echo "存在未格式化的 Go 文件"; exit 1; }
+          go vet ./...
+      - name: 前端语法检查
+        run: |
+          for f in dashboard/*.js dashboard/tests/*.js; do node --check "$f"; done
+      - name: Python 语法检查
+        run: |
+          python -m compileall -q api/app api/tests scripts sdk/python
+
+  test-api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: 安装 Redis（供限流与幂等的真实实例用例）
+        run: sudo apt-get update && sudo apt-get install -y redis-server
+      - name: 安装依赖
+        run: pip install -r api/requirements.txt
+      - name: 单元测试与覆盖率下限
+        run: python scripts/coverage.py --xml coverage.xml
+      - name: OpenAPI 导出一致性
+        run: python scripts/export_openapi.py --check
+
+  test-engine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: engine/go.mod
+          cache-dependency-path: engine/go.sum
+      - name: 引擎测试
+        run: |
+          cd engine
+          go build ./...
+          go test ./...
+      - name: 引擎竞态检测（并发路径）
+        run: |
+          cd engine
+          go test -race ./internal/provider/ ./internal/pipeline/ ./internal/runner/ ./internal/webhook/ ./internal/eventbus/ ./internal/admin/ ./cmd/engine/
+      - name: Go SDK 测试
+        run: |
+          cd sdk/go
+          go test ./...
+
+  test-dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: 前端纯逻辑测试
+        run: node --test 'dashboard/tests/*.test.js'
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: engine/go.mod
+          cache-dependency-path: engine/go.sum
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: 安装 Redis
+        run: sudo apt-get update && sudo apt-get install -y redis-server
+      - name: 安装依赖
+        run: pip install -r api/requirements.txt
+      - name: 端到端场景验收
+        run: python scripts/e2e_scenarios.py

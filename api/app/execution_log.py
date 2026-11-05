@@ -51,7 +51,7 @@ from .timeutil import parse_dt
 
 logger = logging.getLogger("xw.execution_log")
 
-_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+_DATA_DIR = config.data_dir()
 JSONL_FILE = _DATA_DIR / "executions.jsonl"
 
 

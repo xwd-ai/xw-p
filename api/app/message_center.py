@@ -37,9 +37,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Iterator, Optional, Protocol
 
+from . import config
+
 logger = logging.getLogger("xw.message_center")
 
-_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+_DATA_DIR = config.data_dir()
 
 #: 消息在 JSON 里的字段名，与引擎侧 InboxEntry 的 tag 一一对应。
 MESSAGE_FIELDS = (

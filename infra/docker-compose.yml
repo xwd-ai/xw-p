@@ -46,7 +46,54 @@ services:
       timeout: 5s
       retries: 10
 
+  # API：触发接口、收件箱与管理端点。与引擎共享 app_data 卷，
+  # 「引擎写执行明细 / 收件箱、API 读回」走的是同一份文件。
+  api:
+    build:
+      context: ..
+      dockerfile: api/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      XW_BUS: redis
+      XW_REDIS_URL: redis://redis:6379/0
+      XW_STORAGE: jsonl
+      XW_DATA_DIR: /data
+    volumes:
+      - app_data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=2)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  # 引擎：消费 Redis 队列并执行工作流步骤。
+  engine:
+    build:
+      context: ..
+      dockerfile: engine/Dockerfile
+    restart: unless-stopped
+    environment:
+      XW_REDIS_ADDR: redis:6379
+      XW_DIGEST_STORE: redis
+      XW_DELAY_STORE: redis
+    volumes:
+      - app_data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8081/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
 volumes:
   pg_data:
   redis_data:
   rabbitmq_data:
+  app_data:

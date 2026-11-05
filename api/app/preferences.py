@@ -35,13 +35,15 @@ from enum import Enum
 from pathlib import Path
 from typing import Iterable, Optional, Protocol
 
+from . import config
+
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .models.channel import Channel
 
 logger = logging.getLogger("xw.preferences")
 
-_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+_DATA_DIR = config.data_dir()
 DEFAULT_PREFERENCES_PATH = _DATA_DIR / "preferences.jsonl"
 
 #: 订阅者标识与工作流名的长度上限。工作流名会出现在队列消息与执行明细里，

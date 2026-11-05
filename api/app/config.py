@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 
 def _env(key: str, default: str) -> str:
@@ -120,6 +121,17 @@ IDEMPOTENCY_TTL = int(_env("XW_IDEMPOTENCY_TTL", "86400"))
 # 用它把数据写进临时目录；与收件箱的 ``XW_INBOX_FILE``、偏好的
 # ``XW_PREFERENCES_FILE`` 同一套做法。
 ACTIVITY_FILE = _env("XW_ACTIVITY_FILE", "")
+
+# 数据目录（空表示 ``api/data``）。集成测试与容器部署用它整体搬走 JSONL 落盘
+# 位置，免得每加一个文件就多一个 ``XW_*_FILE`` 变量；单文件变量仍然优先，
+# 只覆盖各自的文件、不动其余落点。
+DATA_DIR = _env("XW_DATA_DIR", "")
+
+
+def data_dir() -> "Path":
+    """返回 JSONL 数据目录：``XW_DATA_DIR`` 优先，否则 ``api/data``。"""
+    return Path(DATA_DIR) if DATA_DIR else Path(__file__).resolve().parent.parent / "data"
+
 
 # 当前服务环境：development（默认）| production
 # 用于区分 API Key 与数据隔离，未显式设置时回退 development，保证 demo 开箱即用。

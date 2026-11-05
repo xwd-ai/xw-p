@@ -34,11 +34,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Optional, Protocol
 
+from . import config
 from .models.entities import Environment, Topic
 
 logger = logging.getLogger("xw.topics")
 
-_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+_DATA_DIR = config.data_dir()
 DEFAULT_TOPICS_PATH = _DATA_DIR / "topics.jsonl"
 
 #: 单页条数的默认值与上限（与订阅者列表同口径）。

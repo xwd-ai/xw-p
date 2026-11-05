@@ -64,7 +64,7 @@ logger = logging.getLogger("xw.inbox")
 
 router = APIRouter(prefix="/v1/inbox", tags=["inbox"])
 
-_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+_DATA_DIR = config.data_dir()
 _READ_STATE_FILE = _DATA_DIR / "read_state.jsonl"
 
 # 引擎侧 in_app 步骤写入的收件箱文件（与 engine 默认路径一致）。
