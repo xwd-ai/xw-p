@@ -27,7 +27,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from .auth import EnvContext, require_env
+from .admin_auth import AdminPrincipal, require_admin
 from .admin_stats import (
     DEFAULT_TOP,
     DEFAULT_WINDOW_DAYS,
@@ -63,7 +63,7 @@ router = APIRouter(prefix="/v1/admin", tags=["admin"])
     },
 )
 def admin_stats(
-    env: EnvContext = Depends(require_env),
+    env: AdminPrincipal = Depends(require_admin),
     days: Optional[int] = Query(
         default=None,
         ge=1,

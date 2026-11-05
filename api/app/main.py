@@ -13,11 +13,12 @@ from typing import Optional
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import config, openapi as openapi_docs
+from . import config, openapi as openapi_docs, tokens
 from .activity_log import build_activity, record_activities, record_activity
 from .admin_activity_routes import router as admin_activity_router
 from .admin_routes import router as admin_router
 from .auth import EnvContext, require_env
+from .auth_routes import router as auth_router
 from .activity_routes import router as activity_router
 from .bus import get_bus, publish_all
 from .dashboard_routes import router as dashboard_router
@@ -49,12 +50,33 @@ logger = logging.getLogger("xw.api")
 _worker = Worker()
 
 
+def _admin_auth_note() -> str:
+    """后台鉴权的启动摘要。配置不完整时给出原因，而不是一句「已启用」。"""
+    try:
+        tokens.secret()
+        if not tokens.login_configured():
+            return "已启用，但未配置 XW_ADMIN_USERNAME / XW_ADMIN_PASSWORD，登录接口会返回 503"
+        envs = ", ".join(tokens.admin_environments()) or "全部"
+        return (
+            f"已启用，管理员 {config.ADMIN_USERNAME} · 租户 {tokens.admin_tenant()} · "
+            f"环境 {envs} · 有效期 {tokens.ttl_seconds()}s"
+        )
+    except tokens.JwtConfigError as exc:
+        # 密钥缺失与配置写错都落到这里：后者（密钥过短、租户或环境非法）
+        # 虽然 enabled() 为真，但校验必然失败，启动时就该说清楚。
+        return f"未启用（{exc}），运维接口与业务接口同一套判定"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 生产环境误配文件后端时先指出来，避免带着非持久化语义上线。
     storage_hint = config.storage_warning()
     if storage_hint:
         logger.warning(storage_hint)
+    # 后台鉴权的三种状态都在启动日志里说清：启用了但没配账号（登录必然 503）、
+    # 启用了但密钥过短（校验直接报错），都是「配置以为生效了、实际用不了」的
+    # 典型情形，等到第一次登录失败再来查代价更大。
+    logger.info("后台令牌鉴权：%s", _admin_auth_note())
     # 渠道注册表在启动时装配：配置写错直接暴露出来，而不是等到第一条消息
     # 投递失败才发现；尚未接入的种类与空着的渠道会在日志里逐条列出。
     provider_factory.get_registry()
@@ -87,6 +109,7 @@ app.add_middleware(
     max_age=600,
 )
 
+app.include_router(auth_router)
 app.include_router(workflow_router)
 app.include_router(dashboard_router)
 app.include_router(admin_router)

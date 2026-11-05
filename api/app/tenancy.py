@@ -39,6 +39,11 @@ TENANT_HEADER = "X-Tenant-Id"
 #: 未指定租户时的缺省值
 DEFAULT_TENANT = "default"
 
+#: 已知角色。只开放 ``admin`` 一种：权限模型越少，配错的空间越小；
+#: 需要更细的读写分离时再扩，而不是先留一个没人用的 roles 字段。
+ROLE_ADMIN = "admin"
+KNOWN_ROLES = (ROLE_ADMIN,)
+
 #: 租户标识的字符集：小写字母数字开头，允许连字符与下划线。
 #:
 #: 收紧到这套字符集是因为租户标识会拼进文件路径：放开 ``/`` 与 ``.``
@@ -70,9 +75,16 @@ class ApiKeyScope:
     #: 允许使用的环境；空元组表示不限制（仅在未声明 environments 时出现）。
     environments: tuple[str, ...] = ()
     label: str = ""
+    #: 角色。目前只有 ``admin``：运营后台的接口只接受带该角色的 Key 或后台令牌。
+    #: 未声明角色的 Key 只能调用业务接口——服务端的长期凭据不该顺带拿到
+    #: 「停用模板、看全量统计」这类运维权限。
+    roles: tuple[str, ...] = ()
 
     def allows_env(self, environment: str) -> bool:
         return not self.environments or environment in self.environments
+
+    def has_role(self, role: str) -> bool:
+        return role in self.roles
 
 
 def is_valid_tenant(value: str) -> bool:
@@ -129,13 +141,39 @@ def parse_scopes(raw: str) -> dict[str, ApiKeyScope]:
             raise TenantError(
                 f"XW_API_KEYS 第 {index + 1} 项包含未知环境：{', '.join(unknown)}"
             )
+        roles = _parse_roles(item.get("roles"), index)
         scopes[key] = ApiKeyScope(
             key=key,
             tenant=tenant,
             environments=envs,
             label=str(item.get("label") or "").strip(),
+            roles=roles,
         )
     return scopes
+
+
+def _parse_roles(raw: object, index: int) -> tuple[str, ...]:
+    """解析 Key 的角色声明：字符串或数组，只接受已知角色。"""
+    if raw is None:
+        return ()
+    if isinstance(raw, str):
+        parts = [part.strip().lower() for part in raw.split(",") if part.strip()]
+    elif isinstance(raw, list):
+        parts = [str(part).strip().lower() for part in raw if str(part).strip()]
+    else:
+        raise TenantError(f"XW_API_KEYS 第 {index + 1} 项的 roles 需为数组")
+    unknown = [role for role in parts if role not in KNOWN_ROLES]
+    if unknown:
+        raise TenantError(
+            f"XW_API_KEYS 第 {index + 1} 项包含未知角色：{', '.join(unknown)}"
+            f"（支持：{', '.join(KNOWN_ROLES)}）"
+        )
+    # 去重保序：同一个角色写两遍不该产生两条
+    seen: list[str] = []
+    for role in parts:
+        if role not in seen:
+            seen.append(role)
+    return tuple(seen)
 
 
 def load_scopes() -> dict[str, ApiKeyScope]:
@@ -219,6 +257,8 @@ def scoped_path(base: Path | str, tenant: Optional[str] = None) -> Path:
 
 __all__ = [
     "DEFAULT_TENANT",
+    "KNOWN_ROLES",
+    "ROLE_ADMIN",
     "TENANT_HEADER",
     "ApiKeyScope",
     "TenantError",

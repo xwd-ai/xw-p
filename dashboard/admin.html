@@ -46,8 +46,24 @@
           </select>
         </label>
         <button class="btn btn-ghost" id="adm-refresh">↻ 刷新</button>
+        <button class="btn btn-ghost" id="adm-auth-toggle" hidden>登录</button>
       </div>
     </header>
+
+    <div id="adm-login" class="login-panel" hidden>
+      <form id="adm-login-form" autocomplete="on">
+        <label class="field-inline">
+          <span>账号</span>
+          <input class="input" id="adm-login-user" name="username" autocomplete="username" placeholder="管理员账号" />
+        </label>
+        <label class="field-inline">
+          <span>口令</span>
+          <input class="input" id="adm-login-pass" name="password" type="password" autocomplete="current-password" placeholder="口令" />
+        </label>
+        <button class="btn btn-primary btn-sm" type="submit" id="adm-login-submit">登录</button>
+        <span class="login-note" id="adm-login-note">令牌保存在本机浏览器，只用于这个后台</span>
+      </form>
+    </div>
 
     <div id="adm-banner" role="alert">
       <span>⚠︎</span><span id="adm-banner-text">后端服务未连接</span>

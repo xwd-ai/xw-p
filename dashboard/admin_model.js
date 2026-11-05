@@ -56,6 +56,29 @@
     return '/v1/admin/stats?days=' + clampDays(opts.days) + '&top=' + toInt(opts.top, DEFAULT_TOP, 1, MAX_TOP);
   }
 
+  /* 后台令牌：只接受「看起来像一个 base64url 段组成的 JWT」的字符串。
+   * 粘贴带换行或空格的内容（比如把整行 curl 命令贴进来）时直接判无效，
+   * 比发出去再收一个 401 更容易说清问题出在哪。 */
+  function bearerHeader(token) {
+    const text = typeof token === 'string' ? token.trim() : '';
+    if (!text) return {};
+    if (/[\s\u0000-\u001f\u007f]/.test(text)) return null;
+    if (text.split('.').length !== 3) return null;
+    return { Authorization: 'Bearer ' + text };
+  }
+
+  /* 地址栏里的 ?token=：命令行换完令牌后直接打开页面用。
+   * 只认合法形状，避免把一个写错的链接变成「登录失败」这种更远的现象。 */
+  function tokenFromSearch(search) {
+    let raw = '';
+    try {
+      raw = new URLSearchParams(search || '').get('token') || '';
+    } catch (err) {
+      return '';
+    }
+    return bearerHeader(raw) ? raw.trim() : '';
+  }
+
   function buildSummaryPath(options) {
     const opts = options || {};
     const parts = [];
@@ -501,6 +524,8 @@
     DELIVERY_CHANNELS: DELIVERY_CHANNELS,
     ACTIVITY_STATUSES: ACTIVITY_STATUSES,
     buildStatsPath: buildStatsPath,
+    bearerHeader: bearerHeader,
+    tokenFromSearch: tokenFromSearch,
     buildSummaryPath: buildSummaryPath,
     buildWorkflowsPath: buildWorkflowsPath,
     buildSubscribersPath: buildSubscribersPath,

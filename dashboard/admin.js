@@ -23,6 +23,83 @@
 
   const $ = function (id) { return document.getElementById(id); };
 
+  /* ============ 后台令牌 ============ */
+
+  // 令牌存在 localStorage：这是一次浏览器会话里的身份，刷新页面不必重新登录。
+  // 读不到（隐私模式）就退化成「每次打开都要登录」，不影响其它逻辑。
+  const TOKEN_KEY = 'xw.adminToken';
+
+  function readStoredToken() {
+    try {
+      return window.localStorage.getItem(TOKEN_KEY) || '';
+    } catch (err) {
+      return '';
+    }
+  }
+
+  function storeToken(value) {
+    try {
+      if (value) window.localStorage.setItem(TOKEN_KEY, value);
+      else window.localStorage.removeItem(TOKEN_KEY);
+    } catch (err) {
+      // 存不下就只在内存里用：这轮操作照样能进行。
+    }
+  }
+
+  // 地址栏的 ?token= 用于命令行换完令牌后直接打开页面。读完从地址栏抹掉，
+  // 否则令牌会留在浏览历史与转发出去的链接里。
+  function takeTokenFromUrl() {
+    const fromUrl = M._internal.tokenFromSearch(window.location.search || '');
+    if (!fromUrl) return '';
+    try {
+      const params = new URLSearchParams(window.location.search || '');
+      params.delete('token');
+      const qs = params.toString();
+      window.history.replaceState({}, '', window.location.pathname + (qs ? '?' + qs : ''));
+    } catch (err) {
+      // 改不了地址栏不影响使用
+    }
+    return fromUrl;
+  }
+
+  let token = takeTokenFromUrl() || readStoredToken();
+  if (token) storeToken(token);
+  // 「需要登录」由服务端的 401 触发，不在页面加载时猜：没配后台密钥的部署里
+  // 不该出现一个点了只会 503 的按钮。
+  let loginNeeded = false;
+
+  function authHeaders() {
+    const header = M._internal.bearerHeader(token);
+    return header || {};
+  }
+
+  function updateAuthButton() {
+    const btn = $('adm-auth-toggle');
+    btn.hidden = !token && !loginNeeded;
+    btn.textContent = token ? '退出' : '登录';
+  }
+
+  function showLogin(message) {
+    $('adm-login').classList.add('show');
+    const note = $('adm-login-note');
+    note.classList.toggle('error', Boolean(message));
+    note.textContent = message || '令牌保存在本机浏览器，只用于这个后台';
+    updateAuthButton();
+  }
+
+  function hideLogin() {
+    $('adm-login').classList.remove('show');
+  }
+
+  function logout() {
+    token = '';
+    storeToken('');
+    loginNeeded = true;
+    hideLogin();
+    updateAuthButton();
+    showBanner('已退出后台登录');
+  }
+
   /* ============ 请求 ============ */
 
   function makeError(status, message) {
@@ -32,7 +109,11 @@
   }
 
   async function request(path, options) {
-    const headers = Object.assign({ Accept: 'application/json', 'X-Environment': env }, tenantHeaders());
+    const headers = Object.assign(
+      { Accept: 'application/json', 'X-Environment': env },
+      tenantHeaders(),
+      authHeaders()
+    );
     const opts = Object.assign({}, options || {}, { headers });
     if (opts.body && typeof opts.body !== 'string') {
       opts.body = JSON.stringify(opts.body);
@@ -53,8 +134,31 @@
         data = text;
       }
     }
-    if (!resp.ok) throw makeError(resp.status, M.describeError(resp.status, data));
+    if (!resp.ok) {
+      if (resp.status === 401) handleUnauthorized(data);
+      throw makeError(resp.status, M.describeError(resp.status, data));
+    }
     return data;
+  }
+
+  // 401 有两种含义：令牌过期（换一个就好）和这个部署要求登录。都已登录还把
+  // 令牌留着，下一次请求只会再 401 一次，因此直接在本地清掉。
+  function handleUnauthorized(payload) {
+    const detail = payload && typeof payload === 'object' && !Array.isArray(payload)
+      ? String(payload.detail || '')
+      : '';
+    if (token) {
+      token = '';
+      storeToken('');
+      loginNeeded = true;
+      showLogin(detail || '登录已过期，请重新登录');
+      return;
+    }
+    loginNeeded = /Bearer|令牌|后台/.test(detail);
+    if (loginNeeded) {
+      showLogin('需要后台账号登录');
+      showBanner(detail || '该接口需要后台登录');
+    }
   }
 
   /* ============ 连接状态横幅 ============ */
@@ -79,6 +183,69 @@
 
   $('adm-banner-retry').addEventListener('click', function () { loadAll(); });
   $('adm-banner-close').addEventListener('click', hideBanner);
+
+  /* ============ 登录 ============ */
+
+  $('adm-auth-toggle').addEventListener('click', function () {
+    if (token) {
+      logout();
+      loadAll();
+      return;
+    }
+    if ($('adm-login').classList.contains('show')) hideLogin();
+    else showLogin('');
+  });
+
+  $('adm-login-form').addEventListener('submit', async function (event) {
+    event.preventDefault();
+    const username = $('adm-login-user').value.trim();
+    const password = $('adm-login-pass').value;
+    const note = $('adm-login-note');
+    if (!username || !password) {
+      note.classList.add('error');
+      note.textContent = '请填写账号与口令';
+      return;
+    }
+    const submit = $('adm-login-submit');
+    submit.disabled = true;
+    submit.textContent = '登录中…';
+    try {
+      // 登录本身不带头部里的令牌：这里要的是一张新令牌，旧的那张可能正好是
+      // 过期的。请求也不走 request()，避免 401 时被当成「会话过期」再清一次。
+      const resp = await fetch(API_BASE + '/v1/auth/token', {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: username, password: password }),
+      });
+      const text = await resp.text();
+      let data = null;
+      if (text) {
+        try {
+          data = JSON.parse(text);
+        } catch (e) {
+          data = text;
+        }
+      }
+      if (!resp.ok) throw makeError(resp.status, M.describeError(resp.status, data));
+      if (!data || !data.accessToken) throw makeError(0, '登录回执缺少令牌字段');
+      token = data.accessToken;
+      storeToken(token);
+      loginNeeded = false;
+      $('adm-login-pass').value = '';
+      hideLogin();
+      hideBanner();
+      showToast('已登录 · ' + (data.subject || username));
+      updateAuthButton();
+      loadAll();
+    } catch (err) {
+      note.classList.add('error');
+      note.textContent = err.message;
+    } finally {
+      submit.disabled = false;
+      submit.textContent = '登录';
+      updateAuthButton();
+    }
+  });
 
   /* ============ 提示 ============ */
 
@@ -647,5 +814,6 @@
   }
 
   prefillPayload();
+  updateAuthButton();
   loadAll();
 })();

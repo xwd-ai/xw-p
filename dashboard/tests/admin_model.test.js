@@ -17,7 +17,9 @@ const SOURCE = path.join(__dirname, '..', 'admin_model.js');
 
 function loadModule() {
   const code = fs.readFileSync(SOURCE, 'utf8');
-  const sandbox = { window: {}, console: console };
+  // URLSearchParams 是 Node 的全局对象，不是 vm 上下文的默认内建：不注入的话
+  // 模块里「解析地址栏参数」的分支会走进 catch，测出来的结果是假的。
+  const sandbox = { window: {}, console: console, URLSearchParams: URLSearchParams };
   vm.createContext(sandbox);
   vm.runInContext(code, sandbox, { filename: 'admin_model.js' });
   return sandbox.window.xwAdminModel;
@@ -426,4 +428,29 @@ test('明细提示语区分「在等」「缺口」与「等完了」', () => {
 
   const waiting = M.executionHint(M.executionSummary([]), { again: true, reason: 'growing', missing: [] });
   assert.strictEqual(waiting, '等待消费…');
+});
+
+test('bearerHeader: 只接受三段式的令牌，其它情况明确判无效', function () {
+  const header = X.bearerHeader('  header.payload.signature  ');
+  assert.strictEqual(header.Authorization, 'Bearer header.payload.signature');
+
+  // 空值表示「没有凭据」，不是「凭据有问题」：没登录的页面不该报错。
+  assert.deepStrictEqual(Object.keys(X.bearerHeader('')), []);
+  assert.deepStrictEqual(Object.keys(X.bearerHeader('   ')), []);
+  assert.deepStrictEqual(Object.keys(X.bearerHeader(null)), []);
+
+  // 粘贴带换行 / 空格 / 段数不对的内容，返回 null 而不是发出去再收 401。
+  assert.strictEqual(X.bearerHeader('a b.c.d'), null);
+  assert.strictEqual(X.bearerHeader('abc.def'), null);
+  assert.strictEqual(X.bearerHeader('a.b.c.d'), null);
+  assert.deepStrictEqual(Object.keys(X.bearerHeader(12345)), []);
+});
+
+test('tokenFromSearch: 从地址栏取令牌，形状不对就当没有', function () {
+  assert.strictEqual(X.tokenFromSearch('?tenant=acme&token=aaa.bbb.ccc'), 'aaa.bbb.ccc');
+  assert.strictEqual(X.tokenFromSearch('?token=%20aaa.bbb.ccc%20'), 'aaa.bbb.ccc');
+  assert.strictEqual(X.tokenFromSearch('?tenant=acme'), '');
+  assert.strictEqual(X.tokenFromSearch('?token=not-a-jwt'), '');
+  assert.strictEqual(X.tokenFromSearch(''), '');
+  assert.strictEqual(X.tokenFromSearch(undefined), '');
 });

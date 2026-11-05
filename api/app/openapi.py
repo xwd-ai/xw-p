@@ -44,6 +44,13 @@ SERVER_URL_ENV = "XW_OPENAPI_SERVER_URL"
 #: 的信息层次一致；未在此声明的分组会在装配时被指出来（见测试）。
 TAGS: list[dict[str, str]] = [
     {
+        "name": "auth",
+        "description": (
+            "后台登录：用管理员账号口令换取 JWT，以及查询当前令牌的身份与有效期。"
+            "令牌绑定一个租户与一组可操作的环境，之后每次请求的 X-Environment 必须在其中。"
+        ),
+    },
+    {
         "name": "system",
         "description": "健康检查与服务状态。供负载均衡与部署脚本探测，不读环境头。",
     },
@@ -127,11 +134,19 @@ API_DESCRIPTION = """\
 与 `GET /v1/providers`（渠道配置与投递汇总属于整套部署）以及不区分租户的
 `GET /health`。
 
-**鉴权**：配置了 API Key 时，请求必须带 `X-Api-Key`。未配置任何 Key 的环境放行，
-便于本地与演示环境直接调用；配置后按 Key 的作用域收口：Key 不匹配或不可用于当前
-环境返回 401，用某个租户的 Key 去访问另一个租户返回 403。Key 与作用域用
-`XW_API_KEYS` 声明，形如 `[{"key": "...", "tenant": "acme", "environments":
-["production"]}]`。
+**鉴权**：两种凭据，都解析出「租户 + 环境」，业务接口不区分它们从哪来。
+
+- `X-Api-Key`：服务端调用的长期凭据。配置了 Key 时，请求必须带匹配的 Key；
+  未配置任何 Key 的环境放行，便于本地与演示环境直接调用。配置后按 Key 的作用域
+  收口：Key 不匹配或不可用于当前环境返回 401，用某个租户的 Key 去访问另一个租户
+  返回 403。Key 与作用域用 `XW_API_KEYS` 声明，形如
+  `[{"key": "...", "tenant": "acme", "environments": ["production"]}]`。
+- `Authorization: Bearer <JWT>`：运营后台的会话凭据。`POST /v1/auth/token` 用
+  管理员账号口令换取，有效期由 `XW_JWT_TTL` 决定。两种凭据同时出现时以令牌为准，
+  避免令牌过期后请求悄悄降级成 Key 的身份。
+
+运维接口（`/v1/admin/*`）只接受后台令牌或显式声明了 `roles: ["admin"]` 的 Key；
+未配置 `XW_JWT_SECRET` 的部署保持 demo 语义，与业务接口同一套判定。
 
 **幂等**：触发类接口接受 `Idempotency-Key` 头。相同键重复提交返回首次回执、
 不重复入队；不带该头则每次都是新的一次触发。键的取值由调用方决定，通常用
@@ -167,12 +182,32 @@ SECURITY_SCHEMES: dict[str, dict[str, Any]] = {
         "in": "header",
         "name": "X-Api-Key",
         "description": "环境级 API Key；目标环境未配置 Key 时可省略。",
-    }
+    },
+    "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": (
+            "后台会话令牌，由 `POST /v1/auth/token` 签发（HS256）。"
+            "只在配置了后台密钥的部署里校验；与 `X-Api-Key` 二选一，同时出现时以令牌为准。"
+        ),
+    },
 }
 
-#: 匿名与带 Key 两种备选并列，表示「Key 可选」。OpenAPI 用一个空要求对象
-#: 表达「也可以不带凭据」，这是标准写法，不是遗漏。
-SECURITY_REQUIREMENTS: list[dict[str, list[str]]] = [{"ApiKeyAuth": []}, {}]
+#: 匿名、带 Key、带后台令牌三种备选并列，表示「凭据可选」。OpenAPI 用一个空要求
+#: 对象表达「也可以不带凭据」，这是标准写法，不是遗漏。
+SECURITY_REQUIREMENTS: list[dict[str, list[str]]] = [
+    {"ApiKeyAuth": []},
+    {"BearerAuth": []},
+    {},
+]
+
+#: 运维接口专用：只接受后台令牌或带 admin 角色的 Key，匿名不成立，因此不给
+#: 空要求对象。
+ADMIN_SECURITY_REQUIREMENTS: list[dict[str, list[str]]] = [
+    {"BearerAuth": []},
+    {"ApiKeyAuth": []},
+]
 
 #: 统一错误响应体。FastAPI 的校验错误是 `detail` 为对象数组，业务错误是字符串，
 #: 两种形态都保留，调用方不必按状态码分两套解析。
@@ -330,6 +365,14 @@ def _decorate_operations(schema: dict[str, Any]) -> None:
                 responses.setdefault("401", deepcopy(_UNAUTHORIZED))
             if _has_header(operation, "X-Tenant-Id"):
                 responses.setdefault("403", deepcopy(_FORBIDDEN))
+
+            # 运维接口不给匿名备选：它们要么要后台令牌，要么要带 admin 角色的 Key。
+            # 登录接口反过来，明确写出「不需要凭据」——否则读者会以为要先有令牌
+            # 才能换令牌。
+            if path.startswith("/v1/admin"):
+                operation["security"] = deepcopy(ADMIN_SECURITY_REQUIREMENTS)
+            elif path == "/v1/auth/token":
+                operation["security"] = []
             # 路由自己声明过 400 / 401 / 403 时保留它的具体说明，只把缺的响应体补上：
             # 「入参校验失败」与「环境头写错」都是 400，但统一的错误形状一样。
             _fill_error_body(responses, "400", _BAD_REQUEST)

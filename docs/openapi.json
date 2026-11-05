@@ -416,6 +416,67 @@
         "title": "PreferenceWriteOut",
         "type": "object"
       },
+      "PrincipalResponse": {
+        "description": "当前令牌的身份。",
+        "properties": {
+          "environments": {
+            "description": "可操作的环境；空表示不限",
+            "items": {
+              "type": "string"
+            },
+            "title": "Environments",
+            "type": "array"
+          },
+          "expiresAt": {
+            "description": "过期时刻",
+            "format": "date-time",
+            "title": "Expiresat",
+            "type": "string"
+          },
+          "issuedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "签发时刻",
+            "title": "Issuedat"
+          },
+          "role": {
+            "description": "角色",
+            "title": "Role",
+            "type": "string"
+          },
+          "subject": {
+            "description": "令牌主体",
+            "title": "Subject",
+            "type": "string"
+          },
+          "tenant": {
+            "description": "令牌绑定的租户",
+            "title": "Tenant",
+            "type": "string"
+          },
+          "tokenId": {
+            "default": "",
+            "description": "令牌标识，用于排查与吊销对账",
+            "title": "Tokenid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "subject",
+          "tenant",
+          "role",
+          "expiresAt"
+        ],
+        "title": "PrincipalResponse",
+        "type": "object"
+      },
       "ProviderCreateRequest": {
         "description": "新增渠道配置。\n\n``id`` 留空时按渠道自动编号；``credentials`` 的取值统一按字符串处理，\n数字与布尔会被转成对应的字面量（``port: 587`` → ``\"587\"``）。",
         "properties": {
@@ -1060,6 +1121,109 @@
           "enabled"
         ],
         "title": "ToggleRequest",
+        "type": "object"
+      },
+      "TokenRequest": {
+        "description": "用管理员账号口令换取后台令牌。",
+        "examples": [
+          {
+            "password": "change-me-in-production",
+            "username": "ops"
+          }
+        ],
+        "properties": {
+          "password": {
+            "description": "管理员口令",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Password",
+            "type": "string"
+          },
+          "tenant": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "目标租户；留空取 XW_ADMIN_TENANT。只影响令牌里的租户声明，不能越权到清单外的租户",
+            "title": "Tenant"
+          },
+          "username": {
+            "description": "管理员账号",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "password"
+        ],
+        "title": "TokenRequest",
+        "type": "object"
+      },
+      "TokenResponse": {
+        "description": "登录成功后的令牌与声明。",
+        "properties": {
+          "accessToken": {
+            "description": "JWT，放在 Authorization: Bearer 后",
+            "title": "Accesstoken",
+            "type": "string"
+          },
+          "environments": {
+            "description": "令牌可操作的环境；空数组表示不限",
+            "items": {
+              "type": "string"
+            },
+            "title": "Environments",
+            "type": "array"
+          },
+          "expiresAt": {
+            "description": "过期时刻（UTC）",
+            "format": "date-time",
+            "title": "Expiresat",
+            "type": "string"
+          },
+          "expiresIn": {
+            "description": "有效期（秒）",
+            "title": "Expiresin",
+            "type": "integer"
+          },
+          "role": {
+            "description": "角色，当前固定 admin",
+            "title": "Role",
+            "type": "string"
+          },
+          "subject": {
+            "description": "令牌主体：管理员账号",
+            "title": "Subject",
+            "type": "string"
+          },
+          "tenant": {
+            "description": "令牌绑定的租户",
+            "title": "Tenant",
+            "type": "string"
+          },
+          "tokenType": {
+            "default": "Bearer",
+            "description": "令牌类型，固定 Bearer",
+            "title": "Tokentype",
+            "type": "string"
+          }
+        },
+        "required": [
+          "accessToken",
+          "expiresIn",
+          "expiresAt",
+          "subject",
+          "tenant",
+          "role"
+        ],
+        "title": "TokenResponse",
         "type": "object"
       },
       "TopicBroadcastItem": {
@@ -1913,6 +2077,12 @@
         "in": "header",
         "name": "X-Api-Key",
         "type": "apiKey"
+      },
+      "BearerAuth": {
+        "bearerFormat": "JWT",
+        "description": "后台会话令牌，由 `POST /v1/auth/token` 签发（HS256）。只在配置了后台密钥的部署里校验；与 `X-Api-Key` 二选一，同时出现时以令牌为准。",
+        "scheme": "bearer",
+        "type": "http"
       }
     }
   },
@@ -1921,7 +2091,7 @@
     "url": "https://github.com/xwd-ai/xw-p#readme"
   },
   "info": {
-    "description": "内容社区互动触达服务：点赞、评论、@提及等互动事件触发后，按工作流模板把通知\n分发到创作者所在的多个渠道（站内信 / 推送 / 邮件 / 短信）。\n\n## 请求约定\n\n**租户与环境**：两者都从请求头解析——`X-Tenant-Id`（默认 `default`）决定数据\n分区，`X-Environment`（默认 `development` / 可选 `production`）决定环境。头写错\n或租户不在 `XW_TENANTS` 清单内直接 400，而不是退回默认值——静默落到另一套数据\n比报错更难查。所有 `/v1` 接口都解析这两个头；例外是部署级的 `GET /v1/dashboard/stats`\n与 `GET /v1/providers`（渠道配置与投递汇总属于整套部署）以及不区分租户的\n`GET /health`。\n\n**鉴权**：配置了 API Key 时，请求必须带 `X-Api-Key`。未配置任何 Key 的环境放行，\n便于本地与演示环境直接调用；配置后按 Key 的作用域收口：Key 不匹配或不可用于当前\n环境返回 401，用某个租户的 Key 去访问另一个租户返回 403。Key 与作用域用\n`XW_API_KEYS` 声明，形如 `[{\"key\": \"...\", \"tenant\": \"acme\", \"environments\":\n[\"production\"]}]`。\n\n**幂等**：触发类接口接受 `Idempotency-Key` 头。相同键重复提交返回首次回执、\n不重复入队；不带该头则每次都是新的一次触发。键的取值由调用方决定，通常用\n业务侧的事件标识。\n\n**分页**：列表接口用游标而不是页码。响应里的 `nextCursor` 为空表示没有更多，\n把它原样回传即可取下一页；游标编码了上一页最后一条的排序键，翻页期间有新\n数据写入也不会重复或漏掉。\n\n**时间**：请求与响应里的时间均为 ISO 8601，带时区；不带时区的入参按 UTC 解释。\n\n## 数据模型里的几个概念\n\n- **渠道**：`in_app` / `email` / `sms` / `push` / `chat` 是可投递渠道；\n  `delay` 与 `digest` 是编排步骤，不能作为投递渠道写入偏好或步骤类型。\n- **聚合（digest）**：按 `payload.post_id` 一类的聚合键 + 时间窗口把同一篇帖子的\n  互动合并成一条卡片，计数在原地累加。聚合由引擎执行，走内存总线时每条互动\n  是独立消息。\n- **跳过（skipped）**：被订阅者偏好拦下的渠道既没成功也没失败，不计入成功率\n  分母；整条消息的渠道全被拦下时消息状态是 `skipped` 而不是 `failed`。\n\n## 文档\n\n`GET /openapi.json` 返回本页对应的 schema，`GET /docs` 是 Swagger UI，\n`GET /redoc` 是 ReDoc。仓库里的 `docs/openapi.json` 是同一份内容的导出，\n可用 `scripts/export_openapi.py` 重新生成。\n",
+    "description": "内容社区互动触达服务：点赞、评论、@提及等互动事件触发后，按工作流模板把通知\n分发到创作者所在的多个渠道（站内信 / 推送 / 邮件 / 短信）。\n\n## 请求约定\n\n**租户与环境**：两者都从请求头解析——`X-Tenant-Id`（默认 `default`）决定数据\n分区，`X-Environment`（默认 `development` / 可选 `production`）决定环境。头写错\n或租户不在 `XW_TENANTS` 清单内直接 400，而不是退回默认值——静默落到另一套数据\n比报错更难查。所有 `/v1` 接口都解析这两个头；例外是部署级的 `GET /v1/dashboard/stats`\n与 `GET /v1/providers`（渠道配置与投递汇总属于整套部署）以及不区分租户的\n`GET /health`。\n\n**鉴权**：两种凭据，都解析出「租户 + 环境」，业务接口不区分它们从哪来。\n\n- `X-Api-Key`：服务端调用的长期凭据。配置了 Key 时，请求必须带匹配的 Key；\n  未配置任何 Key 的环境放行，便于本地与演示环境直接调用。配置后按 Key 的作用域\n  收口：Key 不匹配或不可用于当前环境返回 401，用某个租户的 Key 去访问另一个租户\n  返回 403。Key 与作用域用 `XW_API_KEYS` 声明，形如\n  `[{\"key\": \"...\", \"tenant\": \"acme\", \"environments\": [\"production\"]}]`。\n- `Authorization: Bearer <JWT>`：运营后台的会话凭据。`POST /v1/auth/token` 用\n  管理员账号口令换取，有效期由 `XW_JWT_TTL` 决定。两种凭据同时出现时以令牌为准，\n  避免令牌过期后请求悄悄降级成 Key 的身份。\n\n运维接口（`/v1/admin/*`）只接受后台令牌或显式声明了 `roles: [\"admin\"]` 的 Key；\n未配置 `XW_JWT_SECRET` 的部署保持 demo 语义，与业务接口同一套判定。\n\n**幂等**：触发类接口接受 `Idempotency-Key` 头。相同键重复提交返回首次回执、\n不重复入队；不带该头则每次都是新的一次触发。键的取值由调用方决定，通常用\n业务侧的事件标识。\n\n**分页**：列表接口用游标而不是页码。响应里的 `nextCursor` 为空表示没有更多，\n把它原样回传即可取下一页；游标编码了上一页最后一条的排序键，翻页期间有新\n数据写入也不会重复或漏掉。\n\n**时间**：请求与响应里的时间均为 ISO 8601，带时区；不带时区的入参按 UTC 解释。\n\n## 数据模型里的几个概念\n\n- **渠道**：`in_app` / `email` / `sms` / `push` / `chat` 是可投递渠道；\n  `delay` 与 `digest` 是编排步骤，不能作为投递渠道写入偏好或步骤类型。\n- **聚合（digest）**：按 `payload.post_id` 一类的聚合键 + 时间窗口把同一篇帖子的\n  互动合并成一条卡片，计数在原地累加。聚合由引擎执行，走内存总线时每条互动\n  是独立消息。\n- **跳过（skipped）**：被订阅者偏好拦下的渠道既没成功也没失败，不计入成功率\n  分母；整条消息的渠道全被拦下时消息状态是 `skipped` 而不是 `failed`。\n\n## 文档\n\n`GET /openapi.json` 返回本页对应的 schema，`GET /docs` 是 Swagger UI，\n`GET /redoc` 是 ReDoc。仓库里的 `docs/openapi.json` 是同一份内容的导出，\n可用 `scripts/export_openapi.py` 重新生成。\n",
     "license": {
       "identifier": "MIT",
       "name": "MIT"
@@ -2121,7 +2291,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -2134,7 +2304,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -2172,6 +2342,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -2446,7 +2634,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -2459,7 +2647,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -2482,7 +2670,7 @@
             }
           },
           {
-            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "description": "带 admin 角色的 API Key（服务间调用）",
             "in": "header",
             "name": "X-Api-Key",
             "required": false,
@@ -2495,8 +2683,26 @@
                   "type": "null"
                 }
               ],
-              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "description": "带 admin 角色的 API Key（服务间调用）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>",
+              "title": "Authorization"
             }
           }
         ],
@@ -2563,6 +2769,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          },
+          {
+            "ApiKeyAuth": []
+          }
+        ],
         "summary": "检索活动日志",
         "tags": [
           "admin"
@@ -2741,7 +2955,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -2754,7 +2968,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -2777,7 +2991,7 @@
             }
           },
           {
-            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "description": "带 admin 角色的 API Key（服务间调用）",
             "in": "header",
             "name": "X-Api-Key",
             "required": false,
@@ -2790,8 +3004,26 @@
                   "type": "null"
                 }
               ],
-              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "description": "带 admin 角色的 API Key（服务间调用）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>",
+              "title": "Authorization"
             }
           }
         ],
@@ -2858,6 +3090,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          },
+          {
+            "ApiKeyAuth": []
+          }
+        ],
         "summary": "汇总活动日志",
         "tags": [
           "admin"
@@ -2897,7 +3137,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -2910,7 +3150,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -2933,7 +3173,7 @@
             }
           },
           {
-            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "description": "带 admin 角色的 API Key（服务间调用）",
             "in": "header",
             "name": "X-Api-Key",
             "required": false,
@@ -2946,8 +3186,26 @@
                   "type": "null"
                 }
               ],
-              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "description": "带 admin 角色的 API Key（服务间调用）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>",
+              "title": "Authorization"
             }
           }
         ],
@@ -3014,6 +3272,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          },
+          {
+            "ApiKeyAuth": []
+          }
+        ],
         "summary": "单次触发下钻",
         "tags": [
           "admin"
@@ -3098,7 +3364,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -3111,7 +3377,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -3134,7 +3400,7 @@
             }
           },
           {
-            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "description": "带 admin 角色的 API Key（服务间调用）",
             "in": "header",
             "name": "X-Api-Key",
             "required": false,
@@ -3147,8 +3413,26 @@
                   "type": "null"
                 }
               ],
-              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "description": "带 admin 角色的 API Key（服务间调用）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>",
+              "title": "Authorization"
             }
           }
         ],
@@ -3208,9 +3492,157 @@
             "description": "参数越界（days / top）"
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          },
+          {
+            "ApiKeyAuth": []
+          }
+        ],
         "summary": "管理统计：渠道成败、耗时分布与失败原因",
         "tags": [
           "admin"
+        ]
+      }
+    },
+    "/v1/auth/me": {
+      "get": {
+        "description": "回显 ``Authorization`` 里令牌的声明：主体、租户、可操作环境、角色与过期时刻。\n\n用于两件事：前端判断会话是否还有效（比等到业务接口返回 401 再处理更早），以及排查「为什么这个令牌改不了生产环境」——把 ``environments`` 与实际请求头摆在一起看，比翻配置快。",
+        "operationId": "getV1AuthMe",
+        "parameters": [
+          {
+            "description": "后台令牌：Authorization: Bearer <token>",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrincipalResponse"
+                }
+              }
+            },
+            "description": "令牌有效"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "缺少令牌、签名不匹配或已过期"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "description": "服务端未配置签名密钥"
+          }
+        },
+        "summary": "当前令牌的身份与有效期",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/v1/auth/token": {
+      "post": {
+        "description": "校验管理员账号口令，签发一个 HS256 的 JWT，后续请求带 ``Authorization: Bearer <token>`` 即可调用业务接口与运维接口。\n\n**有效期**：由 ``XW_JWT_TTL`` 决定（默认 3600 秒，上限 24 小时），回执里的 ``expiresIn`` 是本次实际值，客户端按它安排续期。\n\n**租户与环境**：令牌绑定 ``XW_ADMIN_TENANT`` 指定的租户，可操作的环境由 ``XW_ADMIN_ENVIRONMENTS`` 限定（留空表示不限）。请求时 ``X-Environment`` 必须在允许集合内，``X-Tenant-Id`` 与令牌租户不一致返回 403。\n\n**状态码**：口令错误 401（不区分账号还是口令）；请求了不属于自己的租户 403；服务端未配置密钥或管理员账号 503。",
+        "operationId": "postV1AuthToken",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            },
+            "description": "签发成功"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "账号或口令不正确"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求的租户不属于该管理员"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "description": "服务端未启用后台鉴权或未配置账号"
+          }
+        },
+        "security": [],
+        "summary": "后台登录：用管理员账号口令换取令牌",
+        "tags": [
+          "auth"
         ]
       }
     },
@@ -3265,7 +3697,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -3278,7 +3710,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -3316,6 +3748,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -3426,7 +3876,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -3439,7 +3889,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -3477,6 +3927,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -3698,7 +4166,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -3711,7 +4179,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -3749,6 +4217,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -3937,7 +4423,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -3950,7 +4436,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -3988,6 +4474,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -4066,7 +4570,7 @@
         "operationId": "postV1InboxRead",
         "parameters": [
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -4079,7 +4583,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -4117,6 +4621,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -4245,7 +4767,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -4258,7 +4780,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -4296,6 +4818,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -4385,7 +4925,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -4398,7 +4938,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -4436,6 +4976,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -4590,7 +5148,7 @@
         "operationId": "postV1Providers",
         "parameters": [
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -4603,7 +5161,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -4641,6 +5199,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -4753,7 +5329,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -4766,7 +5342,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -4804,6 +5380,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -4959,7 +5553,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -4972,7 +5566,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -5010,6 +5604,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -5113,7 +5725,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -5126,7 +5738,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -5164,6 +5776,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -5300,7 +5930,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -5313,7 +5943,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -5351,6 +5981,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -5425,7 +6073,7 @@
         "operationId": "postV1Subscribers",
         "parameters": [
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -5438,7 +6086,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -5476,6 +6124,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -5571,7 +6237,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -5584,7 +6250,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -5622,6 +6288,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -5698,7 +6382,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -5711,7 +6395,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -5749,6 +6433,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -5832,7 +6534,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -5845,7 +6547,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -5883,6 +6585,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -6014,7 +6734,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -6027,7 +6747,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -6065,6 +6785,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -6166,7 +6904,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -6179,7 +6917,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -6217,6 +6955,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -6300,7 +7056,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -6313,7 +7069,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -6351,6 +7107,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -6482,7 +7256,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -6495,7 +7269,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -6533,6 +7307,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -6639,7 +7431,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -6652,7 +7444,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -6690,6 +7482,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -6764,7 +7574,7 @@
         "operationId": "postV1Topics",
         "parameters": [
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -6777,7 +7587,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -6815,6 +7625,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -6910,7 +7738,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -6923,7 +7751,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -6961,6 +7789,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -7037,7 +7883,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -7050,7 +7896,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -7088,6 +7934,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -7171,7 +8035,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -7184,7 +8048,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -7222,6 +8086,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -7347,7 +8229,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -7360,7 +8242,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -7398,6 +8280,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -7481,7 +8381,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -7494,7 +8394,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -7532,6 +8432,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -7636,7 +8554,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -7649,7 +8567,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -7687,6 +8605,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -7786,7 +8722,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -7799,7 +8735,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -7837,6 +8773,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -7923,7 +8877,7 @@
         "operationId": "getV1Workflows",
         "parameters": [
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -7936,7 +8890,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -7974,6 +8928,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -8052,7 +9024,7 @@
         "operationId": "postV1Workflows",
         "parameters": [
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -8065,7 +9037,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -8103,6 +9075,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -8198,7 +9188,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -8211,7 +9201,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -8249,6 +9239,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -8325,7 +9333,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -8338,7 +9346,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -8376,6 +9384,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -8459,7 +9485,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -8472,7 +9498,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -8510,6 +9536,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -8605,7 +9649,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -8618,7 +9662,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -8656,6 +9700,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -8754,7 +9816,7 @@
             }
           },
           {
-            "description": "隔离环境：development（默认）| production",
+            "description": "隔离环境：development（默认） | production",
             "in": "header",
             "name": "X-Environment",
             "required": false,
@@ -8767,7 +9829,7 @@
                   "type": "null"
                 }
               ],
-              "description": "隔离环境：development（默认）| production",
+              "description": "隔离环境：development（默认） | production",
               "title": "X-Environment"
             }
           },
@@ -8805,6 +9867,24 @@
               ],
               "description": "该环境的 API Key（配置了 Key 时必填）",
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "后台令牌：Authorization: Bearer <token>（与 X-Api-Key 二选一）",
+              "title": "Authorization"
             }
           }
         ],
@@ -8896,6 +9976,9 @@
     {
       "ApiKeyAuth": []
     },
+    {
+      "BearerAuth": []
+    },
     {}
   ],
   "servers": [
@@ -8905,6 +9988,10 @@
     }
   ],
   "tags": [
+    {
+      "description": "后台登录：用管理员账号口令换取 JWT，以及查询当前令牌的身份与有效期。令牌绑定一个租户与一组可操作的环境，之后每次请求的 X-Environment 必须在其中。",
+      "name": "auth"
+    },
     {
       "description": "健康检查与服务状态。供负载均衡与部署脚本探测，不读环境头。",
       "name": "system"

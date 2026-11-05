@@ -224,8 +224,33 @@ def test_api_key_scheme_declared(schema):
 
 
 def test_security_allows_anonymous(schema):
-    """Key 是可选的：配置了才校验。空要求对象就是「也可以不带」的标准写法。"""
-    assert schema["security"] == [{"ApiKeyAuth": []}, {}]
+    """两种凭据都可选：空要求对象就是「也可以不带」的标准写法。"""
+    assert schema["security"] == [{"ApiKeyAuth": []}, {"BearerAuth": []}, {}]
+
+
+def test_bearer_scheme_declared(schema):
+    scheme = schema["components"]["securitySchemes"]["BearerAuth"]
+    assert scheme["type"] == "http"
+    assert scheme["scheme"] == "bearer"
+    assert scheme["bearerFormat"] == "JWT"
+    assert scheme["description"]
+
+
+def test_admin_operations_require_a_credential(schema):
+    """运维接口不给匿名备选：要么后台令牌，要么带 admin 角色的 Key。"""
+    for method, path, operation in _ops(schema):
+        if not path.startswith("/v1/admin"):
+            continue
+        assert operation["security"] == [{"BearerAuth": []}, {"ApiKeyAuth": []}], path
+
+
+def test_login_endpoint_is_marked_as_anonymous(schema):
+    """换令牌的接口自己不需要令牌，否则读者会以为要先有令牌才能登录。"""
+    assert schema["paths"]["/v1/auth/token"]["post"]["security"] == []
+    token = schema["paths"]["/v1/auth/token"]["post"]["responses"]
+    assert {"200", "401", "403", "503"} <= set(token)
+    me = schema["paths"]["/v1/auth/me"]["get"]["responses"]
+    assert {"200", "401", "503"} <= set(me)
 
 
 def test_environment_header_is_documented(schema):
@@ -272,11 +297,20 @@ def test_environment_header_is_documented(schema):
         ("get", "/v1/dashboard/stats"),
         ("get", "/v1/providers"),
         ("get", "/v1/providers/{identifier}"),
+        # 登录发生在「进入某个环境」之前：环境写在令牌里，之后每次请求再带。
+        ("post", "/v1/auth/token"),
+        ("get", "/v1/auth/me"),
     }
+
+
+#: 登录相关接口自己声明错误面：它们不读环境头，但确实会因为凭据与服务端配置失败。
+AUTH_PATHS = ("/v1/auth/token", "/v1/auth/me")
 
 
 def test_common_error_responses_only_where_reachable(schema):
     for method, path, operation in _ops(schema):
+        if path in AUTH_PATHS:
+            continue
         params = {p["name"] for p in operation.get("parameters", [])}
         responses = operation["responses"]
         if "X-Environment" in params:
@@ -446,7 +480,9 @@ def test_export_script_writes_and_checks(tmp_path):
         check=False,
     )
     assert written.returncode == 0, written.stderr
-    assert "45 个操作" in written.stdout
+    # 只断言输出里给出了路径与操作数：具体数字随接口增长，钉死它只会让每次
+    # 新增接口都要回来改一行测试。
+    assert "条路径" in written.stdout and "个操作" in written.stdout
     assert target.exists()
 
     checked = subprocess.run(

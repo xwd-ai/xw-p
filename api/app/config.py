@@ -115,6 +115,22 @@ API_KEYS: dict[str, str] = {
 TENANTS = _env("XW_TENANTS", "")
 API_KEY_SCOPES = _env("XW_API_KEYS", "")
 
+# 后台会话（JWT）。密钥非空即启用：后台接口（/v1/admin/*）改为只接受
+# 令牌或带 admin 角色的 API Key。留空保持 demo 语义（与其它接口同一套鉴权），
+# 本地与演示环境不必先配一个密钥才能打开后台。
+JWT_SECRET = _env("XW_JWT_SECRET", "")
+JWT_TTL = _env("XW_JWT_TTL", "3600")
+JWT_ISSUER = _env("XW_JWT_ISSUER", "xw-notify")
+
+# 管理员账号：用账号口令换令牌。口令留空等于没开通登录——一个默认口令
+# 比没有登录入口更危险。
+ADMIN_USERNAME = _env("XW_ADMIN_USERNAME", "")
+ADMIN_PASSWORD = _env("XW_ADMIN_PASSWORD", "")
+
+# 管理员令牌绑定的租户与可操作环境（逗号分隔，空表示不限制环境）。
+ADMIN_TENANT = _env("XW_ADMIN_TENANT", "default")
+ADMIN_ENVIRONMENTS = _env("XW_ADMIN_ENVIRONMENTS", "")
+
 
 def api_key_for(env: str) -> str:
     """返回指定环境的 API Key（未配置则为空字符串）。"""

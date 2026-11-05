@@ -26,6 +26,19 @@ section > h1 { font-size: 20px; }
 .input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(99,102,241,.12); }
 .btn-sm { padding: 7px 12px; font-size: 12px; }
 
+/* ---------- 后台登录 ---------- */
+/* 面板只在启用后台令牌的部署里出现：其余情况按钮保持隐藏，页面上不多一块
+   用不上的表单。 */
+.login-panel {
+  display: none; margin-bottom: 16px; padding: 12px 14px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+}
+.login-panel.show { display: block; }
+.login-panel form { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.login-panel .input { min-width: 150px; }
+.login-note { font-size: 12px; color: var(--muted); }
+.login-note.error { color: #be123c; }
+
 /* ---------- 错误横幅 ---------- */
 #adm-banner {
   display: none; align-items: center; gap: 10px;

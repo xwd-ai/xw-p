@@ -206,6 +206,10 @@ if errors.As(err, &apiErr) {
 
 回调是异步的，接收方没收到时要能回答「发过没有、发了什么、为什么失败」。引擎把每次发送尝试写成审计（含队列满导致的丢弃），并在入队前归档事件正文，因此可以按事件标识重放；重放保留原事件标识并标记 `replay`，也遵循原来的订阅筛选。开关、运维接口与事件总线的说明见 [docs/callbacks.md](docs/callbacks.md)。
 
+## 鉴权
+
+两种凭据，解析结果都是「租户 + 环境」：服务端用 `X-Api-Key`（`XW_API_KEYS` 声明租户、环境与可选的 `roles`），运营后台用 `Authorization: Bearer <JWT>`——`POST /v1/auth/token` 用管理员账号口令换取，有效期由 `XW_JWT_TTL` 决定。运维接口 `/v1/admin/*` 只接受后台令牌或带 `admin` 角色的 Key；未配置 `XW_JWT_SECRET` 的部署保持 demo 语义。配置、声明与状态码见 [docs/auth.md](docs/auth.md)。
+
 ## 多租户
 
 请求用 `X-Tenant-Id` 声明租户（缺省 `default`），数据按租户分区：默认租户沿用原路径，其他租户落在 `api/data/tenants/<租户>/`。API Key 用 `XW_API_KEYS` 声明绑定的租户与允许的环境，跨租户访问返回 403。`X-Environment` 是另一半边界：订阅者与工作流按环境各存一份，按标识访问另一套环境的记录返回 404，写操作只落在请求头指明的环境。解析规则、隔离范围与配置示例见 [docs/isolation.md](docs/isolation.md)。
@@ -214,8 +218,8 @@ if errors.As(err, &apiErr) {
 
 服务跑起来后，`/docs` 是 Swagger UI，`/redoc` 是 ReDoc，`/openapi.json` 是 schema 本体。schema 由 `api/app/openapi.py` 统一装配，而不只是 FastAPI 的自动生成结果：
 
-- **分组**：12 个分组各有说明，按「读 → 写 → 运维」排列，Swagger 里不再是一长串按注册顺序堆叠的路径。
-- **鉴权**：`X-Api-Key` 声明为**可选**——`security` 同时给出「带 Key」与「匿名」两种备选，与「环境配置了 Key 才校验」的实际行为一致。只写前者会让读者以为不带 Key 一定失败。
+- **分组**：13 个分组各有说明，按「读 → 写 → 运维」排列，Swagger 里不再是一长串按注册顺序堆叠的路径。
+- **鉴权**：`X-Api-Key` 与 `Bearer` 令牌都声明为**可选**——`security` 同时给出「带 Key」「带令牌」与「匿名」三种备选，与「环境配置了凭据才校验」的实际行为一致。只写前者会让读者以为不带凭据一定失败；运维接口则不给匿名备选。
 - **公共错误面**：读 `X-Environment` / `X-Tenant-Id` 的接口统一声明 400 / 401 / 403，并给出统一的 `Error` 响应体（`detail` 支持字符串与逐字段校验数组），调用方不必按状态码分两套解析。
 - **操作标识**：由方法与路径推导，例如 `GET /v1/admin/activity/{trigger_id}` → `getV1AdminActivityByTriggerId`。函数名是实现细节，重构时不该让调用方生成的 SDK 方法名跟着变。
 - **示例**：触发、订阅者、偏好、分组与工作流的请求体都带可直接提交的示例；示例本身在测试里跑过一遍（含地址规范化与工作流结构校验），不会出现「从文档复制一段就 422」。
