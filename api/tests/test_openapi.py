@@ -325,6 +325,13 @@ def test_common_error_responses_only_where_reachable(schema):
         else:
             assert "403" not in responses, f"{method} {path}"
 
+        # 409 在这里特指「幂等键已占用但回执读不出来」，跟着幂等键头走；
+        # 别的接口也可能因为资源冲突返回 409（例如渠道配置重名），那条由路由自己声明。
+        if "Idempotency-Key" in params:
+            conflict = responses.get("409")
+            assert conflict is not None, f"{method} {path}"
+            assert conflict["content"]["application/json"]["example"]["detail"], f"{method} {path}"
+
     # 声明了 400 / 401 的接口都要给出统一的错误体，调用方不必按状态码分两套解析。
     for method, path, operation in _ops(schema):
         for code in ("400", "401"):

@@ -2091,7 +2091,7 @@
     "url": "https://github.com/xwd-ai/xw-p#readme"
   },
   "info": {
-    "description": "内容社区互动触达服务：点赞、评论、@提及等互动事件触发后，按工作流模板把通知\n分发到创作者所在的多个渠道（站内信 / 推送 / 邮件 / 短信）。\n\n## 请求约定\n\n**租户与环境**：两者都从请求头解析——`X-Tenant-Id`（默认 `default`）决定数据\n分区，`X-Environment`（默认 `development` / 可选 `production`）决定环境。头写错\n或租户不在 `XW_TENANTS` 清单内直接 400，而不是退回默认值——静默落到另一套数据\n比报错更难查。所有 `/v1` 接口都解析这两个头；例外是部署级的 `GET /v1/dashboard/stats`\n与 `GET /v1/providers`（渠道配置与投递汇总属于整套部署）以及不区分租户的\n`GET /health`。\n\n**鉴权**：两种凭据，都解析出「租户 + 环境」，业务接口不区分它们从哪来。\n\n- `X-Api-Key`：服务端调用的长期凭据。配置了 Key 时，请求必须带匹配的 Key；\n  未配置任何 Key 的环境放行，便于本地与演示环境直接调用。配置后按 Key 的作用域\n  收口：Key 不匹配或不可用于当前环境返回 401，用某个租户的 Key 去访问另一个租户\n  返回 403。Key 与作用域用 `XW_API_KEYS` 声明，形如\n  `[{\"key\": \"...\", \"tenant\": \"acme\", \"environments\": [\"production\"]}]`。\n- `Authorization: Bearer <JWT>`：运营后台的会话凭据。`POST /v1/auth/token` 用\n  管理员账号口令换取，有效期由 `XW_JWT_TTL` 决定。两种凭据同时出现时以令牌为准，\n  避免令牌过期后请求悄悄降级成 Key 的身份。\n\n运维接口（`/v1/admin/*`）只接受后台令牌或显式声明了 `roles: [\"admin\"]` 的 Key；\n未配置 `XW_JWT_SECRET` 的部署保持 demo 语义，与业务接口同一套判定。\n\n**幂等**：触发类接口接受 `Idempotency-Key` 头。相同键重复提交返回首次回执、\n不重复入队；不带该头则每次都是新的一次触发。键的取值由调用方决定，通常用\n业务侧的事件标识。\n\n**分页**：列表接口用游标而不是页码。响应里的 `nextCursor` 为空表示没有更多，\n把它原样回传即可取下一页；游标编码了上一页最后一条的排序键，翻页期间有新\n数据写入也不会重复或漏掉。\n\n**时间**：请求与响应里的时间均为 ISO 8601，带时区；不带时区的入参按 UTC 解释。\n\n## 数据模型里的几个概念\n\n- **渠道**：`in_app` / `email` / `sms` / `push` / `chat` 是可投递渠道；\n  `delay` 与 `digest` 是编排步骤，不能作为投递渠道写入偏好或步骤类型。\n- **聚合（digest）**：按 `payload.post_id` 一类的聚合键 + 时间窗口把同一篇帖子的\n  互动合并成一条卡片，计数在原地累加。聚合由引擎执行，走内存总线时每条互动\n  是独立消息。\n- **跳过（skipped）**：被订阅者偏好拦下的渠道既没成功也没失败，不计入成功率\n  分母；整条消息的渠道全被拦下时消息状态是 `skipped` 而不是 `failed`。\n\n## 文档\n\n`GET /openapi.json` 返回本页对应的 schema，`GET /docs` 是 Swagger UI，\n`GET /redoc` 是 ReDoc。仓库里的 `docs/openapi.json` 是同一份内容的导出，\n可用 `scripts/export_openapi.py` 重新生成。\n",
+    "description": "内容社区互动触达服务：点赞、评论、@提及等互动事件触发后，按工作流模板把通知\n分发到创作者所在的多个渠道（站内信 / 推送 / 邮件 / 短信）。\n\n## 请求约定\n\n**租户与环境**：两者都从请求头解析——`X-Tenant-Id`（默认 `default`）决定数据\n分区，`X-Environment`（默认 `development` / 可选 `production`）决定环境。头写错\n或租户不在 `XW_TENANTS` 清单内直接 400，而不是退回默认值——静默落到另一套数据\n比报错更难查。所有 `/v1` 接口都解析这两个头；例外是部署级的 `GET /v1/dashboard/stats`\n与 `GET /v1/providers`（渠道配置与投递汇总属于整套部署）以及不区分租户的\n`GET /health`。\n\n**鉴权**：两种凭据，都解析出「租户 + 环境」，业务接口不区分它们从哪来。\n\n- `X-Api-Key`：服务端调用的长期凭据。配置了 Key 时，请求必须带匹配的 Key；\n  未配置任何 Key 的环境放行，便于本地与演示环境直接调用。配置后按 Key 的作用域\n  收口：Key 不匹配或不可用于当前环境返回 401，用某个租户的 Key 去访问另一个租户\n  返回 403。Key 与作用域用 `XW_API_KEYS` 声明，形如\n  `[{\"key\": \"...\", \"tenant\": \"acme\", \"environments\": [\"production\"]}]`。\n- `Authorization: Bearer <JWT>`：运营后台的会话凭据。`POST /v1/auth/token` 用\n  管理员账号口令换取，有效期由 `XW_JWT_TTL` 决定。两种凭据同时出现时以令牌为准，\n  避免令牌过期后请求悄悄降级成 Key 的身份。\n\n运维接口（`/v1/admin/*`）只接受后台令牌或显式声明了 `roles: [\"admin\"]` 的 Key；\n未配置 `XW_JWT_SECRET` 的部署保持 demo 语义，与业务接口同一套判定。\n\n**幂等**：触发类接口接受 `Idempotency-Key` 头。相同键重复提交返回首次回执、\n不重复入队；不带该头则每次都是新的一次触发。键的取值由调用方决定，通常用\n业务侧的事件标识。并发同键时后到的请求拿到先写入的回执；若键已存在而回执\n读不出来，接口返回 `409` 且**没有入队**，此时应先按触发标识查活动日志。\n\n**分页**：列表接口用游标而不是页码。响应里的 `nextCursor` 为空表示没有更多，\n把它原样回传即可取下一页；游标编码了上一页最后一条的排序键，翻页期间有新\n数据写入也不会重复或漏掉。\n\n**时间**：请求与响应里的时间均为 ISO 8601，带时区；不带时区的入参按 UTC 解释。\n\n## 数据模型里的几个概念\n\n- **渠道**：`in_app` / `email` / `sms` / `push` / `chat` 是可投递渠道；\n  `delay` 与 `digest` 是编排步骤，不能作为投递渠道写入偏好或步骤类型。\n- **聚合（digest）**：按 `payload.post_id` 一类的聚合键 + 时间窗口把同一篇帖子的\n  互动合并成一条卡片，计数在原地累加。聚合由引擎执行，走内存总线时每条互动\n  是独立消息。\n- **跳过（skipped）**：被订阅者偏好拦下的渠道既没成功也没失败，不计入成功率\n  分母；整条消息的渠道全被拦下时消息状态是 `skipped` 而不是 `failed`。\n\n## 文档\n\n`GET /openapi.json` 返回本页对应的 schema，`GET /docs` 是 Swagger UI，\n`GET /redoc` 是 ReDoc。仓库里的 `docs/openapi.json` 是同一份内容的导出，\n可用 `scripts/export_openapi.py` 重新生成。\n",
     "license": {
       "identifier": "MIT",
       "name": "MIT"
@@ -3936,6 +3936,19 @@
           "404": {
             "description": "工作流模板不存在或未启用"
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "幂等键 post-liked-P-2026-1001 已被更早的一次请求占用，但其回执读取失败，本次请求未处理。"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "幂等键已被更早的一次请求占用，但其回执读取失败；本次请求未处理、未入队。"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -4124,6 +4137,19 @@
               }
             },
             "description": "凭据有效，但没有访问目标租户的权限。"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "幂等键 post-liked-P-2026-1001 已被更早的一次请求占用，但其回执读取失败，本次请求未处理。"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "幂等键已被更早的一次请求占用，但其回执读取失败；本次请求未处理、未入队。"
           },
           "422": {
             "description": "事件列表为空或超过上限"
@@ -9347,6 +9373,19 @@
               }
             },
             "description": "凭据有效，但没有访问目标租户的权限。"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "幂等键 post-liked-P-2026-1001 已被更早的一次请求占用，但其回执读取失败，本次请求未处理。"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "幂等键已被更早的一次请求占用，但其回执读取失败；本次请求未处理、未入队。"
           },
           "422": {
             "content": {

@@ -95,6 +95,11 @@ SUBSCRIBER_COUNTRY_CODE = _env("XW_SUBSCRIBER_COUNTRY_CODE", "")
 # 幂等键缓存 TTL（秒）：超过该时长后同键请求视为新请求
 IDEMPOTENCY_TTL = int(_env("XW_IDEMPOTENCY_TTL", "86400"))
 
+# 活动日志落盘位置（空表示 ``api/data/activity.jsonl``）。多实例压测与集成测试
+# 用它把数据写进临时目录；与收件箱的 ``XW_INBOX_FILE``、偏好的
+# ``XW_PREFERENCES_FILE`` 同一套做法。
+ACTIVITY_FILE = _env("XW_ACTIVITY_FILE", "")
+
 # 当前服务环境：development（默认）| production
 # 用于区分 API Key 与数据隔离，未显式设置时回退 development，保证 demo 开箱即用。
 ENV = _env("XW_ENV", "development")

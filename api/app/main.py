@@ -10,8 +10,9 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from . import config, openapi as openapi_docs, tokens
 from .activity_log import build_activity, record_activities, record_activity
@@ -23,7 +24,7 @@ from .activity_routes import router as activity_router
 from .bus import get_bus, publish_all
 from .dashboard_routes import router as dashboard_router
 from .execution_routes import router as execution_router
-from .idempotency import get_idempotency_store
+from .idempotency import IdempotencyConflict, claim, get_idempotency_store
 from .inbox import router as inbox_router
 from .preference_routes import router as preference_router
 from .ratelimit import get_limiter
@@ -137,6 +138,17 @@ app.include_router(topic_router)
 openapi_docs.install(app)
 
 
+@app.exception_handler(IdempotencyConflict)
+def _idempotency_conflict(_request: Request, exc: IdempotencyConflict) -> JSONResponse:
+    """幂等键被占用却读不到回执：409，且明确告诉调用方本次没有入队。
+
+    这条分支只在存储里的值不可读时出现（写坏、TTL 边界），但它是「重复投递」
+    与「明确失败」的分界：按未命中继续往下走，同一个键会发出第二条通知。
+    """
+    logger.warning("幂等键冲突：%s（回执不可读，本次未入队）", exc.key)
+    return JSONResponse(status_code=status.HTTP_409_CONFLICT, content={"detail": exc.detail})
+
+
 @app.get(
     "/health",
     tags=["system"],
@@ -213,15 +225,14 @@ def trigger_event(
         acknowledgment_id=message.trigger_id,
     )
 
-    # 4. 入队前登记幂等键（若重复，则返回缓存回执，避免并发重复入队）
+    # 4. 入队前登记幂等键（若被并发请求抢先，则返回那份回执，避免重复入队）
     if idempotency_key:
-        payload = response.model_dump(by_alias=True)
-        inserted = store.put_if_absent(idempotency_key, payload, config.IDEMPOTENCY_TTL)
-        if not inserted:
-            # 并发场景下被其他请求抢先写入：回读并返回
-            cached = store.get(idempotency_key)
-            if cached is not None:
-                return TriggerResponse(**cached)
+        reserved = claim(
+            store, idempotency_key, response.model_dump(by_alias=True), config.IDEMPOTENCY_TTL
+        )
+        if not reserved.claimed:
+            logger.info("幂等命中：%s（并发同键，返回先写入的回执）", idempotency_key)
+            return TriggerResponse(**reserved.cached)
 
     # 5. 写入活动日志（活动流即时可见「已触发」，随后 worker 投递更新状态）
     record_activity(
@@ -337,13 +348,12 @@ def trigger_events_batch(
 
     # 2. 入队前登记整批幂等键：并发同键请求只有一个能把消息发出去。
     if idempotency_key:
-        inserted = store.put_if_absent(
-            idempotency_key, response.model_dump(by_alias=True), config.IDEMPOTENCY_TTL
+        reserved = claim(
+            store, idempotency_key, response.model_dump(by_alias=True), config.IDEMPOTENCY_TTL
         )
-        if not inserted:
-            cached = store.get(idempotency_key)
-            if cached is not None:
-                return BatchTriggerResponse(**cached)
+        if not reserved.claimed:
+            logger.info("幂等命中：%s（并发同键，返回先写入的整批回执）", idempotency_key)
+            return BatchTriggerResponse(**reserved.cached)
 
     if messages:
         # 活动日志先写、再入队：活动流据此即时反映「已触发」，顺序与单条

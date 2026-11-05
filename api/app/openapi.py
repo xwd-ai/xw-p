@@ -154,7 +154,8 @@ API_DESCRIPTION = """\
 
 **幂等**：触发类接口接受 `Idempotency-Key` 头。相同键重复提交返回首次回执、
 不重复入队；不带该头则每次都是新的一次触发。键的取值由调用方决定，通常用
-业务侧的事件标识。
+业务侧的事件标识。并发同键时后到的请求拿到先写入的回执；若键已存在而回执
+读不出来，接口返回 `409` 且**没有入队**，此时应先按触发标识查活动日志。
 
 **分页**：列表接口用游标而不是页码。响应里的 `nextCursor` 为空表示没有更多，
 把它原样回传即可取下一页；游标编码了上一页最后一条的排序键，翻页期间有新
@@ -277,6 +278,20 @@ _FORBIDDEN = {
     },
 }
 
+#: 幂等键已被占用但既有回执读不出来时返回 409。这条分支不常见，但它是
+#: 「重复投递」与「明确拒绝」的分界，调用方需要知道可以按它断言「本次没入队」。
+_IDEMPOTENCY_CONFLICT = {
+    "description": "幂等键已被更早的一次请求占用，但其回执读取失败；本次请求未处理、未入队。",
+    "content": {
+        "application/json": {
+            "schema": {"$ref": "#/components/schemas/Error"},
+            "example": {
+                "detail": "幂等键 post-liked-P-2026-1001 已被更早的一次请求占用，但其回执读取失败，本次请求未处理。"
+            },
+        }
+    },
+}
+
 #: 触发限流时返回 429（``XW_RATE_LIMIT_*_RPM`` 配置了额度才可能出现）。
 #: 这里无条件声明：限流是部署期开关，如果按当前配置决定要不要写进 schema，
 #: 同一份代码在不同环境里会导出两份契约，diff 与 SDK 生成都没法用。
@@ -382,6 +397,13 @@ def _decorate_operations(schema: dict[str, Any]) -> None:
                 responses.setdefault("401", deepcopy(_UNAUTHORIZED))
             if _has_header(operation, "X-Tenant-Id"):
                 responses.setdefault("403", deepcopy(_FORBIDDEN))
+            # 幂等键的去重是「写入失败后回读」，回读不出来时会拒绝而不是放行；
+            # 这个失败面跟着请求头走，声明了 Idempotency-Key 的接口才可能出现。
+            # 别的接口也可能自己声明 409（渠道配置重名），那份描述与响应体由路由
+            # 负责，不能套用这里的幂等冲突示例。
+            if _has_header(operation, "Idempotency-Key"):
+                responses.setdefault("409", deepcopy(_IDEMPOTENCY_CONFLICT))
+                _fill_error_body(responses, "409", _IDEMPOTENCY_CONFLICT)
             # 限流中间件按路径前缀生效，与是否读环境头无关：/v1 下的接口都可能被拦。
             if path.startswith("/v1"):
                 responses.setdefault("429", deepcopy(_TOO_MANY_REQUESTS))

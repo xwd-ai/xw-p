@@ -27,7 +27,7 @@ from . import config
 from .activity_log import record_activities
 from .auth import EnvContext, require_env
 from .bus import get_bus, publish_all
-from .idempotency import get_idempotency_store
+from .idempotency import claim, get_idempotency_store
 from .models.entities import Environment, Topic
 from .subscriber_store import get_subscriber_store
 from .topic_broadcast import broadcast_to_topic
@@ -431,13 +431,12 @@ def trigger_topic(
     # 与批量触发同样的顺序：先登记幂等键，再写活动日志与队列，避免并发同键
     # 请求各发一遍。
     if idempotency_key:
-        inserted = store.put_if_absent(
-            idempotency_key, response.model_dump(by_alias=True), config.IDEMPOTENCY_TTL
+        reserved = claim(
+            store, idempotency_key, response.model_dump(by_alias=True), config.IDEMPOTENCY_TTL
         )
-        if not inserted:
-            cached = store.get(idempotency_key)
-            if cached is not None:
-                return TopicBroadcastResponse(**cached)
+        if not reserved.claimed:
+            logger.info("幂等命中：%s（并发同键，返回先写入的广播回执）", idempotency_key)
+            return TopicBroadcastResponse(**reserved.cached)
 
     if result.messages:
         record_activities(result.activities)

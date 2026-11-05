@@ -9,6 +9,11 @@
 
 幂等键由调用方生成（UUID 或业务单号），服务端仅做「首次写入、后续读取」，
 不尝试推导语义。缓存条目保存序列化后的回执，命中时原样返回。
+
+**占用与回放**：三个触发入口（单条、批量、分组广播）共用 :func:`claim`。
+它的返回值只有两种「可继续处理」的结论——占用成功（继续入队）或已有回执
+（原样回放）；第三种情况是键已存在但回执读不出来，此时抛
+:class:`IdempotencyConflict`，绝不按「未命中」继续入队。
 """
 from __future__ import annotations
 
@@ -118,6 +123,59 @@ def create_idempotency_store() -> IdempotencyStore:
         return RedisIdempotencyStore(config.REDIS_URL)
     logger.info("幂等后端：memory")
     return MemoryIdempotencyStore()
+
+
+class IdempotencyConflict(Exception):
+    """幂等键已被占用，但既有回执读不出来。
+
+    键在存储里存在，说明更早的一次请求已经把它占了；把「读不到回执」当成
+    未命中而继续入队，同一个键就会产出两条通知，而这正好是幂等要防的事。
+    因此这里给出明确的拒绝：本次请求没有入队，也没有生成触发标识。
+    """
+
+    def __init__(self, key: str) -> None:
+        self.key = key
+        super().__init__(key)
+
+    @property
+    def detail(self) -> str:
+        return (
+            f"幂等键 {self.key} 已被更早的一次请求占用，但其回执读取失败，本次请求未处理。"
+            "请先按触发标识查询活动日志确认前一次是否已受理，再决定是否用新键重试"
+        )
+
+
+@dataclass(frozen=True)
+class Reservation:
+    """占用幂等键的结果。
+
+    ``claimed`` 为真表示本次请求拿到了这个键、可以继续处理；为假表示键已被
+    更早的请求占用，``cached`` 是那次请求的回执，应原样返回。
+    """
+
+    claimed: bool
+    cached: Optional[dict[str, Any]] = None
+
+
+def claim(
+    store: IdempotencyStore, key: str, value: dict[str, Any], ttl: int
+) -> Reservation:
+    """占用幂等键，返回本次请求的去向。
+
+    ``put_if_absent`` 的原子性是唯一裁决点：多实例并发时只有一个请求能写入
+    成功，其余都从这里拿到 ``claimed=False``。失败后回读一次是为了把「那次
+    请求的回执」交还调用方——重放必须与首次一模一样，包括首次就被拒的条目。
+
+    回读为空时不返回「未命中」：键已被占用却读不到内容，只可能是值被写坏、
+    或刚好撞上 TTL 边界。这时继续入队会重复投递，直接抛
+    :class:`IdempotencyConflict` 让调用方知道要做什么。
+    """
+    if store.put_if_absent(key, value, ttl):
+        return Reservation(claimed=True)
+    cached = store.get(key)
+    if cached is None:
+        raise IdempotencyConflict(key)
+    return Reservation(claimed=False, cached=cached)
 
 
 class ScopedIdempotencyStore:
