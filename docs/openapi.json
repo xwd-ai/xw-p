@@ -2424,6 +2424,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "列出一页活动日志",
@@ -2767,6 +2780,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "security": [
@@ -3088,6 +3114,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "security": [
@@ -3270,6 +3309,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "security": [
@@ -3490,6 +3542,19 @@
           },
           "422": {
             "description": "参数越界（days / top）"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "security": [
@@ -3564,6 +3629,19 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
+          },
           "503": {
             "description": "服务端未配置签名密钥"
           }
@@ -3635,6 +3713,19 @@
             },
             "description": "Validation Error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
+          },
           "503": {
             "description": "服务端未启用后台鉴权或未配置账号"
           }
@@ -3662,6 +3753,19 @@
               }
             },
             "description": "Successful Response"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "仪表盘统计（按消息记录）",
@@ -3841,6 +3945,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "触发一条互动事件通知",
@@ -4010,6 +4127,19 @@
           },
           "422": {
             "description": "事件列表为空或超过上限"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "批量触发互动事件通知",
@@ -4299,6 +4429,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "列出一页执行明细",
@@ -4556,6 +4699,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "读取收件箱",
@@ -4713,6 +4869,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "标记消息已读",
@@ -4899,6 +5068,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "实时订阅收件箱变化（SSE）",
@@ -5058,6 +5240,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "未读计数聚合（按工作流）",
@@ -5136,6 +5331,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "列出渠道实现及其健康状态",
@@ -5294,6 +5502,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "新增渠道配置",
@@ -5465,6 +5686,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "删除渠道配置",
@@ -5532,6 +5766,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "单个渠道实现的健康状态",
@@ -5702,6 +5949,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "修改渠道配置",
@@ -5868,6 +6128,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "启用或停用一个渠道实现",
@@ -6061,6 +6334,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "列出订阅者",
@@ -6214,6 +6500,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "创建订阅者",
@@ -6361,6 +6660,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "删除订阅者",
@@ -6513,6 +6825,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "按标识读取订阅者",
@@ -6675,6 +7000,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "更新订阅者",
@@ -6865,6 +7203,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "删除订阅者的发送偏好",
@@ -7035,6 +7386,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "查询订阅者的发送偏好",
@@ -7197,6 +7561,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "写入一条发送偏好",
@@ -7387,6 +7764,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "解析某条通知是否会发出",
@@ -7562,6 +7952,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "列出分组",
@@ -7715,6 +8118,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "创建分组",
@@ -7862,6 +8278,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "删除分组",
@@ -8014,6 +8443,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "按标识读取分组",
@@ -8176,6 +8618,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "更新分组",
@@ -8360,6 +8815,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "列出分组成员",
@@ -8522,6 +8990,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "加入分组",
@@ -8678,6 +9159,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "移出分组",
@@ -8863,6 +9357,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "按分组广播一条互动事件",
@@ -9012,6 +9519,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "列出工作流模板",
@@ -9165,6 +9685,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "创建工作流模板",
@@ -9312,6 +9845,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "删除工作流模板",
@@ -9464,6 +10010,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "按标识读取工作流模板",
@@ -9626,6 +10185,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "更新工作流模板",
@@ -9793,6 +10365,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "启用或停用一个工作流",
@@ -9963,6 +10548,19 @@
           },
           "422": {
             "description": "名称或环境不合法"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。"
           }
         },
         "summary": "复制一个工作流",

@@ -339,6 +339,25 @@ def test_common_error_responses_only_where_reachable(schema):
     assert "401" not in schema["paths"]["/health"]["get"]["responses"]
 
 
+def test_rate_limit_response_declared_on_v1(schema):
+    """429 跟着路径前缀走：限流中间件拦的是 ``/v1`` 下的所有接口。
+
+    包括不读环境头的部署级接口（渠道列表、仪表盘汇总）——它们同样会被拦，
+    文档里漏掉会让调用方把 429 当成异常而不是需要退避的信号。
+    """
+    for method, path, operation in _ops(schema):
+        responses = operation["responses"]
+        if path.startswith("/v1"):
+            assert "429" in responses, f"{method} {path}"
+            body = responses["429"]["content"]["application/json"]
+            assert body["example"]["detail"]
+        else:
+            assert "429" not in responses, f"{method} {path}"
+
+    # 健康探测被限流是运维事故，它不在 /v1 下，也就不该声明这条响应。
+    assert "429" not in schema["paths"]["/health"]["get"]["responses"]
+
+
 def test_trigger_documents_idempotency_header(schema):
     params = {
         p["name"]: p

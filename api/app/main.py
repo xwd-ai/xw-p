@@ -26,6 +26,8 @@ from .execution_routes import router as execution_router
 from .idempotency import get_idempotency_store
 from .inbox import router as inbox_router
 from .preference_routes import router as preference_router
+from .ratelimit import get_limiter
+from .ratelimit_middleware import RateLimitMiddleware
 from .providers import factory as provider_factory
 from .provider_routes import router as provider_router
 from .schemas import (
@@ -77,6 +79,9 @@ async def lifespan(app: FastAPI):
     # 启用了但密钥过短（校验直接报错），都是「配置以为生效了、实际用不了」的
     # 典型情形，等到第一次登录失败再来查代价更大。
     logger.info("后台令牌鉴权：%s", _admin_auth_note())
+    # 限流默认关闭；配了阈值才在启动日志里说明维度、额度与后端，方便对照
+    # 「被拦了」与「没配」这两种完全不同的现象。
+    logger.info("请求限流：%s", get_limiter().describe())
     # 渠道注册表在启动时装配：配置写错直接暴露出来，而不是等到第一条消息
     # 投递失败才发现；尚未接入的种类与空着的渠道会在日志里逐条列出。
     provider_factory.get_registry()
@@ -98,6 +103,11 @@ app = FastAPI(
     openapi_tags=openapi_docs.TAGS,
     lifespan=lifespan,
 )
+
+# 限流注册在 CORS 之前：Starlette 里后注册的中间件在更外层，因此 CORS 会包住
+# 限流——被拒绝的 429 也带着跨源响应头，浏览器才读得到「为什么被限流」，
+# 而不是一个与后端无关的 Failed to fetch。
+app.add_middleware(RateLimitMiddleware)
 
 # 展示前端是独立的一组静态文件，与 API 不同源；没有这层中间件时，浏览器会把
 # 页面里的 fetch 全部挡在 CORS 检查上。放行名单由 XW_CORS_ORIGINS 控制。

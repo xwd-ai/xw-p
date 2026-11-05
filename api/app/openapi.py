@@ -19,6 +19,10 @@ FastAPI 自动生成的 schema 只覆盖「参数类型 + 响应模型」这一�
   ``X-Environment`` 与 ``X-Tenant-Id``，环境头或租户写错是 400、Key 不匹配是
   401、拿别的租户的 Key 越权是 403；健康检查、渠道配置与投递汇总不看租户，
   给它们挂 401 只会误导。
+- **429 按路径前缀声明**：限流中间件拦的是 ``/v1`` 下的所有接口（包括上面那些
+  部署级接口），因此它跟着路径走、跟着环境头走的规则无关。是否真的会被拦取决于
+  部署期配置，这里无条件写进契约——按当前配置决定要不要声明，会让同一份代码在
+  不同环境里导出两份契约，diff 与 SDK 生成都没法用。
 - 导出结果按路径排序、JSON 键排序，同一份代码重复导出的字节一致，diff 里
   才看得出真实改动。
 """
@@ -273,6 +277,19 @@ _FORBIDDEN = {
     },
 }
 
+#: 触发限流时返回 429（``XW_RATE_LIMIT_*_RPM`` 配置了额度才可能出现）。
+#: 这里无条件声明：限流是部署期开关，如果按当前配置决定要不要写进 schema，
+#: 同一份代码在不同环境里会导出两份契约，diff 与 SDK 生成都没法用。
+_TOO_MANY_REQUESTS = {
+    "description": "请求超出该凭据或来源地址的额度（响应头给出剩余额度与建议等待秒数）。",
+    "content": {
+        "application/json": {
+            "schema": {"$ref": "#/components/schemas/Error"},
+            "example": {"detail": "请求过于频繁：来源 203.0.113.7 每分钟最多 120 次，请在 1 秒后重试"},
+        }
+    },
+}
+
 #: SSE 端点的响应体是事件流而不是一次性 JSON，示例给一帧让读者知道长什么样。
 _SSE_EXAMPLE = (
     "event: ready\n"
@@ -365,6 +382,9 @@ def _decorate_operations(schema: dict[str, Any]) -> None:
                 responses.setdefault("401", deepcopy(_UNAUTHORIZED))
             if _has_header(operation, "X-Tenant-Id"):
                 responses.setdefault("403", deepcopy(_FORBIDDEN))
+            # 限流中间件按路径前缀生效，与是否读环境头无关：/v1 下的接口都可能被拦。
+            if path.startswith("/v1"):
+                responses.setdefault("429", deepcopy(_TOO_MANY_REQUESTS))
 
             # 运维接口不给匿名备选：它们要么要后台令牌，要么要带 admin 角色的 Key。
             # 登录接口反过来，明确写出「不需要凭据」——否则读者会以为要先有令牌

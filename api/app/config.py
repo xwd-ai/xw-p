@@ -24,6 +24,24 @@ def _env_float(key: str, default: float, *, minimum: float = 0.0) -> float:
     return value if value >= minimum else default
 
 
+def _env_int(key: str, default: int, *, minimum: int = 0) -> int:
+    """读取整数配置：缺失、写错或越界时回退默认值（同 ``_env_float`` 的口径）。"""
+    raw = os.getenv(key)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        return default
+    return value if value >= minimum else default
+
+
+def _flag(raw: str | None) -> bool:
+    """把 1/true/on/yes 这类写法读成布尔值，其余为假。"""
+    return str(raw or "").strip().lower() in {"1", "true", "on", "yes"}
+
+
+
 # 消息总线后端：memory（默认）| redis
 BUS_BACKEND = _env("XW_BUS", "memory")
 
@@ -100,6 +118,21 @@ def parse_origins(raw: str | None) -> list[str]:
 # 默认放行所有来源：服务不使用 Cookie 鉴权（凭据走 X-Api-Key 头），因此不需要
 # allow_credentials；需要收紧时用 XW_CORS_ORIGINS 给出逗号分隔的白名单。
 CORS_ORIGINS: list[str] = parse_origins(os.getenv("XW_CORS_ORIGINS"))
+
+# 限流：两个维度各自给出「每分钟请求数」，0（默认）表示该维度关闭。
+# 关闭不是保守而是诚实——限流阈值要按实际流量调，给一个猜出来的默认值
+# 只会让人以为已经保护好了。突发深度缺省取每分钟额度。
+RATE_LIMIT_KEY_RPM = _env_int("XW_RATE_LIMIT_KEY_RPM", 0)
+RATE_LIMIT_IP_RPM = _env_int("XW_RATE_LIMIT_IP_RPM", 0)
+RATE_LIMIT_BURST = _env_int("XW_RATE_LIMIT_BURST", 0)
+# 令牌桶后端：auto（默认，跟随 XW_BUS）| redis | memory
+RATE_LIMIT_BACKEND = _env("XW_RATE_LIMIT_BACKEND", "auto")
+RATE_LIMIT_PREFIX = _env("XW_RATE_LIMIT_PREFIX", "xw:ratelimit")
+# 单次取令牌的等待上限（秒）：限流跑在每个请求前面，Redis 慢下来不能拖住链路。
+RATE_LIMIT_TIMEOUT = _env_float("XW_RATE_LIMIT_TIMEOUT", 0.5, minimum=0.05)
+# 是否采信 X-Forwarded-For：只有部署在会追加该头的反向代理之后才该打开。
+RATE_LIMIT_TRUST_FORWARDED = _flag(os.getenv("XW_RATE_LIMIT_TRUST_FORWARDED"))
+
 
 # 各环境的 API Key：仅当对应环境配置了 Key 时才强制鉴权。
 # 未配置（空）时该环境的写入接口保持开放（demo / 测试友好），
