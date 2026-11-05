@@ -21,9 +21,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xwd-ai/xw-p/engine/internal/eventbus"
 	"github.com/xwd-ai/xw-p/engine/internal/metrics"
 	"github.com/xwd-ai/xw-p/engine/internal/provider"
 	"github.com/xwd-ai/xw-p/engine/internal/queue"
+	"github.com/xwd-ai/xw-p/engine/internal/webhook"
 )
 
 // adminShutdownTimeout 是退出时等待在途管理请求收尾的上限。
@@ -35,6 +37,9 @@ const adminShutdownTimeout = 2 * time.Second
 // 注册表条目通常是个位数，上限给 64 已经足够宽松；再多的请求多半是把
 // 别的接口的参数误传过来了，直接拒掉比逐个忽略更好定位问题。
 const maxProviderIDs = 64
+
+// maxRecentEvents 是一次事件流查询允许的最大条数，与环形缓冲的容量对齐。
+const maxRecentEvents = eventbus.DefaultFeedCapacity
 
 // DeadLetterStore 是管理接口依赖的存储能力，由 queue.ReliableConsumer 实现。
 type DeadLetterStore interface {
@@ -55,6 +60,17 @@ type Server struct {
 	checker   *provider.Checker
 	// metrics 是投递指标的读取入口，未装配时不注册路由。
 	metrics *metrics.Registry
+	// 回调审计与重放：审计表按事件标识回查每一次发送尝试，重放把留档的
+	// 报文重新交给分发器。两者都没有时（未配置回调或审计关闭）不注册路由。
+	webhookAudit    webhook.AuditStore
+	webhookReplayer WebhookReplayer
+	// feed 是事件总线上最近若干条事件的缓冲，供运维页面观察实时活动。
+	feed *eventbus.Feed
+}
+
+// WebhookReplayer 是回调重放能力，由 webhook.Dispatcher 实现。
+type WebhookReplayer interface {
+	Replay(ids []string) (webhook.ReplayReport, error)
 }
 
 // New 创建管理接口服务。
@@ -79,6 +95,22 @@ func (s *Server) WithMetrics(reg *metrics.Registry) *Server {
 	return s
 }
 
+// WithWebhookAudit 装配回调审计查询与重放能力。
+//
+// 两个依赖分开传：审计表可能独立于分发器存在（例如回调暂时停用，但历史
+// 记录仍要能查），而重放必须有分发器。缺哪个就少注册哪条路由。
+func (s *Server) WithWebhookAudit(store webhook.AuditStore, replayer WebhookReplayer) *Server {
+	s.webhookAudit = store
+	s.webhookReplayer = replayer
+	return s
+}
+
+// WithEventFeed 装配最近事件流，返回自身便于链式调用。
+func (s *Server) WithEventFeed(feed *eventbus.Feed) *Server {
+	s.feed = feed
+	return s
+}
+
 // Handler 返回路由。方法不匹配由路由层直接回 405。
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -98,6 +130,15 @@ func (s *Server) Handler() http.Handler {
 	if s.metrics != nil {
 		mux.HandleFunc("GET /admin/metrics", s.handleMetrics)
 		mux.HandleFunc("POST /admin/metrics/reset", s.handleMetricsReset)
+	}
+	if s.webhookAudit != nil {
+		mux.HandleFunc("GET /admin/webhook/events", s.handleWebhookEvents)
+	}
+	if s.webhookReplayer != nil {
+		mux.HandleFunc("POST /admin/webhook/replay", s.handleWebhookReplay)
+	}
+	if s.feed != nil {
+		mux.HandleFunc("GET /admin/events/recent", s.handleRecentEvents)
 	}
 	return mux
 }
@@ -383,6 +424,142 @@ func (s *Server) readProviderIDs(w http.ResponseWriter, r *http.Request, allowEm
 		return nil, false
 	}
 	return body.IDs, true
+}
+
+// handleWebhookEvents 返回一页回调审计记录。
+//
+// 过滤维度都是排查时手里真有的信息：事件标识（接收方报过来的）、事件类型
+// （「哪些 delivery.failed 没发出去」）、状态（只看最终失败的）、时间区间。
+func (s *Server) handleWebhookEvents(w http.ResponseWriter, r *http.Request) {
+	params := r.URL.Query()
+	query := webhook.AuditQuery{
+		EventID: params.Get("eventId"),
+		Type:    params.Get("type"),
+		Status:  params.Get("status"),
+	}
+	if query.Type != "" && !webhook.IsKnownEvent(query.Type) {
+		writeError(w, http.StatusBadRequest,
+			"未知事件类型，可选："+strings.Join(webhook.EventTypes(), ", "))
+		return
+	}
+	switch query.Status {
+	case "", webhook.AuditDelivered, webhook.AuditRetrying, webhook.AuditFailed:
+	default:
+		writeError(w, http.StatusBadRequest,
+			"status 可选：delivered / retrying / failed")
+		return
+	}
+
+	limit, err := intParam(params.Get("limit"), webhook.DefaultAuditLimit)
+	if err != nil || limit <= 0 || limit > webhook.MaxAuditLimit {
+		writeError(w, http.StatusBadRequest,
+			fmt.Sprintf("limit 必须是 1 到 %d 之间的整数", webhook.MaxAuditLimit))
+		return
+	}
+	offset, err := intParam(params.Get("offset"), 0)
+	if err != nil || offset < 0 {
+		writeError(w, http.StatusBadRequest, "offset 必须是非负整数")
+		return
+	}
+	if since, ok := parseTimeParam(params.Get("since")); !ok {
+		writeError(w, http.StatusBadRequest, "since 需为 RFC3339 时间")
+		return
+	} else {
+		query.Since = since
+	}
+	if until, ok := parseTimeParam(params.Get("until")); !ok {
+		writeError(w, http.StatusBadRequest, "until 需为 RFC3339 时间")
+		return
+	} else {
+		query.Until = until
+	}
+	query.Limit = limit
+	query.Offset = offset
+
+	entries, err := s.webhookAudit.List(query)
+	if err != nil {
+		s.logger.Error("[engine] 读取回调审计失败", "error", err)
+		writeError(w, http.StatusInternalServerError, "读取回调审计失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"events": entries,
+		"count":  len(entries),
+	})
+}
+
+// handleWebhookReplay 重放一批已留档的回调事件。
+//
+// 结果按「已入队 / 正文缺失 / 已取消订阅 / 队列已满」四类分开报：
+// 只回一句「已重放 3 条」会让调用方以为全部发出去了。
+func (s *Server) handleWebhookReplay(w http.ResponseWriter, r *http.Request) {
+	ids, ok := readIDs(w, r)
+	if !ok {
+		return
+	}
+	if len(ids) > webhook.DefaultReplayLimit {
+		writeError(w, http.StatusBadRequest,
+			fmt.Sprintf("一次最多重放 %d 条事件", webhook.DefaultReplayLimit))
+		return
+	}
+	report, err := s.webhookReplayer.Replay(ids)
+	if err != nil {
+		s.logger.Error("[engine] 重放回调事件失败", "error", err)
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, report)
+}
+
+// handleRecentEvents 返回最近若干条事件，最新在前。
+//
+// 数据来自总线上的一个环形缓冲，只覆盖最近几百条：这是「刚才发生了什么」
+// 的视图，历史回查应当走审计表或执行明细。
+func (s *Server) handleRecentEvents(w http.ResponseWriter, r *http.Request) {
+	limit, err := intParam(r.URL.Query().Get("limit"), 50)
+	if err != nil || limit <= 0 || limit > maxRecentEvents {
+		writeError(w, http.StatusBadRequest,
+			fmt.Sprintf("limit 必须是 1 到 %d 之间的整数", maxRecentEvents))
+		return
+	}
+
+	type eventItem struct {
+		ID      string      `json:"id"`
+		Topic   string      `json:"topic"`
+		At      time.Time   `json:"at"`
+		Payload interface{} `json:"payload,omitempty"`
+	}
+	messages := s.feed.Recent(limit)
+	items := make([]eventItem, 0, len(messages))
+	for _, msg := range messages {
+		items = append(items, eventItem{
+			ID:      msg.ID,
+			Topic:   msg.Topic,
+			At:      msg.At,
+			Payload: msg.Payload,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"events": items,
+		"count":  len(items),
+		"total":  s.feed.Total(),
+	})
+}
+
+// parseTimeParam 解析可选的 RFC3339 时间参数。
+//
+// 返回 (零值, true) 表示没传；(零值, false) 表示写错了。空字符串与解析
+// 失败必须区分开，否则一个拼错的时间会被当成「不过滤」。
+func parseTimeParam(raw string) (time.Time, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, true
+	}
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return parsed, true
 }
 
 func intParam(raw string, def int) (int, error) {

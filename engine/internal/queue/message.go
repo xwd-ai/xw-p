@@ -24,17 +24,21 @@ var ErrUndeliverable = errors.New("队列消息不可投递")
 // 不再回查工作流存储。这样已经在队列里的消息不会因为模板被后续编辑
 // 而半路换了步骤序列，也省掉一次跨进程查询。
 type QueuedMessage struct {
-	TriggerID     string            `json:"trigger_id"`
-	TransactionID string            `json:"transaction_id"`
-	Name          string            `json:"name"`
-	SubscriberID  string            `json:"subscriber_id"`
-	Email         string            `json:"email,omitempty"`
-	Phone         string            `json:"phone,omitempty"`
-	DeviceToken   string            `json:"device_token,omitempty"`
-	Channels      []string          `json:"channels,omitempty"`
-	Payload       map[string]any    `json:"payload,omitempty"`
-	Overrides     map[string]any    `json:"overrides,omitempty"`
-	Workflow      *WorkflowSnapshot `json:"workflow,omitempty"`
+	TriggerID     string `json:"trigger_id"`
+	TransactionID string `json:"transaction_id"`
+	Name          string `json:"name"`
+	SubscriberID  string `json:"subscriber_id"`
+	// Tenant / Environment 是隔离维度：引擎据此把执行明细与收件箱写到
+	// 正确的分区。老消息没有这两个字段，按默认租户与开发环境处理。
+	Tenant      string            `json:"tenant,omitempty"`
+	Environment string            `json:"environment,omitempty"`
+	Email       string            `json:"email,omitempty"`
+	Phone       string            `json:"phone,omitempty"`
+	DeviceToken string            `json:"device_token,omitempty"`
+	Channels    []string          `json:"channels,omitempty"`
+	Payload     map[string]any    `json:"payload,omitempty"`
+	Overrides   map[string]any    `json:"overrides,omitempty"`
+	Workflow    *WorkflowSnapshot `json:"workflow,omitempty"`
 }
 
 // WorkflowSnapshot 是随消息下发的步骤定义快照。

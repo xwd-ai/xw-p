@@ -549,23 +549,45 @@ def create_preference_store(
 
 
 _store: Optional[PreferenceStore] = None
+_tenant_stores: dict[str, PreferenceStore] = {}
 _store_lock = threading.Lock()
 
 
-def get_preference_store() -> PreferenceStore:
-    """获取全局偏好存储单例（惰性初始化）。"""
+def get_preference_store(tenant: Optional[str] = None) -> PreferenceStore:
+    """获取偏好存储（按租户隔离，惰性初始化）。"""
+    from . import tenancy
+
     global _store
+
+    key = tenancy.normalize_tenant(tenant) if tenant else tenancy.current_tenant()
     with _store_lock:
-        if _store is None:
-            _store = create_preference_store("jsonl")
-        return _store
+        if key == tenancy.DEFAULT_TENANT:
+            if _store is None:
+                base = Path(os.getenv("XW_PREFERENCES_FILE") or DEFAULT_PREFERENCES_PATH)
+                _store = create_preference_store("jsonl", tenancy.scoped_path(base, key))
+            return _store
+        store = _tenant_stores.get(key)
+        if store is None:
+            base = Path(os.getenv("XW_PREFERENCES_FILE") or DEFAULT_PREFERENCES_PATH)
+            store = create_preference_store("jsonl", tenancy.scoped_path(base, key))
+            _tenant_stores[key] = store
+        return store
 
 
-def set_preference_store(store: Optional[PreferenceStore]) -> None:
-    """替换全局单例；传 ``None`` 表示下次取用时按配置重建（测试用）。"""
-    global _store
+def set_preference_store(
+    store: Optional[PreferenceStore], tenant: Optional[str] = None
+) -> None:
+    """替换某个租户的存储单例；传 ``None`` 表示下次取用时按配置重建。"""
+    from . import tenancy
+
+    key = tenancy.normalize_tenant(tenant) if tenant else tenancy.current_tenant()
     with _store_lock:
-        _store = store
+        if key == tenancy.DEFAULT_TENANT:
+            globals()["_store"] = store
+        elif store is None:
+            _tenant_stores.pop(key, None)
+        else:
+            _tenant_stores[key] = store
 
 
 __all__ = [

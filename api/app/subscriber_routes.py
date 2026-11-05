@@ -103,11 +103,12 @@ def create_subscriber(
     description=(
         "按创建顺序翻页返回订阅者；``channel`` 只保留启用了该渠道的条目，"
         "用于回答「哪些人有邮箱」。``nextCursor`` 为空表示没有更多。\n\n"
-        "列表不按环境收窄：订阅者标识全局唯一，档案里带 ``environment`` 字段，"
-        "由调用方按需过滤。"
+        "列表按调用方所属租户收窄，但不按环境收窄：订阅者标识在租户内全局唯一，"
+        "档案里带 ``environment`` 字段，由调用方按需过滤。"
     ),
 )
 def list_subscribers(
+    _env: EnvContext = Depends(require_env),
     channel: str | None = Query(default=None, description="只看启用了该渠道的订阅者"),
     limit: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     cursor: str | None = Query(default=None, description="上一页返回的 nextCursor"),
@@ -130,7 +131,9 @@ def list_subscribers(
 
     try:
         items, next_cursor = get_subscriber_store().list(
-            channel=selected, limit=limit, cursor=cursor
+            channel=selected,
+            limit=limit,
+            cursor=cursor,
         )
     except SubscriberCursorError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
@@ -147,7 +150,9 @@ def list_subscribers(
     summary="按标识读取订阅者",
     description="读取单个档案，含渠道绑定与规范化后的地址。标识不存在返回 404。",
 )
-def get_subscriber(subscriber_id: str) -> SubscriberOut:
+def get_subscriber(
+    subscriber_id: str, _env: EnvContext = Depends(require_env)
+) -> SubscriberOut:
     """按标识读取订阅者。"""
     subscriber = get_subscriber_store().get(subscriber_id)
     if subscriber is None:

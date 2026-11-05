@@ -712,23 +712,43 @@ def create_topic_store(
 
 
 _store: Optional[TopicStore] = None
+_tenant_stores: dict[str, TopicStore] = {}
 _store_lock = threading.Lock()
 
 
-def get_topic_store() -> TopicStore:
-    """获取全局分组存储单例（惰性初始化）。"""
+def get_topic_store(tenant: Optional[str] = None) -> TopicStore:
+    """获取分组存储（按租户隔离，惰性初始化）。"""
+    from . import tenancy
+
     global _store
+
+    key = tenancy.normalize_tenant(tenant) if tenant else tenancy.current_tenant()
     with _store_lock:
-        if _store is None:
-            _store = create_topic_store("jsonl")
-        return _store
+        if key == tenancy.DEFAULT_TENANT:
+            if _store is None:
+                base = Path(os.getenv("XW_TOPICS_FILE") or DEFAULT_TOPICS_PATH)
+                _store = create_topic_store("jsonl", tenancy.scoped_path(base, key))
+            return _store
+        store = _tenant_stores.get(key)
+        if store is None:
+            base = Path(os.getenv("XW_TOPICS_FILE") or DEFAULT_TOPICS_PATH)
+            store = create_topic_store("jsonl", tenancy.scoped_path(base, key))
+            _tenant_stores[key] = store
+        return store
 
 
-def set_topic_store(store: Optional[TopicStore]) -> None:
-    """替换全局单例；传 ``None`` 表示下次取用时按配置重建（测试用）。"""
-    global _store
+def set_topic_store(store: Optional[TopicStore], tenant: Optional[str] = None) -> None:
+    """替换某个租户的存储单例；传 ``None`` 表示下次取用时按配置重建。"""
+    from . import tenancy
+
+    key = tenancy.normalize_tenant(tenant) if tenant else tenancy.current_tenant()
     with _store_lock:
-        _store = store
+        if key == tenancy.DEFAULT_TENANT:
+            globals()["_store"] = store
+        elif store is None:
+            _tenant_stores.pop(key, None)
+        else:
+            _tenant_stores[key] = store
 
 
 __all__ = [

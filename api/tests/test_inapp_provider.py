@@ -286,6 +286,9 @@ def test_worker_delivers_in_app_through_message_center(monkeypatch, tmp_path):
         "channel": "in_app",
         "status": "sent",
         "reason": None,
+        # 执行记录带上消息所属的租户与环境：同一份明细里要能分辨数据分区。
+        "tenant": "default",
+        "environment": "development",
     }
     assert storage.records[0]["status"] == "sent"
     stored = JsonlMessageCenter(path).get("t-inapp:in_app")

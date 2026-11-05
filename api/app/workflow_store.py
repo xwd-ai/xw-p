@@ -142,8 +142,9 @@ class PostgresWorkflowStore:
     连接由 ``XW_DATABASE_URL`` 配置，未就绪时操作会抛出连接异常。
     """
 
-    def __init__(self, database_url: str) -> None:
+    def __init__(self, database_url: str, tenant: str = "default") -> None:
         self._url = database_url
+        self._tenant = tenant
         self._engine = None
 
     def _get_engine(self):
@@ -163,13 +164,14 @@ class PostgresWorkflowStore:
                 text(
                     """
                     INSERT INTO workflows
-                        (id, name, description, steps, version, environment, active, created_at)
+                        (id, tenant, name, description, steps, version, environment, active, created_at)
                     VALUES
-                        (:id, :name, :description, :steps, :version, :environment, :active, :created_at)
+                        (:id, :tenant, :name, :description, :steps, :version, :environment, :active, :created_at)
                     """
                 ),
                 {
                     "id": row["id"],
+                    "tenant": self._tenant,
                     "name": row["name"],
                     "description": row["description"],
                     "steps": json.dumps(row["steps"], ensure_ascii=False),
@@ -187,8 +189,8 @@ class PostgresWorkflowStore:
         engine = self._get_engine()
         with engine.connect() as conn:
             result = conn.execute(
-                text("SELECT * FROM workflows WHERE id = :id"),
-                {"id": workflow_id},
+                text("SELECT * FROM workflows WHERE id = :id AND tenant = :tenant"),
+                {"id": workflow_id, "tenant": self._tenant},
             ).mappings().first()
         return _workflow_from_row(dict(result)) if result else None
 
@@ -198,8 +200,8 @@ class PostgresWorkflowStore:
         engine = self._get_engine()
         with engine.connect() as conn:
             result = conn.execute(
-                text("SELECT * FROM workflows WHERE name = :name"),
-                {"name": name},
+                text("SELECT * FROM workflows WHERE name = :name AND tenant = :tenant"),
+                {"name": name, "tenant": self._tenant},
             ).mappings().first()
         return _workflow_from_row(dict(result)) if result else None
 
@@ -209,7 +211,8 @@ class PostgresWorkflowStore:
         engine = self._get_engine()
         with engine.connect() as conn:
             rows = conn.execute(
-                text("SELECT * FROM workflows ORDER BY created_at")
+                text("SELECT * FROM workflows WHERE tenant = :tenant ORDER BY created_at"),
+                {"tenant": self._tenant},
             ).mappings().all()
         return [_workflow_from_row(dict(r)) for r in rows]
 
@@ -225,11 +228,12 @@ class PostgresWorkflowStore:
                     UPDATE workflows
                     SET description = :description, steps = :steps, version = :version,
                         environment = :environment, active = :active
-                    WHERE id = :id
+                    WHERE id = :id AND tenant = :tenant
                     """
                 ),
                 {
                     "id": row["id"],
+                    "tenant": self._tenant,
                     "description": row["description"],
                     "steps": json.dumps(row["steps"], ensure_ascii=False),
                     "version": row["version"],
@@ -247,16 +251,19 @@ class PostgresWorkflowStore:
         engine = self._get_engine()
         with engine.begin() as conn:
             result = conn.execute(
-                text("DELETE FROM workflows WHERE id = :id"), {"id": workflow_id}
+                text("DELETE FROM workflows WHERE id = :id AND tenant = :tenant"),
+                {"id": workflow_id, "tenant": self._tenant},
             )
             return result.rowcount > 0
 
 
-def create_workflow_store(backend: str, database_url: str) -> WorkflowStore:
-    """根据配置创建工作流存储实例。"""
+def create_workflow_store(
+    backend: str, database_url: str, tenant: str = "default"
+) -> WorkflowStore:
+    """根据配置创建工作流存储实例（按租户隔离）。"""
     if backend == "postgres":
-        logger.info("工作流存储后端：postgres")
-        return PostgresWorkflowStore(database_url)
+        logger.info("工作流存储后端：postgres（租户 %s）", tenant)
+        return PostgresWorkflowStore(database_url, tenant)
     logger.info("工作流存储后端：memory")
     return MemoryWorkflowStore(seed=_seed_workflows())
 
@@ -269,18 +276,49 @@ def _seed_workflows() -> list[Workflow]:
 
 
 _store: Optional[WorkflowStore] = None
+_tenant_stores: dict[str, WorkflowStore] = {}
 _store_lock = threading.Lock()
 
 
-def get_workflow_store() -> WorkflowStore:
-    """获取全局工作流存储单例（惰性初始化，后端由配置决定）。"""
-    global _store
-    with _store_lock:
-        if _store is None:
-            from . import config
+def get_workflow_store(tenant: Optional[str] = None) -> WorkflowStore:
+    """获取工作流存储（按租户隔离，惰性初始化，后端由配置决定）。
 
-            _store = create_workflow_store(config.STORAGE_BACKEND, config.DATABASE_URL)
-        return _store
+    内存后端每个租户各一份预置模板：两个租户都能看到 ``post_liked``，
+    但改其中一个不会影响另一个。Postgres 后端按 ``tenant`` 列过滤。
+    """
+    from . import config, tenancy
+
+    global _store
+
+    key = tenancy.normalize_tenant(tenant) if tenant else tenancy.current_tenant()
+    with _store_lock:
+        if key == tenancy.DEFAULT_TENANT:
+            if _store is None:
+                _store = create_workflow_store(
+                    config.STORAGE_BACKEND, config.DATABASE_URL, key
+                )
+            return _store
+        store = _tenant_stores.get(key)
+        if store is None:
+            store = create_workflow_store(config.STORAGE_BACKEND, config.DATABASE_URL, key)
+            _tenant_stores[key] = store
+        return store
+
+
+def set_workflow_store(
+    store: Optional[WorkflowStore], tenant: Optional[str] = None
+) -> None:
+    """替换某个租户的工作流存储；传 ``None`` 表示下次取用时按配置重建。"""
+    from . import tenancy
+
+    key = tenancy.normalize_tenant(tenant) if tenant else tenancy.current_tenant()
+    with _store_lock:
+        if key == tenancy.DEFAULT_TENANT:
+            globals()["_store"] = store
+        elif store is None:
+            _tenant_stores.pop(key, None)
+        else:
+            _tenant_stores[key] = store
 
 
 def validate_workflow(workflow: Workflow) -> None:

@@ -2,13 +2,16 @@ package webhook
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/xwd-ai/xw-p/engine/internal/backoff"
+	"github.com/xwd-ai/xw-p/engine/internal/execution"
 )
 
 const (
@@ -50,6 +53,10 @@ type Options struct {
 	Retry backoff.Policy
 	// Selection 是订阅的事件类型；零值按 DefaultSelection 处理。
 	Selection Selection
+	// Audit 记录每次发送尝试；为空时不落审计。
+	Audit AuditStore
+	// Archive 保存事件正文，供人工重放；为空时无法重放。
+	Archive EventArchive
 	// Logger 为空时用默认 logger。
 	Logger *slog.Logger
 }
@@ -111,6 +118,10 @@ type Dispatcher struct {
 	retry     backoff.Policy
 	selection Selection
 	queue     chan Event
+	// audit 与 archive 都是可选的：没有配置审计时回调照常工作，
+	// 只是事后无法按事件标识回查与重放。
+	audit   AuditStore
+	archive EventArchive
 
 	mu     sync.RWMutex
 	closed bool
@@ -147,6 +158,8 @@ func NewDispatcher(target Target, sender Sender, opts Options) *Dispatcher {
 		retry:     opts.Retry,
 		selection: opts.Selection,
 		queue:     make(chan Event, opts.QueueSize),
+		audit:     opts.Audit,
+		archive:   opts.Archive,
 		stop:      make(chan struct{}),
 	}
 	d.wg.Add(opts.Workers)
@@ -185,7 +198,16 @@ func (d *Dispatcher) Notify(ev Event) bool {
 	defer d.mu.RUnlock()
 	if d.closed {
 		d.dropped.Add(1)
+		d.recordDrop(ev, "分发器已关闭，事件未发出")
 		return false
+	}
+	// 先留档再入队：队列满时事件会被丢弃，而它恰恰是最需要重放的那一类；
+	// 留档放在入队之前，丢掉的也有正文可查。
+	if d.archive != nil {
+		if err := d.archive.Save(ev); err != nil {
+			d.logger.Warn("[webhook] 事件正文未留存，本次无法重放",
+				"eventId", ev.ID, "error", err)
+		}
 	}
 	select {
 	case d.queue <- ev:
@@ -193,6 +215,7 @@ func (d *Dispatcher) Notify(ev Event) bool {
 		return true
 	default:
 		dropped := d.dropped.Add(1)
+		d.recordDrop(ev, "回调队列已满，事件未发出")
 		d.logger.Warn("[webhook] 回调队列已满，本次结果不再回调",
 			"triggerId", ev.TriggerID,
 			"eventId", ev.ID,
@@ -294,8 +317,79 @@ func (d *Dispatcher) Retry() backoff.Policy {
 func (d *Dispatcher) worker() {
 	defer d.wg.Done()
 	for ev := range d.queue {
-		d.send(ev)
+		d.send(ev, ev.Replay)
 	}
+}
+
+// ReplayReport 是一次人工重放的结果。
+type ReplayReport struct {
+	// Replayed 是成功入队的事件标识。
+	Replayed []string `json:"replayed"`
+	// Missing 是审计表里有记录、但事件正文没有留存（或已损坏）的标识。
+	Missing []string `json:"missing"`
+	// Filtered 是当前订阅集合不再包含其类型的事件。
+	//
+	// 它在人工重放时才出现：事件产生时的订阅可能已经改过，重放一条不再
+	// 订阅的类型只会让接收方困惑。如实报出来，而不是悄悄发出去。
+	Filtered []string `json:"filtered"`
+	// Dropped 是队列已满、未能入队的事件。
+	Dropped []string `json:"dropped"`
+}
+
+// Replay 按事件标识重新投递已留档的事件。
+//
+// 重放保留原事件标识与发生时间：接收方按标识去重，重放要的正是「这条已经
+// 处理过」这个事实；把标识换掉会让同一结果在对方系统里记两遍。报文里另带
+// replay=true，接收方据此区分「补发」与「首次投递」。
+func (d *Dispatcher) Replay(ids []string) (ReplayReport, error) {
+	report := ReplayReport{
+		Replayed: []string{},
+		Missing:  []string{},
+		Filtered: []string{},
+		Dropped:  []string{},
+	}
+	if d == nil {
+		return report, errors.New("回调未配置，无法重放")
+	}
+	if d.archive == nil {
+		return report, errors.New("事件正文未留存，无法重放")
+	}
+	if len(ids) == 0 {
+		return report, errors.New("重放列表为空")
+	}
+	if len(ids) > DefaultReplayLimit {
+		return report, fmt.Errorf("一次最多重放 %d 条事件", DefaultReplayLimit)
+	}
+
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		ev, err := d.archive.Load(id)
+		if err != nil {
+			report.Missing = append(report.Missing, id)
+			continue
+		}
+		if !d.selection.Allows(ev.Event) {
+			report.Filtered = append(report.Filtered, id)
+			continue
+		}
+		ev.Replay = true
+		if d.Notify(ev) {
+			report.Replayed = append(report.Replayed, id)
+			continue
+		}
+		report.Dropped = append(report.Dropped, id)
+	}
+	d.logger.Info("[webhook] 回调事件已重放",
+		"requested", len(ids),
+		"replayed", len(report.Replayed),
+		"missing", len(report.Missing),
+		"filtered", len(report.Filtered),
+		"dropped", len(report.Dropped),
+	)
+	return report, nil
 }
 
 // send 发出单个事件并记账，可重试的失败按退避曲线再试。
@@ -304,7 +398,7 @@ func (d *Dispatcher) worker() {
 // 鉴权问题（400/401/403/404/410/413）再试一次也是同一个结果，只会白占
 // 接收方的处理能力。接收方给出 Retry-After 时按对方的时间等——它比自己
 // 更清楚什么时候能接。
-func (d *Dispatcher) send(ev Event) {
+func (d *Dispatcher) send(ev Event, replay bool) {
 	attempts := d.retry.Attempts()
 	for attempt := 1; ; attempt++ {
 		ctx, cancel := context.WithTimeout(context.Background(), d.timeout)
@@ -313,6 +407,7 @@ func (d *Dispatcher) send(ev Event) {
 
 		if res.OK() {
 			d.delivered.Add(1)
+			d.auditAttempt(ev, attempt, AuditDelivered, res, false, replay)
 			if attempt > 1 {
 				d.logger.Info("[webhook] 投递结果重试后回调成功",
 					"triggerId", ev.TriggerID,
@@ -335,6 +430,7 @@ func (d *Dispatcher) send(ev Event) {
 
 		if !res.Retryable || attempt >= attempts {
 			d.failed.Add(1)
+			d.auditAttempt(ev, attempt, AuditFailed, res, false, replay)
 			reason := res.Err
 			if res.Retryable && attempts > 1 {
 				reason += fmt.Sprintf("（已尝试 %d 次）", attempt)
@@ -360,6 +456,7 @@ func (d *Dispatcher) send(ev Event) {
 			}
 		}
 		d.retried.Add(1)
+		d.auditAttempt(ev, attempt, AuditRetrying, res, true, replay)
 		d.logger.Warn("[webhook] 回调失败，稍后重试",
 			"triggerId", ev.TriggerID,
 			"eventId", ev.ID,
@@ -376,6 +473,10 @@ func (d *Dispatcher) send(ev Event) {
 		case <-d.stop:
 			timer.Stop()
 			d.failed.Add(1)
+			d.auditAttempt(ev, attempt, AuditFailed, Result{
+				Status: res.Status,
+				Err:    "退出中放弃剩余重试",
+			}, false, replay)
 			d.logger.Warn("[webhook] 退出中放弃剩余重试",
 				"triggerId", ev.TriggerID,
 				"eventId", ev.ID,
@@ -384,5 +485,57 @@ func (d *Dispatcher) send(ev Event) {
 			)
 			return
 		}
+	}
+}
+
+// auditAttempt 落一条发送尝试的审计记录。
+//
+// 审计失败只告警：记录本身是旁路，写不进去不该让已经在路上的回调变成失败。
+func (d *Dispatcher) auditAttempt(
+	ev Event, attempt int, status string, res Result, retryable bool, replay bool,
+) {
+	if d.audit == nil {
+		return
+	}
+	entry := AuditEntry{
+		EventID:    ev.ID,
+		Event:      ev.Event,
+		TriggerID:  ev.TriggerID,
+		Target:     d.target.String(),
+		Attempt:    attempt,
+		Status:     status,
+		HTTPStatus: res.Status,
+		Error:      res.Err,
+		Retryable:  retryable,
+		DurationMS: res.Duration.Milliseconds(),
+		At:         execution.Timestamp{Time: time.Now().UTC()},
+		Replay:     replay,
+	}
+	if err := d.audit.Append(entry); err != nil {
+		d.logger.Warn("[webhook] 写入回调审计失败",
+			"eventId", ev.ID, "error", err)
+	}
+}
+
+// recordDrop 记录一条「根本没发出去」的事件。
+//
+// 这类记录没有尝试次数（attempt=0）：不是发送失败，而是没轮到发送。
+// 运维按 attempt=0 能一眼把「队列堵了」与「接收方拒收」分开。
+func (d *Dispatcher) recordDrop(ev Event, reason string) {
+	if d.audit == nil {
+		return
+	}
+	entry := AuditEntry{
+		EventID:   ev.ID,
+		Event:     ev.Event,
+		TriggerID: ev.TriggerID,
+		Target:    d.target.String(),
+		Status:    AuditFailed,
+		Error:     reason,
+		At:        execution.Timestamp{Time: time.Now().UTC()},
+		Replay:    ev.Replay,
+	}
+	if err := d.audit.Append(entry); err != nil {
+		d.logger.Warn("[webhook] 写入回调审计失败", "eventId", ev.ID, "error", err)
 	}
 }

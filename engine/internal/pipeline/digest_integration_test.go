@@ -180,10 +180,13 @@ func TestDigestIntegrationFromQueueJSONToInboxFile(t *testing.T) {
 	}
 
 	// 契约：字段集合与 API 侧读取逻辑（api/app/inbox.py）保持一致。
+	// 租户与环境是收件箱的过滤维度：文件由多个租户共用一条追加流，
+	// API 侧按这两个字段挑出属于当前请求的条目。
 	wantKeys := map[string]bool{
 		"id": true, "trigger_id": true, "subscriber_id": true, "workflow": true,
 		"step_id": true, "title": true, "body": true,
 		"created_at": true, "updated_at": true, "read": true,
+		"tenant": true, "environment": true,
 	}
 	for _, row := range rows {
 		if len(row) != len(wantKeys) {

@@ -110,6 +110,12 @@ API_KEYS: dict[str, str] = {
 }
 
 
+# 多租户：显式声明的租户清单（逗号分隔，空表示不限制），以及带作用域的
+# API Key（JSON 数组，格式见 app/tenancy.py）。两者都为空时保持单租户 demo 语义。
+TENANTS = _env("XW_TENANTS", "")
+API_KEY_SCOPES = _env("XW_API_KEYS", "")
+
+
 def api_key_for(env: str) -> str:
     """返回指定环境的 API Key（未配置则为空字符串）。"""
     return API_KEYS.get(env, "")

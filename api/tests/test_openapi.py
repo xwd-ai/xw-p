@@ -240,20 +240,39 @@ def test_environment_header_is_documented(schema):
         assert header["in"] == "header"
         assert header["required"] is False
         assert "development" in header["description"]
+        # 环境与租户是同一次解析出来的两个维度，声明了环境就必须声明租户。
+        tenant = params.get("X-Tenant-Id")
+        assert tenant is not None, f"{method} {path}"
+        assert tenant["in"] == "header"
+        assert tenant["required"] is False
 
-    # 代表性接口：触发、广播、偏好与订阅者写入都靠这个头定位环境。
+    # 代表性接口：触发、广播、偏好、订阅者与查询侧都靠这个头定位环境与租户。
     for path in (
         "/v1/events/trigger",
         "/v1/topics/{topic_id}/trigger",
         "/v1/subscribers/{subscriber_id}/preferences",
         "/v1/subscribers",
         "/v1/providers/{identifier}",
+        "/v1/activity",
+        "/v1/executions",
+        "/v1/inbox",
+        "/v1/workflows",
     ):
         assert path in env_ops, path
 
-    # 查询侧按显式参数限定范围，因此没有这个头——写进文档而不是让读者猜。
-    for path in ("/v1/activity", "/v1/executions", "/v1/inbox", "/v1/workflows"):
-        assert path not in env_ops, path
+    # 部署级接口不读这两个头：健康检查没有租户概念，渠道配置与投递汇总
+    # 属于整套部署而非某个租户。写进文档而不是让读者猜。
+    without = {
+        (method, path)
+        for method, path, operation in _ops(schema)
+        if "X-Environment" not in {p["name"] for p in operation.get("parameters", [])}
+    }
+    assert without == {
+        ("get", "/health"),
+        ("get", "/v1/dashboard/stats"),
+        ("get", "/v1/providers"),
+        ("get", "/v1/providers/{identifier}"),
+    }
 
 
 def test_common_error_responses_only_where_reachable(schema):
@@ -265,6 +284,12 @@ def test_common_error_responses_only_where_reachable(schema):
         else:
             # 不校验 Key 的接口不该声明 401：文档里写了，调用方就会以为需要配 Key。
             assert "401" not in responses, f"{method} {path}"
+
+        # 403 只可能来自跨租户访问，因此跟着租户头走。
+        if "X-Tenant-Id" in params:
+            assert "403" in responses, f"{method} {path}"
+        else:
+            assert "403" not in responses, f"{method} {path}"
 
     # 声明了 400 / 401 的接口都要给出统一的错误体，调用方不必按状态码分两套解析。
     for method, path, operation in _ops(schema):

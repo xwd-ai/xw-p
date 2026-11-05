@@ -17,16 +17,17 @@
 就是三条记录，某个渠道失败不影响同一次触发里其它渠道的成功。``skipped`` 是被
 订阅者偏好拦下的渠道，没有尝试投递，不进成功率的分母。
 
-口径限制：执行明细目前不携带环境标记，所以这里给出的是整个部署的汇总，不按
-``X-Environment`` 拆分；分环境统计要等明细带上环境字段之后才能做。
+口径限制：统计按调用方所属租户汇总（``X-Tenant-Id`` / API Key 决定），
+不跨租户；环境维度目前不单独拆分，一次部署的统计覆盖该租户的开发与生产环境。
 """
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from .auth import EnvContext, require_env
 from .admin_stats import (
     DEFAULT_TOP,
     DEFAULT_WINDOW_DAYS,
@@ -62,6 +63,7 @@ router = APIRouter(prefix="/v1/admin", tags=["admin"])
     },
 )
 def admin_stats(
+    env: EnvContext = Depends(require_env),
     days: Optional[int] = Query(
         default=None,
         ge=1,
@@ -79,7 +81,9 @@ def admin_stats(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     # 逐条流式读取：窗口内的记录不落成列表，内存占用与投递量无关。
-    records = get_execution_store().scan(since=window.since, until=window.until)
+    records = get_execution_store().scan(
+        since=window.since, until=window.until, tenant=env.tenant
+    )
     return AdminStatsAccumulator(window, top=top).extend(records).result()
 
 

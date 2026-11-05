@@ -16,8 +16,9 @@ FastAPI 自动生成的 schema 只覆盖「参数类型 + 响应模型」这一�
   并列（OpenAPI 里空对象表示匿名可用）。只写前者会让文档读者以为不带 Key
   一定失败，而实际上只有配置了 Key 的环境才校验。
 - **统一错误响应只加在确实会返回它的接口上**：所有 ``/v1`` 接口都解析
-  ``X-Environment``，环境头写错是 400、Key 不匹配是 401；健康检查不读环境，
-  给它挂 401 只会误导。
+  ``X-Environment`` 与 ``X-Tenant-Id``，环境头或租户写错是 400、Key 不匹配是
+  401、拿别的租户的 Key 越权是 403；健康检查、渠道配置与投递汇总不看租户，
+  给它们挂 401 只会误导。
 - 导出结果按路径排序、JSON 键排序，同一份代码重复导出的字节一致，diff 里
   才看得出真实改动。
 """
@@ -119,16 +120,18 @@ API_DESCRIPTION = """\
 
 ## 请求约定
 
-**环境隔离**：环境按接口粒度参与。触发、订阅者写入、偏好、分组与渠道配置的
-接口从 `X-Environment` 取环境（`development` 默认 / `production`），写错直接 400
-而不是退回默认值——静默落到另一套环境比报错更难查。查询类接口（活动日志、
-执行明细、管理视图）用显式的 `environment` 参数限定范围，收件箱按订阅者标识
-寻址：这些接口的调用方通常是运营后台，一次要跨环境看数据，强制带环境头反而
-要在前端做无意义的切换。
+**租户与环境**：两者都从请求头解析——`X-Tenant-Id`（默认 `default`）决定数据
+分区，`X-Environment`（默认 `development` / 可选 `production`）决定环境。头写错
+或租户不在 `XW_TENANTS` 清单内直接 400，而不是退回默认值——静默落到另一套数据
+比报错更难查。所有 `/v1` 接口都解析这两个头；例外是部署级的 `GET /v1/dashboard/stats`
+与 `GET /v1/providers`（渠道配置与投递汇总属于整套部署）以及不区分租户的
+`GET /health`。
 
-**鉴权**：读取 `X-Environment` 的环境配置了 API Key 时，请求必须带 `X-Api-Key`，
-不匹配返回 401。未配置 Key 的环境放行，便于本地与演示环境直接调用；不读环境头
-的查询接口因此也不校验 Key。
+**鉴权**：配置了 API Key 时，请求必须带 `X-Api-Key`。未配置任何 Key 的环境放行，
+便于本地与演示环境直接调用；配置后按 Key 的作用域收口：Key 不匹配或不可用于当前
+环境返回 401，用某个租户的 Key 去访问另一个租户返回 403。Key 与作用域用
+`XW_API_KEYS` 声明，形如 `[{"key": "...", "tenant": "acme", "environments":
+["production"]}]`。
 
 **幂等**：触发类接口接受 `Idempotency-Key` 头。相同键重复提交返回首次回执、
 不重复入队；不带该头则每次都是新的一次触发。键的取值由调用方决定，通常用
@@ -224,6 +227,17 @@ _UNAUTHORIZED = {
     },
 }
 
+#: 凭据有效但越权时返回 403：拿 A 租户的 Key 去访问 B 租户。
+_FORBIDDEN = {
+    "description": "凭据有效，但没有访问目标租户的权限。",
+    "content": {
+        "application/json": {
+            "schema": {"$ref": "#/components/schemas/Error"},
+            "example": {"detail": "API Key 属于租户 acme，不能访问租户 other"},
+        }
+    },
+}
+
 #: SSE 端点的响应体是事件流而不是一次性 JSON，示例给一帧让读者知道长什么样。
 _SSE_EXAMPLE = (
     "event: ready\n"
@@ -314,10 +328,13 @@ def _decorate_operations(schema: dict[str, Any]) -> None:
             if _has_header(operation, "X-Environment"):
                 responses.setdefault("400", deepcopy(_BAD_REQUEST))
                 responses.setdefault("401", deepcopy(_UNAUTHORIZED))
-            # 路由自己声明过 400 / 401 时保留它的具体说明，只把缺的响应体补上：
+            if _has_header(operation, "X-Tenant-Id"):
+                responses.setdefault("403", deepcopy(_FORBIDDEN))
+            # 路由自己声明过 400 / 401 / 403 时保留它的具体说明，只把缺的响应体补上：
             # 「入参校验失败」与「环境头写错」都是 400，但统一的错误形状一样。
             _fill_error_body(responses, "400", _BAD_REQUEST)
             _fill_error_body(responses, "401", _UNAUTHORIZED)
+            _fill_error_body(responses, "403", _FORBIDDEN)
 
             # 路径参数必须声明为 required，否则生成的 SDK 会把它当成可选。
             declared = {

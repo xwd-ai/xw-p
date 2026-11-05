@@ -22,8 +22,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from .auth import EnvContext, require_env
 from .activity_log import ActivityQuery, get_activity_store
 from .activity_routes import _to_activity
 from .admin_activity import (
@@ -53,6 +54,7 @@ MAX_EXECUTION_ROWS = 200
 
 def _build_query(
     *,
+    tenant: str,
     environment: Optional[str],
     subscriber_id: Optional[str],
     workflow: Optional[str],
@@ -73,6 +75,7 @@ def _build_query(
     try:
         check_window(since, until)
         return ActivityQuery(
+            tenant=tenant,
             subscriber_id=subscriber_id or None,
             workflow=workflow or None,
             trigger_id=trigger_id or None,
@@ -111,6 +114,7 @@ def _cursor_of(item: dict) -> Optional[str]:
     ),
 )
 def admin_list_activity(
+    env: EnvContext = Depends(require_env),
     environment: Optional[str] = Query(
         default=None, description="按环境过滤；留空表示所有环境"
     ),
@@ -142,6 +146,7 @@ def admin_list_activity(
             raise HTTPException(status_code=400, detail="cursor 无效")
 
     query = _build_query(
+        tenant=env.tenant,
         environment=environment,
         subscriber_id=subscriber_id,
         workflow=workflow,
@@ -177,6 +182,7 @@ def admin_list_activity(
     ),
 )
 def admin_activity_summary(
+    env: EnvContext = Depends(require_env),
     environment: Optional[str] = Query(default=None, description="按环境过滤；留空表示所有环境"),
     subscriber_id: Optional[str] = Query(default=None, alias="subscriberId"),
     workflow: Optional[str] = Query(default=None),
@@ -190,6 +196,7 @@ def admin_activity_summary(
 ) -> dict:
     """按过滤条件汇总命中记录；不受分页影响。"""
     query = _build_query(
+        tenant=env.tenant,
         environment=environment,
         subscriber_id=subscriber_id,
         workflow=workflow,
@@ -223,6 +230,7 @@ def admin_activity_summary(
 )
 def admin_activity_detail(
     trigger_id: str,
+    env: EnvContext = Depends(require_env),
     environment: Optional[str] = Query(default=None, description="按环境过滤；留空表示所有环境"),
 ) -> dict:
     """单次触发的下钻：活动记录 + 逐渠道执行明细 + 渠道缺口。"""
@@ -230,6 +238,7 @@ def admin_activity_detail(
         raise HTTPException(status_code=400, detail="triggerId 不能为空")
 
     query = _build_query(
+        tenant=env.tenant,
         environment=environment,
         subscriber_id=None,
         workflow=None,
@@ -249,7 +258,11 @@ def admin_activity_detail(
     declared = [str(c) for c in (_to_activity(record).get("channels") or [])]
 
     executions = get_execution_store().query(
-        ExecutionQuery(trigger_id=str(record.get("trigger_id")), limit=MAX_EXECUTION_ROWS + 1)
+        ExecutionQuery(
+            tenant=env.tenant,
+            trigger_id=str(record.get("trigger_id")),
+            limit=MAX_EXECUTION_ROWS + 1,
+        )
     )
     truncated = len(executions) > MAX_EXECUTION_ROWS
     items = [_to_item(e) for e in executions[:MAX_EXECUTION_ROWS]]

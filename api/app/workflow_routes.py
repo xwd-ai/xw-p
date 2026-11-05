@@ -18,8 +18,9 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
+from .auth import EnvContext, require_env
 from .models.entities import Step, Workflow
 from .step_validation import StepValidationError
 from .workflow_ops import AUTO_NAME_ATTEMPTS, clone_workflow, copy_name, set_active
@@ -81,7 +82,9 @@ def _workflow_out(workflow: Workflow) -> WorkflowOut:
         "不会等到第一条消息投递失败才暴露。"
     ),
 )
-def create_workflow(body: WorkflowCreate) -> WorkflowOut:
+def create_workflow(
+    body: WorkflowCreate, env: EnvContext = Depends(require_env)
+) -> WorkflowOut:
     """创建一个工作流模板（版本号初始为 1）。"""
     steps = [
         Step(
@@ -120,13 +123,21 @@ def create_workflow(body: WorkflowCreate) -> WorkflowOut:
     response_model=list[WorkflowOut],
     summary="列出工作流模板",
     description=(
-        "返回模板列表，包含全部环境（条目里带 ``environment`` 字段），"
-        "客户端按需过滤。列表不分页：模板数量由运营维护，量级与消息量无关。"
+        "默认只返回请求环境（``X-Environment``）下的模板；要看另一套环境，"
+        "显式带该环境头。列表不分页：模板数量由运营维护，量级与消息量无关。"
     ),
 )
-def list_workflows() -> list[WorkflowOut]:
-    """列出所有工作流模板。"""
-    return [_workflow_out(wf) for wf in get_workflow_store().list()]
+def list_workflows(env: EnvContext = Depends(require_env)) -> list[WorkflowOut]:
+    """列出当前环境的工作流模板。
+
+    列表按请求环境收窄：另一套环境的模板混在同一张表里，「停用」到底改了
+    谁只能靠猜。要看某个特定环境，显式带 ``X-Environment``。
+    """
+    return [
+        _workflow_out(wf)
+        for wf in get_workflow_store().list()
+        if getattr(wf.environment, "value", wf.environment) == env.environment
+    ]
 
 
 @router.get(
@@ -135,7 +146,9 @@ def list_workflows() -> list[WorkflowOut]:
     summary="按标识读取工作流模板",
     description="读取单个模板的当前版本。已停用的模板照样能读到，``active`` 标明状态。",
 )
-def get_workflow(workflow_id: str) -> WorkflowOut:
+def get_workflow(
+    workflow_id: str, env: EnvContext = Depends(require_env)
+) -> WorkflowOut:
     """按 id 查询工作流模板。"""
     workflow = get_workflow_store().get(workflow_id)
     if workflow is None:
@@ -155,7 +168,9 @@ def get_workflow(workflow_id: str) -> WorkflowOut:
         "已入队并携带步骤快照的消息按快照执行，不受本次更新影响。"
     ),
 )
-def update_workflow(workflow_id: str, body: WorkflowUpdate) -> WorkflowOut:
+def update_workflow(
+    workflow_id: str, body: WorkflowUpdate, env: EnvContext = Depends(require_env)
+) -> WorkflowOut:
     """更新工作流模板（版本号自增 1）。"""
     store = get_workflow_store()
     existing = store.get(workflow_id)
@@ -204,7 +219,9 @@ def update_workflow(workflow_id: str, body: WorkflowUpdate) -> WorkflowOut:
         "排查历史投递时它们仍是唯一线索。"
     ),
 )
-def delete_workflow(workflow_id: str) -> None:
+def delete_workflow(
+    workflow_id: str, env: EnvContext = Depends(require_env)
+) -> None:
     """删除工作流模板。"""
     deleted = get_workflow_store().delete(workflow_id)
     if not deleted:
@@ -228,7 +245,11 @@ def delete_workflow(workflow_id: str) -> None:
         404: {"description": "工作流不存在"},
     },
 )
-def set_workflow_active(workflow_id: str, body: WorkflowActivationIn) -> WorkflowActivationOut:
+def set_workflow_active(
+    workflow_id: str,
+    body: WorkflowActivationIn,
+    env: EnvContext = Depends(require_env),
+) -> WorkflowActivationOut:
     """启用或停用工作流（幂等，不改版本号）。"""
     store = get_workflow_store()
     existing = store.get(workflow_id)
@@ -272,7 +293,9 @@ def set_workflow_active(workflow_id: str, body: WorkflowActivationIn) -> Workflo
     },
 )
 def duplicate_workflow(
-    workflow_id: str, body: Optional[WorkflowDuplicateIn] = None
+    workflow_id: str,
+    body: Optional[WorkflowDuplicateIn] = None,
+    env: EnvContext = Depends(require_env),
 ) -> WorkflowOut:
     """复制工作流模板。"""
     store = get_workflow_store()

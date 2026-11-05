@@ -26,6 +26,7 @@ import (
 
 	"github.com/xwd-ai/xw-p/engine/internal/admin"
 	"github.com/xwd-ai/xw-p/engine/internal/config"
+	"github.com/xwd-ai/xw-p/engine/internal/eventbus"
 	"github.com/xwd-ai/xw-p/engine/internal/execution"
 	"github.com/xwd-ai/xw-p/engine/internal/metrics"
 	"github.com/xwd-ai/xw-p/engine/internal/pipeline"
@@ -37,6 +38,25 @@ import (
 	"github.com/xwd-ai/xw-p/engine/internal/webhook"
 	"github.com/xwd-ai/xw-p/engine/internal/worker"
 )
+
+// busNotifier 把总线适配成 runner 认识的通知接口。
+//
+// runner 只关心「事件有没有交出去」，不关心有几个订阅者、谁处理得快；
+// 这里把「至少一个订阅者收下」当成成功。没有订阅者时返回 false，
+// 与未配置回调时的语义一致。
+type busNotifier struct{ bus *eventbus.Bus }
+
+func (n busNotifier) Notify(ev webhook.Event) bool {
+	if n.bus == nil {
+		return false
+	}
+	return n.bus.Publish(eventbus.Message{
+		ID:      ev.ID,
+		Topic:   ev.Event,
+		At:      ev.OccurredAt.Time,
+		Payload: ev,
+	}) > 0
+}
 
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -88,8 +108,40 @@ func main() {
 
 	// 投递结果回调：接入方不必轮询执行明细，每次执行结束后把各渠道结果
 	// 推到它自己的端点。发送在独立 goroutine 里进行，不占用消费路径。
-	callback, closeCallback := newCallbackDispatcher(logger, cfg)
+	// 审计表与事件正文先装配：回调一旦开始发送就要能按事件标识回查与重放。
+	audit, archive, closeAudit := newCallbackAudit(logger, cfg)
+	defer closeAudit()
+	callback, closeCallback := newCallbackDispatcherWithAudit(logger, cfg, audit, archive)
 	defer closeCallback()
+
+	// 事件总线：回调、审计与运维页面的实时流都从这一处分发。发布是非阻塞的，
+	// 订阅者慢只会丢自己的事件，不影响投递路径。
+	bus := eventbus.New(eventbus.Options{Logger: logger})
+	feed := eventbus.NewFeed(eventbus.DefaultFeedCapacity)
+	if callback != nil {
+		bus.Subscribe("*", 0, func(msg eventbus.Message) {
+			if ev, ok := msg.Payload.(webhook.Event); ok {
+				callback.Notify(ev)
+			}
+		})
+	}
+	bus.Subscribe("*", 0, feed.Handler())
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), eventbus.DefaultCloseGrace)
+		defer cancel()
+		if err := bus.Close(ctx); err != nil {
+			logger.Warn("[engine] 事件总线未能在宽限内排空", "error", err)
+		}
+		stats := bus.Stats()
+		logger.Info("[engine] 事件总线已关闭",
+			"subscriptions", stats.Subscriptions,
+			"received", stats.Received,
+			"handled", stats.Handled,
+			"dropped", stats.Dropped,
+			"failed", stats.Failed,
+		)
+	}()
+	var notifier runner.Notifier = busNotifier{bus: bus}
 
 	// 投递指标：进程内的成功/失败/超时计数与延迟分布，经运维接口读取。
 	// 与执行明细同源，但口径不同——明细是逐条审计，指标是聚合观察。
@@ -97,7 +149,7 @@ func main() {
 
 	// 延迟调度器：到期任务 → 管线续跑。delay 步骤到期后把剩余步骤跑完。
 	// 未到期任务存在 Redis，重启或换实例都不会丢。
-	scheduler, closeDelayStore := newDelayScheduler(logger, pipe, cfg, recorder, callback, sink)
+	scheduler, closeDelayStore := newDelayScheduler(logger, pipe, cfg, recorder, notifier, sink)
 	defer closeDelayStore()
 
 	// 把调度器接成管线的延迟出口：没有这一句，delay 步骤会以「未配置调度器」
@@ -108,7 +160,7 @@ func main() {
 	// 的快照，快照缺失时回退到启动时加载的定义表。
 	exec := runner.New(pipe, loadWorkflowSource(logger, cfg), logger).
 		WithRecorder(recorder).
-		WithNotifier(callback).
+		WithNotifier(notifier).
 		WithMetrics(sink)
 
 	var wg sync.WaitGroup
@@ -189,7 +241,9 @@ func main() {
 		wg.Add(1)
 		adminServer := admin.New(consumer, logger).
 			WithProviders(pipe.Registry(), pipe.Health(), checker).
-			WithMetrics(sink)
+			WithMetrics(sink).
+			WithWebhookAudit(audit, callback).
+			WithEventFeed(feed)
 		go func() {
 			defer wg.Done()
 			if err := adminServer.Run(ctx, cfg.AdminAddr); err != nil {
@@ -323,12 +377,69 @@ func newExecutionRecorder(logger *slog.Logger, cfg config.Config) (*execution.Re
 	}
 }
 
+// newCallbackAudit 装配回调审计表与事件正文留存。
+//
+// 两者都是旁路：文件打不开时只告警、继续装配回调——回调本身仍要发出去，
+// 只是事后无法按事件标识回查与重放。全部关闭时返回 nil，运维接口相应地
+// 不注册审计路由，免得调用方看到一张永远为空的表。
+func newCallbackAudit(logger *slog.Logger, cfg config.Config) (webhook.AuditStore, webhook.EventArchive, func()) {
+	if cfg.CallbackDisabled() {
+		return nil, nil, func() {}
+	}
+
+	closers := make([]func() error, 0, 2)
+	closeAll := func() {
+		for _, closeFn := range closers {
+			if err := closeFn(); err != nil {
+				logger.Warn("[engine] 关闭回调审计文件失败", "error", err)
+			}
+		}
+	}
+
+	var audit webhook.AuditStore
+	if cfg.CallbackAuditDisabled() {
+		logger.Info("[engine] 回调审计已关闭", "reason", "XW_CALLBACK_AUDIT_FILE=off")
+	} else if store, err := webhook.NewJSONLAuditStore(cfg.CallbackAuditFile); err != nil {
+		logger.Error("[engine] 回调审计文件不可用，本次不记录发送尝试",
+			"file", cfg.CallbackAuditFile, "error", err)
+	} else {
+		audit = store
+		closers = append(closers, store.Close)
+		logger.Info("[engine] 回调发送尝试将写入审计", "file", store.Path())
+	}
+
+	var archive webhook.EventArchive
+	if cfg.CallbackArchiveDisabled() {
+		logger.Info("[engine] 回调事件正文未留存，无法人工重放",
+			"reason", "XW_CALLBACK_EVENT_FILE=off")
+	} else if store, err := webhook.NewJSONLEventArchive(cfg.CallbackEventFile); err != nil {
+		logger.Error("[engine] 回调事件正文文件不可用，无法人工重放",
+			"file", cfg.CallbackEventFile, "error", err)
+	} else {
+		archive = store
+		closers = append(closers, store.Close)
+		logger.Info("[engine] 回调事件正文已留存，可人工重放", "file", store.Path())
+	}
+
+	return audit, archive, closeAll
+}
+
 // newCallbackDispatcher 装配投递结果的回调。
 //
 // 三种情况：未配置（回调关闭）、地址不合法（记错误并关闭）、正常装配。
 // 地址写错不让进程起不来——回调是旁路，投递本身仍应继续；但必须在启动
 // 日志里说清楚，否则「接入方一直收不到回调」会被当成引擎没发结果。
 func newCallbackDispatcher(logger *slog.Logger, cfg config.Config) (*webhook.Dispatcher, func()) {
+	return newCallbackDispatcherWithAudit(logger, cfg, nil, nil)
+}
+
+// newCallbackDispatcherWithAudit 在装配回调时挂上审计表与事件正文。
+//
+// 两个依赖都可以为空：没配审计时回调照常发送，只是事后无法回查与重放。
+func newCallbackDispatcherWithAudit(
+	logger *slog.Logger, cfg config.Config,
+	audit webhook.AuditStore, archive webhook.EventArchive,
+) (*webhook.Dispatcher, func()) {
 	if cfg.CallbackDisabled() {
 		logger.Info("[engine] 投递结果回调未启用", "reason", "XW_CALLBACK_URL 为空")
 		return nil, func() {}
@@ -362,6 +473,8 @@ func newCallbackDispatcher(logger *slog.Logger, cfg config.Config) (*webhook.Dis
 		Timeout:   cfg.CallbackTimeout,
 		Retry:     cfg.CallbackRetry(),
 		Selection: selection,
+		Audit:     audit,
+		Archive:   archive,
 		Logger:    logger,
 	}.Normalized()
 

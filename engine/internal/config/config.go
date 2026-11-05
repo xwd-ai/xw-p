@@ -98,6 +98,10 @@ type Config struct {
 	// CallbackEvents 是订阅的事件类型，逗号分隔（all 表示全部）；为空时
 	// 只订阅汇总事件 delivery.result。
 	CallbackEvents string
+	// CallbackAuditFile 是回调审计文件路径：每一次发送尝试一行，按事件
+	// 标识可回查。CallbackEventFile 留存事件正文，供人工重放；写 off 关闭。
+	CallbackAuditFile string
+	CallbackEventFile string
 
 	// AdminAddr 是运维接口（死信查询/重放）的监听地址。
 	// 空字符串表示不启动；未配置 XW_ADMIN_ADDR 时沿用 ENGINE_PORT。
@@ -154,6 +158,8 @@ func Load() Config {
 		CallbackRetryBase:     envDuration("XW_CALLBACK_RETRY_BASE", webhook.DefaultRetryBase),
 		CallbackRetryMax:      envDuration("XW_CALLBACK_RETRY_MAX", webhook.DefaultRetryMax),
 		CallbackEvents:        strings.TrimSpace(os.Getenv("XW_CALLBACK_EVENTS")),
+		CallbackAuditFile:     strings.TrimSpace(envOr("XW_CALLBACK_AUDIT_FILE", defaultCallbackAuditFile)),
+		CallbackEventFile:     strings.TrimSpace(envOr("XW_CALLBACK_EVENT_FILE", defaultCallbackEventFile)),
 
 		AdminAddr: adminListenAddr(),
 	}
@@ -181,8 +187,32 @@ func (c Config) CallbackDisabled() bool {
 	return false
 }
 
+// defaultCallbackAuditFile / defaultCallbackEventFile 是回调审计与事件正文的
+// 默认路径，与执行明细放在同一份数据目录下。
+const (
+	defaultCallbackAuditFile = "api/data/callback_audit.jsonl"
+	defaultCallbackEventFile = "api/data/callback_events.jsonl"
+)
+
+// CallbackAuditDisabled 判断是否关闭了回调审计。
+func (c Config) CallbackAuditDisabled() bool {
+	switch strings.ToLower(strings.TrimSpace(c.CallbackAuditFile)) {
+	case "", "off", "disabled", "none", "-":
+		return true
+	}
+	return false
+}
+
+// CallbackArchiveDisabled 判断是否关闭了事件正文留存（不留存即无法重放）。
+func (c Config) CallbackArchiveDisabled() bool {
+	switch strings.ToLower(strings.TrimSpace(c.CallbackEventFile)) {
+	case "", "off", "disabled", "none", "-":
+		return true
+	}
+	return false
+}
+
 // defaultExecutionFile 是执行明细回写的默认路径。
-//
 // 与收件箱（api/data/inbox.jsonl）同理：引擎写、API 读，两个进程共用一份
 // 数据目录，因此默认指向 API 侧的执行明细文件。
 const defaultExecutionFile = "api/data/executions.jsonl"

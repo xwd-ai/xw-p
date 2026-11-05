@@ -34,8 +34,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from .auth import EnvContext, require_env
 from .execution_log import ExecutionCursor, ExecutionQuery, get_execution_store
 from .timeutil import decode_position, encode_position, parse_dt
 
@@ -89,11 +90,13 @@ def _cursor_of(item: dict) -> Optional[str]:
     ),
 )
 def list_executions(
+    env: EnvContext = Depends(require_env),
     trigger_id: Optional[str] = Query(default=None, alias="triggerId", description="按触发唯一标识过滤"),
     channel: Optional[str] = Query(default=None, description="按投递渠道过滤"),
     status: Optional[str] = Query(default=None, description="按投递结果过滤（sent/failed/skipped）"),
     since: Optional[datetime] = Query(default=None, description="起始时间（ISO 8601，含）"),
     until: Optional[datetime] = Query(default=None, description="截止时间（ISO 8601，含）"),
+    environment: Optional[str] = Query(default=None, description="按隔离环境过滤（默认取 X-Environment）"),
     limit: int = Query(default=_DEFAULT_LIMIT, ge=1, le=_MAX_LIMIT, description="单页条数上限"),
     cursor: Optional[str] = Query(default=None, description="上一页返回的 nextCursor"),
 ) -> dict:
@@ -109,6 +112,8 @@ def list_executions(
     # 多取一条用于判断是否还有下一页
     rows = get_execution_store().query(
         ExecutionQuery(
+            tenant=env.tenant,
+            environment=environment or env.environment,
             trigger_id=trigger_id,
             channel=channel,
             status=status,

@@ -148,11 +148,17 @@ type Event struct {
 	Workflow      string              `json:"workflow"`
 	SubscriberID  string              `json:"subscriber_id,omitempty"`
 	Status        string              `json:"status,omitempty"`
-	Summary       *Summary            `json:"summary,omitempty"`
-	Deliveries    []Delivery          `json:"deliveries,omitempty"`
-	Delivery      *Delivery           `json:"delivery,omitempty"`
-	Trigger       *Trigger            `json:"trigger,omitempty"`
-	Digest        *Digest             `json:"digest,omitempty"`
+	// Replay 标记这是一条人工重发的事件。
+	//
+	// 事件标识保持不变：接收方按 id 去重，重放正是希望它识别出「这条已经
+	// 处理过」。同时给出这个标记，让接收方可以区分「第一次没收到」与
+	// 「收到过但当时处理失败」——两者的处置策略并不相同。
+	Replay     bool       `json:"replay,omitempty"`
+	Summary    *Summary   `json:"summary,omitempty"`
+	Deliveries []Delivery `json:"deliveries,omitempty"`
+	Delivery   *Delivery  `json:"delivery,omitempty"`
+	Trigger    *Trigger   `json:"trigger,omitempty"`
+	Digest     *Digest    `json:"digest,omitempty"`
 }
 
 // ErrInvalidEvent 表示事件缺必填字段或自相矛盾。

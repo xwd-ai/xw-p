@@ -77,6 +77,8 @@ func buildRecord(msg queue.QueuedMessage, res pipeline.StepResult) (execution.Re
 		}
 		return execution.Record{
 			TriggerID:    msg.TriggerID,
+			Tenant:       tenantOr(msg.Tenant),
+			Environment:  environmentOr(msg.Environment),
 			Workflow:     msg.Name,
 			SubscriberID: msg.SubscriberID,
 			StepID:       res.StepID,
@@ -95,6 +97,8 @@ func buildRecord(msg queue.QueuedMessage, res pipeline.StepResult) (execution.Re
 
 	record := execution.Record{
 		TriggerID:    msg.TriggerID,
+		Tenant:       tenantOr(msg.Tenant),
+		Environment:  environmentOr(msg.Environment),
 		Workflow:     msg.Name,
 		SubscriberID: msg.SubscriberID,
 		StepID:       res.StepID,
@@ -116,4 +120,22 @@ func buildRecord(msg queue.QueuedMessage, res pipeline.StepResult) (execution.Re
 		return execution.Record{}, false
 	}
 	return record, true
+}
+
+// tenantOr / environmentOr 把空值折算成缺省隔离维度。
+//
+// 升级前入队的消息没有这两个字段；写进明细时补默认值，API 默认租户的
+// 视图才能继续看到这些历史投递。
+func tenantOr(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "default"
+	}
+	return value
+}
+
+func environmentOr(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "development"
+	}
+	return value
 }

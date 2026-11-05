@@ -49,6 +49,10 @@ type InboxEntry struct {
 	// 聚合卡片每次命中窗口都会推进它。API 侧用它判定「已读的卡片又被新互动
 	// 顶起来」应该重新算未读。
 	UpdatedAt time.Time `json:"updated_at"`
+	// Tenant / Environment 是隔离维度：同一个收件箱文件里存着多个租户、
+	// 多个环境的消息，API 读取时按这两个字段过滤。
+	Tenant      string `json:"tenant,omitempty"`
+	Environment string `json:"environment,omitempty"`
 	// Read 标记是否已读；引擎侧始终写入 false，已读状态由 API 侧维护。
 	Read bool `json:"read"`
 }

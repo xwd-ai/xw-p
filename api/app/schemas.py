@@ -211,13 +211,28 @@ class QueuedMessage(BaseModel):
     channels: Optional[list[str]] = None
     payload: dict[str, Any] = Field(default_factory=dict)
     overrides: dict[str, Any] = Field(default_factory=dict)
+    tenant: str = Field(default="default", description="租户标识，引擎据此写入隔离的执行明细与收件箱")
+    environment: str = Field(default="development", description="隔离环境，引擎原样写进执行明细")
     workflow: Optional[WorkflowSnapshot] = Field(
         default=None, description="触发时刻的步骤定义快照，引擎按它执行工作流"
     )
 
 
-def new_queued_message(event: TriggerEvent, workflow: Optional[Workflow] = None) -> QueuedMessage:
-    """由触发请求构造入队消息；传入工作流时附带其步骤快照。"""
+def new_queued_message(
+    event: TriggerEvent,
+    workflow: Optional[Workflow] = None,
+    *,
+    tenant: Optional[str] = None,
+    environment: Optional[str] = None,
+) -> QueuedMessage:
+    """由触发请求构造入队消息；传入工作流时附带其步骤快照。
+
+    租户与环境取自请求上下文（鉴权依赖已写入）：消息把两者一起带给引擎，
+    引擎写执行明细与收件箱时才能落到正确的分区。后台线程没有请求上下文，
+    需要显式传入。
+    """
+    from . import config, tenancy
+
     return QueuedMessage(
         trigger_id=str(uuid.uuid4()),
         transaction_id=str(uuid.uuid4()),
@@ -229,5 +244,7 @@ def new_queued_message(event: TriggerEvent, workflow: Optional[Workflow] = None)
         channels=event.to.channels,
         payload=event.payload,
         overrides=event.overrides,
+        tenant=tenant or tenancy.current_tenant(),
+        environment=environment or config.ENV,
         workflow=WorkflowSnapshot.from_workflow(workflow) if workflow is not None else None,
     )

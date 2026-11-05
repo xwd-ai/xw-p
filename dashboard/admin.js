@@ -3,6 +3,8 @@
  * 页面只做三件事：读（统计与列表）、改（工作流启停、复制）、发（测试触发）。
  * 所有请求都带 X-Environment 头：后台可以切环境，切了之后写操作必须落到
  * 同一个环境，否则「在 production 视图里停用」会改掉 development 的记录。
+ * 租户由 data.js 统一附加（地址栏 ?tenant=xxx 或此前的选择），后台不再单独
+ * 提供切换入口——切租户等于换一套数据，重新进一个链接比在页面里改状态更清楚。
  *
  * 纯逻辑（查询串、表单折算、展示归一）在 admin_model.js，这里只负责 DOM
  * 与请求。错误文案统一走 describeError：FastAPI 的 detail 有字符串与数组
@@ -12,7 +14,7 @@
   'use strict';
 
   const M = window.xwAdminModel;
-  const { esc, API_BASE } = window.xwData;
+  const { esc, API_BASE, tenantHeaders } = window.xwData;
 
   let env = 'development';
   let days = 7;
@@ -30,7 +32,8 @@
   }
 
   async function request(path, options) {
-    const opts = Object.assign({ headers: { Accept: 'application/json', 'X-Environment': env } }, options || {});
+    const headers = Object.assign({ Accept: 'application/json', 'X-Environment': env }, tenantHeaders());
+    const opts = Object.assign({}, options || {}, { headers });
     if (opts.body && typeof opts.body !== 'string') {
       opts.body = JSON.stringify(opts.body);
       opts.headers = Object.assign({}, opts.headers, { 'Content-Type': 'application/json' });

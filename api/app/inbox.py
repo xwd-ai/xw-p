@@ -52,10 +52,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import NamedTuple, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from . import config
+from .auth import EnvContext, require_env
 from .storage import get_storage
 
 logger = logging.getLogger("xw.inbox")
@@ -210,16 +212,31 @@ class ReadStateStore:
 
 
 _read_store: Optional[ReadStateStore] = None
+_tenant_read_stores: dict[str, ReadStateStore] = {}
 _read_store_lock = threading.Lock()
 
 
-def get_read_store() -> ReadStateStore:
-    """获取全局已读状态单例（惰性初始化）。"""
+def get_read_store(tenant: Optional[str] = None) -> ReadStateStore:
+    """获取已读状态存储（按租户隔离，惰性初始化）。
+
+    已读状态以 ``(subscriber_id, message_id)`` 为键，两个租户的订阅者标识
+    完全可能重名，因此不能共用一份文件。
+    """
+    from . import tenancy
+
     global _read_store
+
+    key = tenancy.normalize_tenant(tenant) if tenant else tenancy.current_tenant()
     with _read_store_lock:
-        if _read_store is None:
-            _read_store = ReadStateStore()
-        return _read_store
+        if key == tenancy.DEFAULT_TENANT:
+            if _read_store is None:
+                _read_store = ReadStateStore()
+            return _read_store
+        store = _tenant_read_stores.get(key)
+        if store is None:
+            store = ReadStateStore(tenancy.scoped_path(_READ_STATE_FILE, key))
+            _tenant_read_stores[key] = store
+        return store
 
 
 # ---------------------------------------------------------------------------
@@ -374,21 +391,34 @@ def _build_snapshot(subscriber_id: str) -> InboxSnapshot:
     return InboxSnapshot(items, unread, len(items))
 
 
+def _cache_key(subscriber_id: str) -> str:
+    """缓存键：租户 + 环境 + 订阅者。
+
+    同一订阅者标识可能出现在多个租户里，只用标识做键会让一个租户读到自己
+    不该看到的收件箱快照。
+    """
+    from . import tenancy
+
+    return f"{tenancy.current_tenant()}:{tenancy.current_environment()}:{subscriber_id}"
+
+
 def _snapshot(subscriber_id: str) -> InboxSnapshot:
     """取收件箱快照：版本未变直接复用缓存，否则重算并回填。"""
     cache = get_inbox_cache()
+    key = _cache_key(subscriber_id)
     revision = _revision(subscriber_id)
-    cached = cache.get(subscriber_id, revision)
+    cached = cache.get(key, revision)
     if cached is not None:
         return cached
-    return cache.put(subscriber_id, revision, _build_snapshot(subscriber_id))
+    return cache.put(key, revision, _build_snapshot(subscriber_id))
 
 
 def _refresh_snapshot(subscriber_id: str) -> InboxSnapshot:
     """强制重算并回填缓存（读状态刚被改写时用，避免多扫一遍旧数据）。"""
     cache = get_inbox_cache()
+    key = _cache_key(subscriber_id)
     revision = _revision(subscriber_id)
-    return cache.put(subscriber_id, revision, _build_snapshot(subscriber_id))
+    return cache.put(key, revision, _build_snapshot(subscriber_id))
 
 
 
@@ -467,11 +497,27 @@ def _to_inbox_item(record: dict, read: bool) -> dict:
     }
 
 
+def _in_scope(entry: dict, tenant: str, environment: str) -> bool:
+    """判断一条收件箱来源记录是否属于当前租户与环境。
+
+    老数据没有这两个字段：按默认租户与开发环境处理，升级后原有收件箱
+    内容不会突然消失。
+    """
+    if (entry.get("tenant") or "default") != tenant:
+        return False
+    return (entry.get("environment") or "development") == environment
+
+
 def _engine_inbox_items(subscriber_id: str, store: "ReadStateStore") -> list[dict]:
     """读取引擎 in_app 步骤写入的收件箱文件，转换为收件箱条目。
 
     文件不存在（尚未运行引擎）或单行损坏时跳过，不影响兜底来源。
+    文件是多个租户共用的追加流，这里按租户与环境过滤。
     """
+    from . import tenancy
+
+    tenant = tenancy.current_tenant()
+    environment = tenancy.current_environment()
     path = _INBOX_FILE
     if not path.exists():
         return []
@@ -488,6 +534,8 @@ def _engine_inbox_items(subscriber_id: str, store: "ReadStateStore") -> list[dic
                     logger.warning("跳过损坏的收件箱行：%s", line[:80])
                     continue
                 if entry.get("subscriber_id") != subscriber_id:
+                    continue
+                if not _in_scope(entry, tenant, environment):
                     continue
                 tid = entry.get("trigger_id")
                 message_id = _message_id(entry)
@@ -536,8 +584,14 @@ def _collect_inbox(subscriber_id: str) -> list[dict]:
             seen_triggers.add(tid)
         items.append(item)
 
+    from . import tenancy
+
+    tenant = tenancy.current_tenant()
+    environment = tenancy.current_environment()
     for r in get_storage().read_all():
         if r.get("subscriber_id") != subscriber_id:
+            continue
+        if not _in_scope(r, tenant, environment):
             continue
         if not _is_inapp(r):
             continue
@@ -768,6 +822,7 @@ def stream_inbox(
         le=MAX_STREAM_INTERVAL,
         description="轮询间隔（秒），越小越实时，越大越省资源",
     ),
+    _env: EnvContext = Depends(require_env),
 ) -> StreamingResponse:
     return StreamingResponse(
         iter_inbox_events(subscriber_id, limit=limit, interval=interval),
@@ -907,6 +962,7 @@ def unread_summary(subscriber_id: str) -> UnreadSummary:
 )
 def get_unread_summary(
     subscriber_id: str = Query(alias="subscriberId", min_length=1, description="订阅者唯一标识"),
+    _env: EnvContext = Depends(require_env),
 ) -> dict:
     summary = unread_summary(subscriber_id)
     return {
@@ -942,6 +998,7 @@ def get_inbox(
     ),
     since: Optional[str] = Query(default=None, description="时间下界（含），ISO 8601"),
     until: Optional[str] = Query(default=None, description="时间上界（不含），ISO 8601"),
+    _env: EnvContext = Depends(require_env),
 ) -> dict:
     """返回某订阅者的 In-app 收件箱消息与未读计数。
 
@@ -1005,7 +1062,7 @@ def get_inbox(
         "消息不会报错，``marked=0`` 就是结论——调用方的目的已经达成。"
     ),
 )
-def mark_read(req: ReadRequest) -> dict:
+def mark_read(req: ReadRequest, _env: EnvContext = Depends(require_env)) -> dict:
     """标记消息已读，返回本次操作影响的消息数与最新未读计数。"""
     store = get_read_store()
     # 标记目标需要覆盖全部消息（含超过缓存条数上限的部分），这里取完整列表。

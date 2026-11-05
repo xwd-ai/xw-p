@@ -33,9 +33,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from .activity_log import ActivityQuery, get_activity_store
+from .auth import EnvContext, require_env
 from .timeutil import Cursor, decode_cursor, encode_cursor, parse_dt as _parse_dt
 
 router = APIRouter(prefix="/v1", tags=["activity"])
@@ -92,6 +93,7 @@ def _cursor_of(item: dict) -> Optional[str]:
     ),
 )
 def list_activity(
+    env: EnvContext = Depends(require_env),
     subscriber_id: Optional[str] = Query(default=None, alias="subscriberId", description="按订阅者过滤"),
     workflow: Optional[str] = Query(default=None, description="按工作流名过滤"),
     trigger_id: Optional[str] = Query(default=None, alias="triggerId", description="按触发唯一标识精确查询"),
@@ -113,11 +115,14 @@ def list_activity(
     # 多取一条用于判断是否还有下一页
     rows = get_activity_store().query(
         ActivityQuery(
+            tenant=env.tenant,
             subscriber_id=subscriber_id,
             workflow=workflow,
             trigger_id=trigger_id,
             status=status,
-            environment=environment,
+            # 不指定环境时按请求头收窄：活动流默认只看自己环境的记录，
+            # 管理端要看跨环境数据走 /v1/admin/activity。
+            environment=environment or env.environment,
             since=since,
             until=until,
             limit=limit + 1,

@@ -44,6 +44,9 @@ type Delivery struct {
 	WorkflowName string
 	// SubscriberID 是订阅者 ID。
 	SubscriberID string
+	// Tenant / Environment 是隔离维度，随各渠道实现落库（收件箱）时写入。
+	Tenant      string
+	Environment string
 }
 
 // Result 是一次投递的执行结果。

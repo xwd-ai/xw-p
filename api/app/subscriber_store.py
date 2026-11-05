@@ -512,23 +512,52 @@ def create_subscriber_store(backend: str, path: str | os.PathLike[str] | None = 
 
 
 _store: Optional[SubscriberStore] = None
+# 非默认租户的存储实例：按租户标识缓存，各自落在
+# ``data/tenants/<租户>/subscribers.jsonl``。默认租户沿用 ``_store``，
+# 保持既有部署的路径与测试的替换点不变。
+_tenant_stores: dict[str, SubscriberStore] = {}
 _store_lock = threading.Lock()
 
 
-def get_subscriber_store() -> SubscriberStore:
-    """获取全局订阅者存储单例（惰性初始化）。"""
+def get_subscriber_store(tenant: Optional[str] = None) -> SubscriberStore:
+    """获取订阅者存储（按租户隔离，惰性初始化）。
+
+    不传租户时取请求上下文里的租户；后台线程没有请求上下文，拿到的是
+    默认租户——那里的写入必须显式传租户，否则会落到默认租户的档案里。
+    """
+    from . import tenancy
+
     global _store
+
+    key = tenancy.normalize_tenant(tenant) if tenant else tenancy.current_tenant()
     with _store_lock:
-        if _store is None:
-            _store = create_subscriber_store("jsonl")
-        return _store
+        if key == tenancy.DEFAULT_TENANT:
+            if _store is None:
+                base = Path(os.getenv("XW_SUBSCRIBERS_FILE") or DEFAULT_SUBSCRIBERS_PATH)
+                _store = create_subscriber_store("jsonl", tenancy.scoped_path(base, key))
+            return _store
+        store = _tenant_stores.get(key)
+        if store is None:
+            base = Path(os.getenv("XW_SUBSCRIBERS_FILE") or DEFAULT_SUBSCRIBERS_PATH)
+            store = create_subscriber_store("jsonl", tenancy.scoped_path(base, key))
+            _tenant_stores[key] = store
+        return store
 
 
-def set_subscriber_store(store: Optional[SubscriberStore]) -> None:
-    """替换全局单例；传 ``None`` 表示下次取用时按配置重建（测试用）。"""
-    global _store
+def set_subscriber_store(
+    store: Optional[SubscriberStore], tenant: Optional[str] = None
+) -> None:
+    """替换某个租户的存储单例；传 ``None`` 表示下次取用时按配置重建。"""
+    from . import tenancy
+
+    key = tenancy.normalize_tenant(tenant) if tenant else tenancy.current_tenant()
     with _store_lock:
-        _store = store
+        if key == tenancy.DEFAULT_TENANT:
+            globals()["_store"] = store
+        elif store is None:
+            _tenant_stores.pop(key, None)
+        else:
+            _tenant_stores[key] = store
 
 
 __all__ = [

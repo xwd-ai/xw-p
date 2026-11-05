@@ -1914,7 +1914,7 @@
     "url": "https://github.com/xwd-ai/xw-p#readme"
   },
   "info": {
-    "description": "内容社区互动触达服务：点赞、评论、@提及等互动事件触发后，按工作流模板把通知\n分发到创作者所在的多个渠道（站内信 / 推送 / 邮件 / 短信）。\n\n## 请求约定\n\n**环境隔离**：环境按接口粒度参与。触发、订阅者写入、偏好、分组与渠道配置的\n接口从 `X-Environment` 取环境（`development` 默认 / `production`），写错直接 400\n而不是退回默认值——静默落到另一套环境比报错更难查。查询类接口（活动日志、\n执行明细、管理视图）用显式的 `environment` 参数限定范围，收件箱按订阅者标识\n寻址：这些接口的调用方通常是运营后台，一次要跨环境看数据，强制带环境头反而\n要在前端做无意义的切换。\n\n**鉴权**：读取 `X-Environment` 的环境配置了 API Key 时，请求必须带 `X-Api-Key`，\n不匹配返回 401。未配置 Key 的环境放行，便于本地与演示环境直接调用；不读环境头\n的查询接口因此也不校验 Key。\n\n**幂等**：触发类接口接受 `Idempotency-Key` 头。相同键重复提交返回首次回执、\n不重复入队；不带该头则每次都是新的一次触发。键的取值由调用方决定，通常用\n业务侧的事件标识。\n\n**分页**：列表接口用游标而不是页码。响应里的 `nextCursor` 为空表示没有更多，\n把它原样回传即可取下一页；游标编码了上一页最后一条的排序键，翻页期间有新\n数据写入也不会重复或漏掉。\n\n**时间**：请求与响应里的时间均为 ISO 8601，带时区；不带时区的入参按 UTC 解释。\n\n## 数据模型里的几个概念\n\n- **渠道**：`in_app` / `email` / `sms` / `push` / `chat` 是可投递渠道；\n  `delay` 与 `digest` 是编排步骤，不能作为投递渠道写入偏好或步骤类型。\n- **聚合（digest）**：按 `payload.post_id` 一类的聚合键 + 时间窗口把同一篇帖子的\n  互动合并成一条卡片，计数在原地累加。聚合由引擎执行，走内存总线时每条互动\n  是独立消息。\n- **跳过（skipped）**：被订阅者偏好拦下的渠道既没成功也没失败，不计入成功率\n  分母；整条消息的渠道全被拦下时消息状态是 `skipped` 而不是 `failed`。\n\n## 文档\n\n`GET /openapi.json` 返回本页对应的 schema，`GET /docs` 是 Swagger UI，\n`GET /redoc` 是 ReDoc。仓库里的 `docs/openapi.json` 是同一份内容的导出，\n可用 `scripts/export_openapi.py` 重新生成。\n",
+    "description": "内容社区互动触达服务：点赞、评论、@提及等互动事件触发后，按工作流模板把通知\n分发到创作者所在的多个渠道（站内信 / 推送 / 邮件 / 短信）。\n\n## 请求约定\n\n**租户与环境**：两者都从请求头解析——`X-Tenant-Id`（默认 `default`）决定数据\n分区，`X-Environment`（默认 `development` / 可选 `production`）决定环境。头写错\n或租户不在 `XW_TENANTS` 清单内直接 400，而不是退回默认值——静默落到另一套数据\n比报错更难查。所有 `/v1` 接口都解析这两个头；例外是部署级的 `GET /v1/dashboard/stats`\n与 `GET /v1/providers`（渠道配置与投递汇总属于整套部署）以及不区分租户的\n`GET /health`。\n\n**鉴权**：配置了 API Key 时，请求必须带 `X-Api-Key`。未配置任何 Key 的环境放行，\n便于本地与演示环境直接调用；配置后按 Key 的作用域收口：Key 不匹配或不可用于当前\n环境返回 401，用某个租户的 Key 去访问另一个租户返回 403。Key 与作用域用\n`XW_API_KEYS` 声明，形如 `[{\"key\": \"...\", \"tenant\": \"acme\", \"environments\":\n[\"production\"]}]`。\n\n**幂等**：触发类接口接受 `Idempotency-Key` 头。相同键重复提交返回首次回执、\n不重复入队；不带该头则每次都是新的一次触发。键的取值由调用方决定，通常用\n业务侧的事件标识。\n\n**分页**：列表接口用游标而不是页码。响应里的 `nextCursor` 为空表示没有更多，\n把它原样回传即可取下一页；游标编码了上一页最后一条的排序键，翻页期间有新\n数据写入也不会重复或漏掉。\n\n**时间**：请求与响应里的时间均为 ISO 8601，带时区；不带时区的入参按 UTC 解释。\n\n## 数据模型里的几个概念\n\n- **渠道**：`in_app` / `email` / `sms` / `push` / `chat` 是可投递渠道；\n  `delay` 与 `digest` 是编排步骤，不能作为投递渠道写入偏好或步骤类型。\n- **聚合（digest）**：按 `payload.post_id` 一类的聚合键 + 时间窗口把同一篇帖子的\n  互动合并成一条卡片，计数在原地累加。聚合由引擎执行，走内存总线时每条互动\n  是独立消息。\n- **跳过（skipped）**：被订阅者偏好拦下的渠道既没成功也没失败，不计入成功率\n  分母；整条消息的渠道全被拦下时消息状态是 `skipped` 而不是 `failed`。\n\n## 文档\n\n`GET /openapi.json` 返回本页对应的 schema，`GET /docs` 是 Swagger UI，\n`GET /redoc` 是 ReDoc。仓库里的 `docs/openapi.json` 是同一份内容的导出，\n可用 `scripts/export_openapi.py` 重新生成。\n",
     "license": {
       "identifier": "MIT",
       "name": "MIT"
@@ -2112,6 +2112,60 @@
               "description": "上一页返回的 nextCursor",
               "title": "Cursor"
             }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
           }
         ],
         "responses": {
@@ -2126,6 +2180,45 @@
               }
             },
             "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
           },
           "422": {
             "content": {
@@ -2344,6 +2437,60 @@
               "description": "上一页返回的 nextCursor",
               "title": "Cursor"
             }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
           }
         ],
         "responses": {
@@ -2358,6 +2505,45 @@
               }
             },
             "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
           },
           "422": {
             "content": {
@@ -2546,6 +2732,60 @@
               "title": "Top",
               "type": "integer"
             }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
           }
         ],
         "responses": {
@@ -2560,6 +2800,45 @@
               }
             },
             "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
           },
           "422": {
             "content": {
@@ -2609,6 +2888,60 @@
               "description": "按环境过滤；留空表示所有环境",
               "title": "Environment"
             }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
           }
         ],
         "responses": {
@@ -2623,6 +2956,45 @@
               }
             },
             "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
           },
           "422": {
             "content": {
@@ -2717,6 +3089,60 @@
               "title": "Top",
               "type": "integer"
             }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
           }
         ],
         "responses": {
@@ -2744,6 +3170,32 @@
               }
             },
             "description": "窗口参数冲突或区间不合法"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
           },
           "422": {
             "description": "参数越界（days / top）"
@@ -2824,6 +3276,24 @@
             }
           },
           {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
             "description": "该环境的 API Key（配置了 Key 时必填）",
             "in": "header",
             "name": "X-Api-Key",
@@ -2889,6 +3359,19 @@
             },
             "description": "API Key 缺失或不匹配"
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
+          },
           "404": {
             "description": "工作流模板不存在或未启用"
           },
@@ -2951,6 +3434,24 @@
               ],
               "description": "隔离环境：development（默认）| production",
               "title": "X-Environment"
+            }
+          },
+          {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
             }
           },
           {
@@ -3018,6 +3519,19 @@
               }
             },
             "description": "API Key 缺失或不匹配"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
           },
           "422": {
             "description": "事件列表为空或超过上限"
@@ -3127,6 +3641,24 @@
             }
           },
           {
+            "description": "按隔离环境过滤（默认取 X-Environment）",
+            "in": "query",
+            "name": "environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按隔离环境过滤（默认取 X-Environment）",
+              "title": "Environment"
+            }
+          },
+          {
             "description": "单页条数上限",
             "in": "query",
             "name": "limit",
@@ -3157,6 +3689,60 @@
               "description": "上一页返回的 nextCursor",
               "title": "Cursor"
             }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
           }
         ],
         "responses": {
@@ -3171,6 +3757,45 @@
               }
             },
             "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
           },
           "422": {
             "content": {
@@ -3303,6 +3928,60 @@
               "description": "时间上界（不含），ISO 8601",
               "title": "Until"
             }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
           }
         ],
         "responses": {
@@ -3317,6 +3996,45 @@
               }
             },
             "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
           },
           "422": {
             "content": {
@@ -3339,6 +4057,62 @@
       "post": {
         "description": "支持三种粒度：给 ``messageIds`` 标记若干条、给 ``triggerIds`` 按触发粒度标记（兼容早期调用方）、两者都不给则整份标记已读。\n\n回执给出本次实际变更的条数（``marked``）与最新未读数。重复标记是幂等的；标记一条不存在的消息不会报错，``marked=0`` 就是结论——调用方的目的已经达成。",
         "operationId": "postV1InboxRead",
+        "parameters": [
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -3361,6 +4135,45 @@
               }
             },
             "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
           },
           "422": {
             "content": {
@@ -3423,6 +4236,60 @@
               "title": "Interval",
               "type": "number"
             }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
           }
         ],
         "responses": {
@@ -3436,6 +4303,45 @@
               }
             },
             "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
           },
           "422": {
             "content": {
@@ -3470,6 +4376,60 @@
               "title": "Subscriberid",
               "type": "string"
             }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
           }
         ],
         "responses": {
@@ -3484,6 +4444,45 @@
               }
             },
             "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
           },
           "422": {
             "content": {
@@ -3602,6 +4601,24 @@
             }
           },
           {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
             "description": "该环境的 API Key（配置了 Key 时必填）",
             "in": "header",
             "name": "X-Api-Key",
@@ -3669,6 +4686,19 @@
             },
             "description": "API Key 缺失或与该环境的配置不匹配。"
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
+          },
           "409": {
             "description": "标识已存在"
           },
@@ -3734,6 +4764,24 @@
             }
           },
           {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
             "description": "该环境的 API Key（配置了 Key 时必填）",
             "in": "header",
             "name": "X-Api-Key",
@@ -3790,6 +4838,19 @@
               }
             },
             "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
           },
           "404": {
             "description": "未登记"
@@ -3909,6 +4970,24 @@
             }
           },
           {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
             "description": "该环境的 API Key（配置了 Key 时必填）",
             "in": "header",
             "name": "X-Api-Key",
@@ -3976,6 +5055,19 @@
             },
             "description": "API Key 缺失或与该环境的配置不匹配。"
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
+          },
           "404": {
             "description": "未登记"
           },
@@ -4029,6 +5121,24 @@
               ],
               "description": "隔离环境：development（默认）| production",
               "title": "X-Environment"
+            }
+          },
+          {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
             }
           },
           {
@@ -4099,6 +5209,19 @@
             },
             "description": "API Key 缺失或与该环境的配置不匹配。"
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -4118,7 +5241,7 @@
     },
     "/v1/subscribers": {
       "get": {
-        "description": "按创建顺序翻页返回订阅者；``channel`` 只保留启用了该渠道的条目，用于回答「哪些人有邮箱」。``nextCursor`` 为空表示没有更多。\n\n列表不按环境收窄：订阅者标识全局唯一，档案里带 ``environment`` 字段，由调用方按需过滤。",
+        "description": "按创建顺序翻页返回订阅者；``channel`` 只保留启用了该渠道的条目，用于回答「哪些人有邮箱」。``nextCursor`` 为空表示没有更多。\n\n列表按调用方所属租户收窄，但不按环境收窄：订阅者标识在租户内全局唯一，档案里带 ``environment`` 字段，由调用方按需过滤。",
         "operationId": "getV1Subscribers",
         "parameters": [
           {
@@ -4168,6 +5291,60 @@
               "description": "上一页返回的 nextCursor",
               "title": "Cursor"
             }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
           }
         ],
         "responses": {
@@ -4180,6 +5357,45 @@
               }
             },
             "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
           },
           "422": {
             "content": {
@@ -4217,6 +5433,24 @@
               ],
               "description": "隔离环境：development（默认）| production",
               "title": "X-Environment"
+            }
+          },
+          {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
             }
           },
           {
@@ -4285,6 +5519,19 @@
             },
             "description": "API Key 缺失或与该环境的配置不匹配。"
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -4332,6 +5579,24 @@
               ],
               "description": "隔离环境：development（默认）| production",
               "title": "X-Environment"
+            }
+          },
+          {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
             }
           },
           {
@@ -4383,6 +5648,19 @@
             },
             "description": "API Key 缺失或与该环境的配置不匹配。"
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -4411,6 +5689,60 @@
               "title": "Subscriber Id",
               "type": "string"
             }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
           }
         ],
         "responses": {
@@ -4423,6 +5755,45 @@
               }
             },
             "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
           },
           "422": {
             "content": {
@@ -4469,6 +5840,24 @@
               ],
               "description": "隔离环境：development（默认）| production",
               "title": "X-Environment"
+            }
+          },
+          {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
             }
           },
           {
@@ -4536,6 +5925,19 @@
               }
             },
             "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
           },
           "422": {
             "content": {
@@ -4623,6 +6025,24 @@
             }
           },
           {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
             "description": "该环境的 API Key（配置了 Key 时必填）",
             "in": "header",
             "name": "X-Api-Key",
@@ -4677,6 +6097,19 @@
               }
             },
             "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
           },
           "422": {
             "content": {
@@ -4744,6 +6177,24 @@
             }
           },
           {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
             "description": "该环境的 API Key（配置了 Key 时必填）",
             "in": "header",
             "name": "X-Api-Key",
@@ -4799,6 +6250,19 @@
             },
             "description": "API Key 缺失或与该环境的配置不匹配。"
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -4844,6 +6308,24 @@
               ],
               "description": "隔离环境：development（默认）| production",
               "title": "X-Environment"
+            }
+          },
+          {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
             }
           },
           {
@@ -4911,6 +6393,19 @@
               }
             },
             "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
           },
           "422": {
             "content": {
@@ -4998,6 +6493,24 @@
             }
           },
           {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
             "description": "该环境的 API Key（配置了 Key 时必填）",
             "in": "header",
             "name": "X-Api-Key",
@@ -5052,6 +6565,19 @@
               }
             },
             "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
           },
           "422": {
             "content": {
@@ -5124,6 +6650,24 @@
             }
           },
           {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
             "description": "该环境的 API Key（配置了 Key 时必填）",
             "in": "header",
             "name": "X-Api-Key",
@@ -5179,6 +6723,19 @@
             },
             "description": "API Key 缺失或与该环境的配置不匹配。"
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -5215,6 +6772,24 @@
               ],
               "description": "隔离环境：development（默认）| production",
               "title": "X-Environment"
+            }
+          },
+          {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
             }
           },
           {
@@ -5283,6 +6858,19 @@
             },
             "description": "API Key 缺失或与该环境的配置不匹配。"
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -5330,6 +6918,24 @@
               ],
               "description": "隔离环境：development（默认）| production",
               "title": "X-Environment"
+            }
+          },
+          {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
             }
           },
           {
@@ -5381,6 +6987,19 @@
             },
             "description": "API Key 缺失或与该环境的配置不匹配。"
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -5426,6 +7045,24 @@
               ],
               "description": "隔离环境：development（默认）| production",
               "title": "X-Environment"
+            }
+          },
+          {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
             }
           },
           {
@@ -5484,6 +7121,19 @@
             },
             "description": "API Key 缺失或与该环境的配置不匹配。"
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -5529,6 +7179,24 @@
               ],
               "description": "隔离环境：development（默认）| production",
               "title": "X-Environment"
+            }
+          },
+          {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
             }
           },
           {
@@ -5596,6 +7264,19 @@
               }
             },
             "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
           },
           "422": {
             "content": {
@@ -5677,6 +7358,24 @@
             }
           },
           {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
             "description": "该环境的 API Key（配置了 Key 时必填）",
             "in": "header",
             "name": "X-Api-Key",
@@ -5732,6 +7431,19 @@
             },
             "description": "API Key 缺失或与该环境的配置不匹配。"
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -5777,6 +7489,24 @@
               ],
               "description": "隔离环境：development（默认）| production",
               "title": "X-Environment"
+            }
+          },
+          {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
             }
           },
           {
@@ -5845,6 +7575,19 @@
             },
             "description": "API Key 缺失或与该环境的配置不匹配。"
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -5904,6 +7647,24 @@
             }
           },
           {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
             "description": "该环境的 API Key（配置了 Key 时必填）",
             "in": "header",
             "name": "X-Api-Key",
@@ -5951,6 +7712,19 @@
               }
             },
             "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
           },
           "422": {
             "content": {
@@ -6023,6 +7797,24 @@
             }
           },
           {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
             "description": "该环境的 API Key（配置了 Key 时必填）",
             "in": "header",
             "name": "X-Api-Key",
@@ -6088,6 +7880,19 @@
             },
             "description": "API Key 缺失或与该环境的配置不匹配。"
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -6107,8 +7912,64 @@
     },
     "/v1/workflows": {
       "get": {
-        "description": "返回模板列表，包含全部环境（条目里带 ``environment`` 字段），客户端按需过滤。列表不分页：模板数量由运营维护，量级与消息量无关。",
+        "description": "默认只返回请求环境（``X-Environment``）下的模板；要看另一套环境，显式带该环境头。列表不分页：模板数量由运营维护，量级与消息量无关。",
         "operationId": "getV1Workflows",
+        "parameters": [
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -6123,6 +7984,55 @@
               }
             },
             "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "列出工作流模板",
@@ -6133,6 +8043,62 @@
       "post": {
         "description": "创建一个工作流模板，版本号从 1 开始，默认启用。\n\n步骤按数组顺序执行；步骤标识可以自带（客户端维护 ``config.depends_on`` 时需要它稳定），留空由服务端生成。同名工作流在同一环境内唯一，重复创建返回 409。\n\n创建时会按步骤类型校验依赖：悬空引用、自依赖与依赖环都在这一层拒绝，不会等到第一条消息投递失败才暴露。",
         "operationId": "postV1Workflows",
+        "parameters": [
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -6153,6 +8119,45 @@
               }
             },
             "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
           },
           "422": {
             "content": {
@@ -6184,11 +8189,104 @@
               "title": "Workflow Id",
               "type": "string"
             }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
           }
         ],
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
           },
           "422": {
             "content": {
@@ -6218,6 +8316,60 @@
               "title": "Workflow Id",
               "type": "string"
             }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
           }
         ],
         "responses": {
@@ -6230,6 +8382,45 @@
               }
             },
             "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
           },
           "422": {
             "content": {
@@ -6259,6 +8450,60 @@
               "title": "Workflow Id",
               "type": "string"
             }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
           }
         ],
         "requestBody": {
@@ -6281,6 +8526,45 @@
               }
             },
             "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
           },
           "422": {
             "content": {
@@ -6312,6 +8596,60 @@
               "title": "Workflow Id",
               "type": "string"
             }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
           }
         ],
         "requestBody": {
@@ -6334,6 +8672,45 @@
               }
             },
             "description": "启停结果"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
           },
           "404": {
             "description": "工作流不存在"
@@ -6368,6 +8745,60 @@
               "title": "Workflow Id",
               "type": "string"
             }
+          },
+          {
+            "description": "隔离环境：development（默认）| production",
+            "in": "header",
+            "name": "X-Environment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "隔离环境：development（默认）| production",
+              "title": "X-Environment"
+            }
+          },
+          {
+            "description": "租户标识（默认 default）",
+            "in": "header",
+            "name": "X-Tenant-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "租户标识（默认 default）",
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "description": "该环境的 API Key（配置了 Key 时必填）",
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "该环境的 API Key（配置了 Key 时必填）",
+              "title": "X-Api-Key"
+            }
           }
         ],
         "requestBody": {
@@ -6397,6 +8828,45 @@
               }
             },
             "description": "副本已创建"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "未知环境：staging（支持：development, production）"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "请求参数不合法或互相冲突（例如未知环境、时间区间倒置）。"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 缺失或不匹配"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "API Key 缺失或与该环境的配置不匹配。"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "API Key 属于租户 acme，不能访问租户 other"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "凭据有效，但没有访问目标租户的权限。"
           },
           "404": {
             "description": "源工作流不存在"

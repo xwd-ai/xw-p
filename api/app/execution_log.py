@@ -69,8 +69,14 @@ class ExecutionCursor:
 
 @dataclass(frozen=True)
 class ExecutionQuery:
-    """执行明细查询条件（过滤 + 游标翻页）。"""
+    """执行明细查询条件（过滤 + 游标翻页）。
 
+    ``tenant`` / ``environment`` 是隔离维度：不传表示不按该维度收窄，
+    接口层总会传入当前请求的租户，管理端再按需指定环境。
+    """
+
+    tenant: Optional[str] = None
+    environment: Optional[str] = None
     trigger_id: Optional[str] = None
     channel: Optional[str] = None
     status: Optional[str] = None
@@ -89,7 +95,12 @@ class ExecutionStore(Protocol):
 
     def read_all(self) -> list[dict[str, Any]]: ...
 
-    def scan(self, since: Optional[datetime] = None, until: Optional[datetime] = None) -> Iterator[dict[str, Any]]: ...
+    def scan(
+        self,
+        since: Optional[datetime] = None,
+        until: Optional[datetime] = None,
+        tenant: Optional[str] = None,
+    ) -> Iterator[dict[str, Any]]: ...
 
 
 def record_key(record: dict[str, Any]) -> str:
@@ -116,6 +127,10 @@ def is_older_than(record: dict[str, Any], cursor: ExecutionCursor) -> bool:
 
 def matches(record: dict[str, Any], q: ExecutionQuery) -> bool:
     """按查询条件判断一条记录是否命中（JSONL / 内存后端共用）。"""
+    if q.tenant and (record.get("tenant") or "default") != q.tenant:
+        return False
+    if q.environment and (record.get("environment") or "development") != q.environment:
+        return False
     if q.trigger_id and record.get("trigger_id") != q.trigger_id:
         return False
     if q.channel and record.get("channel") != q.channel:
@@ -131,6 +146,13 @@ def matches(record: dict[str, Any], q: ExecutionQuery) -> bool:
         if q.until is not None and dt > q.until:
             return False
     return True
+
+
+def _in_tenant(record: dict[str, Any], tenant: Optional[str]) -> bool:
+    """记录是否属于指定租户；``tenant`` 为空表示不按租户收窄。"""
+    if not tenant:
+        return True
+    return (record.get("tenant") or "default") == tenant
 
 
 def _in_window(
@@ -219,7 +241,12 @@ class JSONLExecutionStore:
                         logger.warning("跳过损坏的执行明细行：%s", line[:80])
             return records
 
-    def scan(self, since: Optional[datetime] = None, until: Optional[datetime] = None) -> Iterator[dict[str, Any]]:
+    def scan(
+        self,
+        since: Optional[datetime] = None,
+        until: Optional[datetime] = None,
+        tenant: Optional[str] = None,
+    ) -> Iterator[dict[str, Any]]:
         """按时间窗顺序遍历记录（统计聚合用）。
 
         只持有文件句柄、不持有写锁：写入方用另一个描述符追加，互不阻塞。逐行
@@ -237,7 +264,11 @@ class JSONLExecutionStore:
                 except json.JSONDecodeError:
                     logger.warning("跳过损坏的执行明细行：%s", line[:80])
                     continue
-                if isinstance(record, dict) and _in_window(record, since, until):
+                if (
+                    isinstance(record, dict)
+                    and _in_window(record, since, until)
+                    and _in_tenant(record, tenant)
+                ):
                     yield record
 
 
@@ -266,12 +297,17 @@ class MemoryExecutionStore:
         with self._lock:
             return list(self._records)
 
-    def scan(self, since: Optional[datetime] = None, until: Optional[datetime] = None) -> Iterator[dict[str, Any]]:
+    def scan(
+        self,
+        since: Optional[datetime] = None,
+        until: Optional[datetime] = None,
+        tenant: Optional[str] = None,
+    ) -> Iterator[dict[str, Any]]:
         """按时间窗遍历记录；先取快照再迭代，聚合期间的新写入不改变本次结果。"""
         with self._lock:
             snapshot = list(self._records)
         for record in snapshot:
-            if _in_window(record, since, until):
+            if _in_window(record, since, until) and _in_tenant(record, tenant):
                 yield record
 
 
@@ -298,9 +334,9 @@ class PostgresExecutionStore:
                 text(
                     """
                     INSERT INTO execution_details
-                        (trigger_id, channel, status, reason, duration_ms)
+                        (trigger_id, channel, status, reason, duration_ms, tenant, environment)
                     VALUES
-                        (:trigger_id, :channel, :status, :reason, :duration_ms)
+                        (:trigger_id, :channel, :status, :reason, :duration_ms, :tenant, :environment)
                     """
                 ),
                 {
@@ -309,6 +345,8 @@ class PostgresExecutionStore:
                     "status": record.get("status", "sent"),
                     "reason": record.get("reason"),
                     "duration_ms": record.get("duration_ms", 0),
+                    "tenant": record.get("tenant") or "default",
+                    "environment": record.get("environment") or "development",
                 },
             )
 
@@ -329,6 +367,12 @@ class PostgresExecutionStore:
     def _build_where(self, q: ExecutionQuery) -> tuple[list[str], dict[str, Any]]:
         where: list[str] = []
         params: dict[str, Any] = {}
+        if q.tenant:
+            where.append("COALESCE(tenant, 'default') = :tenant")
+            params["tenant"] = q.tenant
+        if q.environment:
+            where.append("COALESCE(environment, 'development') = :environment")
+            params["environment"] = q.environment
         if q.trigger_id:
             where.append("trigger_id = :trigger_id")
             params["trigger_id"] = self._as_uuid(q.trigger_id)
@@ -384,15 +428,25 @@ class PostgresExecutionStore:
             "status": d.get("status", "sent"),
             "reason": d.get("reason"),
             "duration_ms": d.get("duration_ms", 0),
+            "tenant": d.get("tenant") or "default",
+            "environment": d.get("environment") or "development",
             "created_at": d.get("created_at"),
         }
 
-    def scan(self, since: Optional[datetime] = None, until: Optional[datetime] = None) -> Iterator[dict[str, Any]]:
+    def scan(
+        self,
+        since: Optional[datetime] = None,
+        until: Optional[datetime] = None,
+        tenant: Optional[str] = None,
+    ) -> Iterator[dict[str, Any]]:
         """按时间窗遍历记录（统计聚合用，服务端游标流式返回）。"""
         from sqlalchemy import text
 
         where: list[str] = []
         params: dict[str, Any] = {}
+        if tenant:
+            where.append("COALESCE(tenant, 'default') = :tenant")
+            params["tenant"] = tenant
         if since is not None:
             where.append("created_at >= :since")
             params["since"] = since
@@ -455,13 +509,22 @@ def record_execution(
     status: str = "sent",
     reason: Optional[str] = None,
     duration_ms: int = 0,
+    tenant: Optional[str] = None,
+    environment: Optional[str] = None,
 ) -> dict[str, Any]:
     """写入一条执行明细并返回落库记录。
 
     供 worker 在逐渠道投递时调用：每个 ``(trigger_id, channel)`` 各写一条。
     """
+    if tenant is None or environment is None:
+        from . import tenancy
+
+        tenant = tenant or tenancy.current_tenant()
+        environment = environment or config.ENV
     record = {
         "id": uuid.uuid4().hex,
+        "tenant": tenant,
+        "environment": environment,
         "trigger_id": trigger_id,
         "channel": channel,
         "status": status,

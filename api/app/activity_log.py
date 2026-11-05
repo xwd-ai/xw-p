@@ -56,6 +56,7 @@ class ActivityQuery:
     片段（「谁」「哪个帖子」「哪个工作流」），要求先把字段名对上不合理。
     """
 
+    tenant: Optional[str] = None
     subscriber_id: Optional[str] = None
     workflow: Optional[str] = None
     trigger_id: Optional[str] = None
@@ -135,6 +136,8 @@ def _keyword_hit(record: dict[str, Any], keyword: str) -> bool:
 
 def matches(record: dict[str, Any], q: ActivityQuery) -> bool:
     """按查询条件判断一条记录是否命中（JSONL / 内存后端共用）。"""
+    if q.tenant and (record.get("tenant") or "default") != q.tenant:
+        return False
     if q.environment:
         if (record.get("environment") or "development") != q.environment:
             return False
@@ -363,6 +366,11 @@ class PostgresActivityStore:
     def _build_where(self, q: ActivityQuery, include_cursor: bool = True) -> tuple[list[str], dict[str, Any]]:
         where: list[str] = []
         params: dict[str, Any] = {}
+        if q.tenant:
+            # 早期记录没有 tenant 列，按默认租户处理；否则升级后历史数据
+            # 会在默认租户的视图里凭空消失。
+            where.append("COALESCE(tenant, 'default') = :tenant")
+            params["tenant"] = q.tenant
         if q.environment:
             where.append("environment = :environment")
             params["environment"] = q.environment
@@ -436,6 +444,7 @@ class PostgresActivityStore:
             "status": d.get("status", "triggered"),
             "title": d.get("title"),
             "environment": d.get("environment") or config.ENV,
+            "tenant": d.get("tenant") or "default",
             "created_at": d.get("created_at"),
         }
 
@@ -508,6 +517,7 @@ def build_activity(
     title: Optional[str] = None,
     payload: Optional[dict[str, Any]] = None,
     environment: Optional[str] = None,
+    tenant: Optional[str] = None,
 ) -> dict[str, Any]:
     """构造一条活动日志记录（不落库）。
 
@@ -515,8 +525,13 @@ def build_activity(
     ``environment`` 打标隔离环境（默认 development），供活动流按环境过滤。
     """
     resolved_title = title or ((payload or {}).get("title") if payload else None) or workflow
+    if tenant is None:
+        from . import tenancy
+
+        tenant = tenancy.current_tenant()
     return {
         "trigger_id": trigger_id,
+        "tenant": tenant,
         "workflow": workflow,
         "subscriber_id": subscriber_id,
         "channels": channels or ["in_app"],
@@ -537,6 +552,7 @@ def record_activity(
     title: Optional[str] = None,
     payload: Optional[dict[str, Any]] = None,
     environment: Optional[str] = None,
+    tenant: Optional[str] = None,
 ) -> dict[str, Any]:
     """写入一条活动日志并返回落库记录。
 
@@ -551,6 +567,7 @@ def record_activity(
         title=title,
         payload=payload,
         environment=environment,
+        tenant=tenant,
     )
     get_activity_store().append(record)
     return record

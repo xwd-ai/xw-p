@@ -94,6 +94,8 @@ func (p *inAppProvider) Send(d Delivery) SendResult {
 		StepID:       d.StepID,
 		Title:        inAppTitle(d),
 		Body:         body,
+		Tenant:       d.Tenant,
+		Environment:  d.Environment,
 		CreatedAt:    now,
 		// 普通站内信没有「原地改写」语义，更新时间与创建时间一致。
 		UpdatedAt: now,

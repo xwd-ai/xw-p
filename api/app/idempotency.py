@@ -120,14 +120,63 @@ def create_idempotency_store() -> IdempotencyStore:
     return MemoryIdempotencyStore()
 
 
+class ScopedIdempotencyStore:
+    """按租户给幂等键加前缀的包装。
+
+    幂等键由调用方生成（常见写法是业务单号），两个租户用同一个键完全正常；
+    不加前缀会让后到的租户命中前一个租户的回执，拿到别人的触发标识。包装
+    而不是改后端，是因为内存与 Redis 两种实现的键空间都只有「一个字符串」。
+    """
+
+    def __init__(self, inner: IdempotencyStore, tenant: str) -> None:
+        self._inner = inner
+        self._tenant = tenant
+
+    def _scoped(self, key: str) -> str:
+        return f"{self._tenant}:{key}"
+
+    def get(self, key: str) -> Optional[dict[str, Any]]:
+        return self._inner.get(self._scoped(key))
+
+    def put_if_absent(self, key: str, value: dict[str, Any], ttl: int) -> bool:
+        return self._inner.put_if_absent(self._scoped(key), value, ttl)
+
+
 _store: Optional[IdempotencyStore] = None
+_tenant_stores: dict[str, IdempotencyStore] = {}
 _store_lock = threading.Lock()
 
 
-def get_idempotency_store() -> IdempotencyStore:
-    """获取全局幂等存储单例（惰性初始化）。"""
+def get_idempotency_store(tenant: Optional[str] = None) -> IdempotencyStore:
+    """获取幂等存储（按租户隔离，惰性初始化）。"""
+    from . import tenancy
+
     global _store
+
+    key = tenancy.normalize_tenant(tenant) if tenant else tenancy.current_tenant()
     with _store_lock:
-        if _store is None:
-            _store = create_idempotency_store()
-        return _store
+        if key == tenancy.DEFAULT_TENANT:
+            if _store is None:
+                _store = create_idempotency_store()
+            return _store
+        store = _tenant_stores.get(key)
+        if store is None:
+            store = ScopedIdempotencyStore(create_idempotency_store(), key)
+            _tenant_stores[key] = store
+        return store
+
+
+def set_idempotency_store(
+    store: Optional[IdempotencyStore], tenant: Optional[str] = None
+) -> None:
+    """替换某个租户的幂等存储；传 ``None`` 表示下次取用时按配置重建。"""
+    from . import tenancy
+
+    key = tenancy.normalize_tenant(tenant) if tenant else tenancy.current_tenant()
+    with _store_lock:
+        if key == tenancy.DEFAULT_TENANT:
+            globals()["_store"] = store
+        elif store is None:
+            _tenant_stores.pop(key, None)
+        else:
+            _tenant_stores[key] = store

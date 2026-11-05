@@ -664,6 +664,8 @@ func (p *Pipeline) deliverDigest(ctx *Context, step domain.Step, spec DigestSpec
 			StepID:       step.ID,
 			Title:        title,
 			Body:         body,
+			Tenant:       tenantOf(ctx.Msg),
+			Environment:  environmentOf(ctx.Msg),
 			// 开卡时刻固定不变，窗口内的互动只推进 UpdatedAt：收件箱按更新时间
 			// 排序能把被顶起来的卡片排到前面，同时保留「这张卡是什么时候开的」。
 			CreatedAt: card.OpenedAt.UTC(),

@@ -32,10 +32,41 @@
   // API 基地址：默认同源（dashboard 由 FastAPI 静态托管或反向代理时可用）
   const API_BASE = window.XW_API_BASE || '';
 
+  // 租户标识：默认租户不必显式发送（后端缺省就是 default）。
+  //
+  // 优先取地址栏的 ?tenant=acme，取到就记下来，后续页面切换沿用同一个租户；
+  // 展示链接里带上租户，比让每个人手动改请求头更不容易出错。
+  const TENANT_KEY = 'xw.tenant';
+  const TENANT_RE = /^[a-z0-9](?:[a-z0-9_-]{0,30}[a-z0-9])?$/;
+
+  function currentTenant() {
+    try {
+      const fromUrl = new URLSearchParams(window.location.search || '').get('tenant');
+      if (fromUrl) {
+        const value = fromUrl.trim().toLowerCase();
+        if (TENANT_RE.test(value)) {
+          window.localStorage.setItem(TENANT_KEY, value);
+          return value;
+        }
+      }
+      const saved = window.localStorage.getItem(TENANT_KEY) || '';
+      return TENANT_RE.test(saved) ? saved : '';
+    } catch (err) {
+      // 隐私模式下 localStorage 会抛错：不带租户头也能用，不该因此白屏。
+      return '';
+    }
+  }
+
+  // 租户请求头：只在明确了租户时附加，避免把默认租户写死进客户端。
+  function tenantHeaders() {
+    const tenant = currentTenant();
+    return tenant ? { 'X-Tenant-Id': tenant } : {};
+  }
+
   // 轻量 fetch 封装：失败时 reject，由调用方决定兜底策略
   // options 透传 fetch 参数（如 method/headers/body），支持 POST 触发等写操作
   async function api(path, options) {
-    const opts = Object.assign({ headers: { 'Accept': 'application/json' } }, options || {});
+    const opts = Object.assign({ headers: Object.assign({ 'Accept': 'application/json' }, tenantHeaders()) }, options || {});
     if (opts.body && typeof opts.body !== 'string') {
       opts.body = JSON.stringify(opts.body);
       opts.headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers);
@@ -72,5 +103,5 @@
       .replace(/[&<>"']/g, ch => ESC_MAP[ch]);
   }
 
-  window.xwData = { CH, seed, subs, API_BASE, api, esc };
+  window.xwData = { CH, seed, subs, API_BASE, api, esc, currentTenant, tenantHeaders };
 })();

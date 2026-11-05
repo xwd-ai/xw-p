@@ -84,6 +84,8 @@ func (d *dispatchStage) Apply(ctx *Context, step domain.Step) error {
 		TriggerID:    ctx.Msg.TriggerID,
 		WorkflowName: ctx.Msg.Name,
 		SubscriberID: ctx.Msg.SubscriberID,
+		Tenant:       tenantOf(ctx.Msg),
+		Environment:  environmentOf(ctx.Msg),
 	}
 
 	// 按优先级依次尝试该渠道的实现：首个是默认实现，其后是备选。

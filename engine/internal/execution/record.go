@@ -97,6 +97,9 @@ type Record struct {
 	ID string `json:"id"`
 	// TriggerID 定位这次触发。
 	TriggerID string `json:"trigger_id"`
+	// Tenant / Environment 是隔离维度，API 读取时据此收窄。
+	Tenant      string `json:"tenant,omitempty"`
+	Environment string `json:"environment,omitempty"`
 	// Workflow / SubscriberID / StepID 说明这条记录属于哪次执行的哪个步骤。
 	Workflow     string `json:"workflow,omitempty"`
 	SubscriberID string `json:"subscriber_id,omitempty"`

@@ -38,6 +38,20 @@ from .storage import get_storage
 logger = logging.getLogger("xw.worker")
 
 
+def _record(msg: QueuedMessage, **fields) -> dict:
+    """写一条执行明细，补齐该消息的租户与环境。
+
+    后台线程没有请求上下文，租户必须从消息里取；漏掉这一补，租户 B 的投递
+    明细会落在默认租户下，只有默认租户看得见。
+    """
+    return record_execution(
+        trigger_id=msg.trigger_id,
+        tenant=msg.tenant,
+        environment=msg.environment,
+        **fields,
+    )
+
+
 class Worker:
     """持续消费消息总线的后台线程。"""
 
@@ -106,8 +120,7 @@ class Worker:
             if channel is None:
                 reason = f"未知渠道：{raw!r}"
                 attempted.append(str(raw))
-                record_execution(
-                    trigger_id=msg.trigger_id, channel=str(raw), status="failed", reason=reason
+                _record(msg, channel=str(raw), status="failed", reason=reason
                 )
                 failures.append(reason)
                 continue
@@ -117,9 +130,7 @@ class Worker:
                 # 被偏好拦下的渠道连实现都不取：既不发请求，也不该出现在
                 # 「实现不可用」之类的失败原因里——它压根没打算发。
                 skipped.append(decision)
-                record_execution(
-                    trigger_id=msg.trigger_id,
-                    channel=channel.value,
+                _record(msg, channel=channel.value,
                     status="skipped",
                     reason=decision.skip_reason,
                 )
@@ -129,8 +140,7 @@ class Worker:
             provider = registry.get(channel)
             if provider is None:
                 reason = f"渠道 {channel.value} 没有可用的渠道实现"
-                record_execution(
-                    trigger_id=msg.trigger_id, channel=channel.value, status="failed", reason=reason
+                _record(msg, channel=channel.value, status="failed", reason=reason
                 )
                 failures.append(f"{channel.value}: {reason}")
                 continue
@@ -148,9 +158,7 @@ class Worker:
                     },
                 )
             )
-            record_execution(
-                trigger_id=msg.trigger_id,
-                channel=channel.value,
+            _record(msg, channel=channel.value,
                 status="sent" if result.sent else "failed",
                 reason=result.reason,
                 duration_ms=result.duration_ms,
@@ -186,6 +194,8 @@ class Worker:
             outcome = "sent"
 
         record = {
+            "tenant": msg.tenant,
+            "environment": msg.environment,
             "trigger_id": msg.trigger_id,
             "transaction_id": msg.transaction_id,
             "workflow": msg.name,
