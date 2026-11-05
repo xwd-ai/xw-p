@@ -51,6 +51,7 @@ engine/     Go：执行引擎、队列消费、provider 分发、digest、死信
 dashboard/  原生 HTML/CSS/JS 展示前端（仪表盘 + 可视化工作流编排器 + 实时活动流 + 运营后台）
 sdk/python/ Python 客户端：触发、订阅者与偏好接口，只依赖标准库
 sdk/go/     Go 客户端：单条与批量触发，独立模块、只依赖标准库
+demo/       演示应用：内容社区业务侧经 SDK 触发互动事件
 infra/      docker-compose 与基础设施配置
 docs/       文档
 scripts/    演示与辅助脚本
@@ -107,6 +108,8 @@ ack, err := client.Trigger(ctx,
 批量触发用 `client.TriggerBatch(ctx, events)`，逐条结果与请求等长且按下标对齐（被拒条目带原因）。
 
 完整的 SDK 指南见 [`docs/sdk.md`](docs/sdk.md)：安装、单条与批量触发、订阅者与三层偏好、收件箱分页、错误排查表，以及各接口与两个客户端的对照。
+
+完整的接入示例在 [`demo/`](demo/)：一个内容社区演示应用（创作者发帖、点赞/评论/@提及经 SDK 触发通知），含运行说明与走查命令。
 
 ### 错误分类与重试约定
 
@@ -208,7 +211,7 @@ if errors.As(err, &apiErr) {
 
 ## 鉴权
 
-两种凭据，解析结果都是「租户 + 环境」：服务端用 `X-Api-Key`（`XW_API_KEYS` 声明租户、环境与可选的 `roles`），运营后台用 `Authorization: Bearer <JWT>`——`POST /v1/auth/token` 用管理员账号口令换取，有效期由 `XW_JWT_TTL` 决定。运维接口 `/v1/admin/*` 只接受后台令牌或带 `admin` 角色的 Key；未配置 `XW_JWT_SECRET` 的部署保持 demo 语义。配置、声明与状态码见 [docs/auth.md](docs/auth.md)。
+两种凭据，解析结果都是「租户 + 环境」：服务端用 `X-Api-Key`（`XW_API_KEYS` 声明租户、环境与可选的 `roles`），运营后台用 `Authorization: Bearer <JWT>`——`POST /v1/auth/token` 用管理员账号口令换取，有效期由 `XW_JWT_TTL` 决定。运维接口 `/v1/admin/*` 只接受后台令牌或带 `admin` 角色的 Key；未配置 `XW_JWT_SECRET` 的部署保持 demo 语义。配置、声明与状态码见 [docs/auth.md](docs/auth.md)。部署前的安全对照清单与已知限制见 [docs/security.md](docs/security.md)。
 
 ## 多租户
 
@@ -276,6 +279,9 @@ api/.venv/bin/python scripts/coverage.py
 
 # Python 客户端
 api/.venv/bin/python -m pytest sdk/python/tests -q
+
+# 演示应用（假传输层，不联网）
+api/.venv/bin/python -m pytest demo -q
 
 # Go 客户端
 cd sdk/go && go test ./...
