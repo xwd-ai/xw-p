@@ -12,7 +12,7 @@
 
 ```bash
 # 仓库根目录，SDK 不必安装，示例直接引用 sdk/python
-api/.venv/bin/uvicorn examples.demo_app.app:app --port 8100
+api/.venv/bin/uvicorn demo.app:app --port 8100
 ```
 
 指向别的部署用环境变量（与 SDK 示例同一组）：
@@ -65,5 +65,5 @@ curl -s "$BASE/creators/creator-1001/inbox?unread=true"
 假传输层记录请求、不联网，断言的是「业务侧把什么交给平台」：
 
 ```bash
-api/.venv/bin/python -m pytest examples/demo_app -q
+api/.venv/bin/python -m pytest demo -q
 ```

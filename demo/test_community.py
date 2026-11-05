@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, urlsplit
 from xw_notify import Client
 from xw_notify._http import Request, Response
 
-from examples.demo_app.community import Community, CommunityError
+from demo.community import Community, CommunityError
 
 
 class FakeTransport:

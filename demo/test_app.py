@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from xw_notify import Client  # noqa: E402
 from xw_notify._http import Request, Response  # noqa: E402
 
-from examples.demo_app.app import create_app  # noqa: E402
+from demo.app import create_app  # noqa: E402
 
 
 class FakeTransport:

@@ -1,10 +1,10 @@
 """演示应用的 HTTP 入口：FastAPI 路由接到 Community 服务。
 
     cd <仓库根目录>
-    api/.venv/bin/uvicorn examples.demo_app.app:app --port 8100
+    api/.venv/bin/uvicorn demo.app:app --port 8100
 
 路由只做「解析请求 → 调服务 → 把回执折成响应」，通知语义全部在
-:mod:`examples.demo_app.community` 与 SDK 里。应用不落库，帖子与档案
+:mod:`demo.community` 与 SDK 里。应用不落库，帖子与档案
 存在进程内存里，重启即空——演示项目要展示的是接入方式，不是存储。
 """
 from __future__ import annotations

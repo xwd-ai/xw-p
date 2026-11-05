@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "sdk" / "python"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "sdk" / "python"))
 
 from xw_notify import Client, TriggerAck  # noqa: E402  （需在路径装配之后）
 
