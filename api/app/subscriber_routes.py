@@ -7,7 +7,10 @@
 
 约定：
 
-- 写操作走 ``require_env``，记录按请求头里的环境打标，唯一性判定也按环境分隔；
+- 读写都走 ``require_env``，记录的键是「环境 + 标识」：同一个标识在开发环境与
+  生产环境各有一条档案，改一边不会动到另一边；
+- 按标识读取、更新、删除时，另一套环境的同名档案按「本环境没有这个人」处理
+  （404），而不是把两边的记录混在一起读；
 - 渠道列表整体替换而不是增量增删，避免「先查再改」在并发下丢更新；
 - 删除成功返回 204，重复删除返回 404 —— 让调用方知道这次是不是白跑一趟。
 """
@@ -52,6 +55,17 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _find(store, subscriber_id: str, environment: str) -> Subscriber:
+    """按「环境 + 标识」取订阅者；另一套环境的同名档案视为不存在。"""
+    subscriber = store.get(subscriber_id, environment=environment)
+    if subscriber is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"订阅者不存在：{subscriber_id}（环境 {environment}）",
+        )
+    return subscriber
+
+
 @router.post(
     "",
     response_model=SubscriberOut,
@@ -61,7 +75,8 @@ def _now() -> datetime:
         "登记一个收件人：渠道绑定 + 各渠道的收件地址。标识可自带（把业务侧的用户 ID 带进来），"
         "留空则生成 UUID。\n\n"
         "**唯一性**：标识重复、或邮箱/手机号已被别人绑定，返回 409 并点名占用者，"
-        "而不是覆盖——渠道绑定被悄悄换掉比创建失败更难查。\n\n"
+        "而不是覆盖——渠道绑定被悄悄换掉比创建失败更难查。唯一性按环境判定："
+        "同一个标识、同一个邮箱可以在开发与生产各有一份档案。\n\n"
         "**规范化**：邮箱统一存小写、手机号存 E.164，因此查重、渲染与投递看到的是同一个字符串。"
         "只有本地手机号时按 ``XW_SUBSCRIBER_COUNTRY_CODE`` 补区号，没配就报错而不是按位数猜。"
     ),
@@ -103,12 +118,12 @@ def create_subscriber(
     description=(
         "按创建顺序翻页返回订阅者；``channel`` 只保留启用了该渠道的条目，"
         "用于回答「哪些人有邮箱」。``nextCursor`` 为空表示没有更多。\n\n"
-        "列表按调用方所属租户收窄，但不按环境收窄：订阅者标识在租户内全局唯一，"
-        "档案里带 ``environment`` 字段，由调用方按需过滤。"
+        "列表按调用方所属租户与环境收窄：另一样本环境的档案不会混进来，"
+        "同一个标识在两套环境各有一条时也会分别出现。"
     ),
 )
 def list_subscribers(
-    _env: EnvContext = Depends(require_env),
+    env: EnvContext = Depends(require_env),
     channel: str | None = Query(default=None, description="只看启用了该渠道的订阅者"),
     limit: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     cursor: str | None = Query(default=None, description="上一页返回的 nextCursor"),
@@ -132,6 +147,7 @@ def list_subscribers(
     try:
         items, next_cursor = get_subscriber_store().list(
             channel=selected,
+            environment=env.environment,
             limit=limit,
             cursor=cursor,
         )
@@ -148,19 +164,16 @@ def list_subscribers(
     "/{subscriber_id}",
     response_model=SubscriberOut,
     summary="按标识读取订阅者",
-    description="读取单个档案，含渠道绑定与规范化后的地址。标识不存在返回 404。",
+    description=(
+        "读取单个档案，含渠道绑定与规范化后的地址。标识不存在、或只存在于另一套环境，"
+        "都返回 404——跨环境读别人的档案与读一个不存在的标识，对调用方是同一件事。"
+    ),
 )
 def get_subscriber(
-    subscriber_id: str, _env: EnvContext = Depends(require_env)
+    subscriber_id: str, env: EnvContext = Depends(require_env)
 ) -> SubscriberOut:
     """按标识读取订阅者。"""
-    subscriber = get_subscriber_store().get(subscriber_id)
-    if subscriber is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"订阅者不存在：{subscriber_id}",
-        )
-    return to_subscriber_out(subscriber)
+    return to_subscriber_out(_find(get_subscriber_store(), subscriber_id, env.environment))
 
 
 @router.put(
@@ -176,21 +189,17 @@ def get_subscriber(
 def update_subscriber(
     subscriber_id: str,
     body: SubscriberUpdate,
-    _env: EnvContext = Depends(require_env),
+    env: EnvContext = Depends(require_env),
 ) -> SubscriberOut:
     """更新订阅者。
 
     只改请求里出现的字段：没写 ``phone`` 就保持原手机号，写空串才解绑。
     渠道列表整体替换，传空列表等同于把该订阅者的所有渠道关掉。
     改成别人已占用的邮箱或手机号返回 409；把地址解绑之后再被别人认领是允许的。
+    另一套环境的同名档案不在这里，按 404 处理，也不会被这次更新动到。
     """
     store = get_subscriber_store()
-    current = store.get(subscriber_id)
-    if current is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"订阅者不存在：{subscriber_id}",
-        )
+    current = _find(store, subscriber_id, env.environment)
 
     provided = body.model_dump(exclude_unset=True)
     updated = current.model_copy(
@@ -218,18 +227,19 @@ def update_subscriber(
     summary="删除订阅者",
     description=(
         "删除档案并释放其占用的地址，之后同一个邮箱或手机号可以被别人认领。\n\n"
+        "只删当前环境的那一条：同一个标识在另一套环境还有档案时，那边照旧。"
         "历史消息与执行明细保留：它们是投递事实的记录，删档案不应连带抹掉排查线索。"
     ),
 )
 def delete_subscriber(
     subscriber_id: str,
-    _env: EnvContext = Depends(require_env),
+    env: EnvContext = Depends(require_env),
 ) -> Response:
     """删除订阅者。"""
-    if not get_subscriber_store().delete(subscriber_id):
+    if not get_subscriber_store().delete(subscriber_id, environment=env.environment):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"订阅者不存在：{subscriber_id}",
+            detail=f"订阅者不存在：{subscriber_id}（环境 {env.environment}）",
         )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 

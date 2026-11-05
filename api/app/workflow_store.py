@@ -6,6 +6,11 @@
 版本号语义：
 - 创建时版本为 1。
 - 更新时版本 +1（不可回退）；调用方也可显式传入更高版本号。
+
+**环境是模板身份的一部分**：同名模板在开发与生产各有一份，名称唯一性也按
+环境判定——线上已经跑着 ``post_liked``，不该因为本地要改文案就不让建。按名称
+查找模板时必须带上环境，否则两套环境里同名的模板会互相遮蔽：生产环境触发到
+本地那份（或者反过来）只是改个名字就会发生的故障。
 """
 from __future__ import annotations
 
@@ -31,6 +36,22 @@ class WorkflowConflictError(ValueError):
 
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def environment_of(workflow: Workflow) -> str:
+    """取工作流所属环境（实体上可能是枚举，也可能是字符串）。"""
+    value = workflow.environment
+    return value.value if hasattr(value, "value") else str(value)
+
+
+def _wanted_env(value: object) -> Optional[str]:
+    """把 ``environment`` 参数归一成字符串；``None`` / 空白表示「不限环境」。"""
+    if value is None:
+        return None
+    if hasattr(value, "value"):
+        value = value.value
+    text = str(value).strip().lower()
+    return text or None
 
 
 def _workflow_from_row(row: dict[str, Any]) -> Workflow:
@@ -75,9 +96,11 @@ class WorkflowStore(Protocol):
 
     def get(self, workflow_id: str) -> Optional[Workflow]: ...
 
-    def get_by_name(self, name: str) -> Optional[Workflow]: ...
+    def get_by_name(
+        self, name: str, *, environment: object = None
+    ) -> Optional[Workflow]: ...
 
-    def list(self) -> list[Workflow]: ...
+    def list(self, *, environment: object = None) -> list[Workflow]: ...
 
     def update(self, workflow: Workflow) -> Workflow: ...
 
@@ -93,14 +116,26 @@ class MemoryWorkflowStore:
         for wf in seed or []:
             self._by_id[wf.id] = wf
 
-    def _ensure_unique_name(self, name: str, exclude_id: Optional[str] = None) -> None:
-        for wf in self._by_id.values():
-            if wf.name == name and wf.id != exclude_id:
-                raise WorkflowConflictError(f"工作流名称已存在：{name}")
+    def _ensure_unique_name(
+        self,
+        workflow: Workflow,
+        exclude_id: Optional[str] = None,
+    ) -> None:
+        """名称在同一环境内唯一；另一套环境的同名模板不参与比较。"""
+        environment = environment_of(workflow)
+        for other in self._by_id.values():
+            if (
+                other.name == workflow.name
+                and other.id != exclude_id
+                and environment_of(other) == environment
+            ):
+                raise WorkflowConflictError(
+                    f"工作流名称已存在：{workflow.name}（环境 {environment}）"
+                )
 
     def create(self, workflow: Workflow) -> Workflow:
         with self._lock:
-            self._ensure_unique_name(workflow.name)
+            self._ensure_unique_name(workflow)
             self._by_id[workflow.id] = workflow
             return workflow
 
@@ -108,22 +143,32 @@ class MemoryWorkflowStore:
         with self._lock:
             return self._by_id.get(workflow_id)
 
-    def get_by_name(self, name: str) -> Optional[Workflow]:
+    def get_by_name(
+        self, name: str, *, environment: object = None
+    ) -> Optional[Workflow]:
+        wanted = _wanted_env(environment)
         with self._lock:
             for wf in self._by_id.values():
-                if wf.name == name:
-                    return wf
+                if wf.name != name:
+                    continue
+                if wanted is not None and environment_of(wf) != wanted:
+                    continue
+                return wf
             return None
 
-    def list(self) -> list[Workflow]:
+    def list(self, *, environment: object = None) -> list[Workflow]:
+        wanted = _wanted_env(environment)
         with self._lock:
-            return list(self._by_id.values())
+            items = list(self._by_id.values())
+        if wanted is None:
+            return items
+        return [wf for wf in items if environment_of(wf) == wanted]
 
     def update(self, workflow: Workflow) -> Workflow:
         with self._lock:
             if workflow.id not in self._by_id:
                 raise WorkflowNotFoundError(f"工作流不存在：{workflow.id}")
-            self._ensure_unique_name(workflow.name, exclude_id=workflow.id)
+            self._ensure_unique_name(workflow, exclude_id=workflow.id)
             self._by_id[workflow.id] = workflow
             return workflow
 
@@ -194,26 +239,38 @@ class PostgresWorkflowStore:
             ).mappings().first()
         return _workflow_from_row(dict(result)) if result else None
 
-    def get_by_name(self, name: str) -> Optional[Workflow]:
+    def get_by_name(
+        self, name: str, *, environment: object = None
+    ) -> Optional[Workflow]:
         from sqlalchemy import text
+
+        wanted = _wanted_env(environment)
+        query = "SELECT * FROM workflows WHERE name = :name AND tenant = :tenant"
+        params: dict[str, Any] = {"name": name, "tenant": self._tenant}
+        if wanted is not None:
+            query += " AND environment = :environment"
+            params["environment"] = wanted
+        query += " ORDER BY created_at LIMIT 1"
 
         engine = self._get_engine()
         with engine.connect() as conn:
-            result = conn.execute(
-                text("SELECT * FROM workflows WHERE name = :name AND tenant = :tenant"),
-                {"name": name, "tenant": self._tenant},
-            ).mappings().first()
+            result = conn.execute(text(query), params).mappings().first()
         return _workflow_from_row(dict(result)) if result else None
 
-    def list(self) -> list[Workflow]:
+    def list(self, *, environment: object = None) -> list[Workflow]:
         from sqlalchemy import text
+
+        wanted = _wanted_env(environment)
+        query = "SELECT * FROM workflows WHERE tenant = :tenant"
+        params: dict[str, Any] = {"tenant": self._tenant}
+        if wanted is not None:
+            query += " AND environment = :environment"
+            params["environment"] = wanted
+        query += " ORDER BY created_at"
 
         engine = self._get_engine()
         with engine.connect() as conn:
-            rows = conn.execute(
-                text("SELECT * FROM workflows WHERE tenant = :tenant ORDER BY created_at"),
-                {"tenant": self._tenant},
-            ).mappings().all()
+            rows = conn.execute(text(query), params).mappings().all()
         return [_workflow_from_row(dict(r)) for r in rows]
 
     def update(self, workflow: Workflow) -> Workflow:

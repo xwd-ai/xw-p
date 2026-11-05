@@ -30,9 +30,15 @@ from .trigger_core import message_for, target_for_subscriber
 
 
 class SubscriberReader(Protocol):
-    """广播只需要「按标识读订阅者」这一项能力。"""
+    """广播只需要「按标识读订阅者」这一项能力。
 
-    def get(self, subscriber_id: str) -> Optional[Subscriber]:
+    读取时带上环境：同一个标识在两套环境各有一份档案，不带环境的调用会拿到
+    开发环境优先的那一份，广播就会拿错人的地址。
+    """
+
+    def get(
+        self, subscriber_id: str, *, environment: object = None
+    ) -> Optional[Subscriber]:
         ...
 
 
@@ -101,15 +107,22 @@ def broadcast_to_topic(
     result = BroadcastResult(topic_id=topic.id, member_count=len(member_ids))
 
     for index, subscriber_id in enumerate(member_ids):
-        subscriber = subscriber_store.get(subscriber_id)
+        subscriber = subscriber_store.get(subscriber_id, environment=environment.value)
         if subscriber is None:
-            # 成员关系指向一个已被删除的档案：跳过，并说明原因。
+            # 没有本环境的档案。若别的环境有同名标识，说明这份成员关系是手工
+            # 改数据留下的不一致，原因写得更准一些。
+            elsewhere = subscriber_store.get(subscriber_id)
+            reason = (
+                f"订阅者属于另一个环境：{subscriber_id}"
+                if elsewhere is not None
+                else f"订阅者档案不存在：{subscriber_id}"
+            )
             result.items.append(
                 BroadcastItem(
                     index=index,
                     subscriber_id=subscriber_id,
                     status=STATUS_SKIPPED,
-                    error=f"订阅者档案不存在：{subscriber_id}",
+                    error=reason,
                 )
             )
             continue

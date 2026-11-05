@@ -342,15 +342,26 @@ def test_duplicate_blank_name_422(rig):
     assert resp.status_code == 422
 
 
-def test_duplicate_into_other_environment(rig):
+def test_duplicate_cannot_target_other_environment(rig):
+    """复制是写操作，只能落在本次请求的环境里。"""
     source = _by_name(rig.workflows, "post_liked")
     body = {"name": "post_liked_prod", "environment": "production", "active": True}
-    created = rig.client.post(f"/v1/workflows/{source.id}/duplicate", json=body).json()
-    assert created["environment"] == "production"
+    resp = rig.client.post(f"/v1/workflows/{source.id}/duplicate", json=body)
+    assert resp.status_code == 422
+    assert "X-Environment" in resp.json()["detail"]
 
-    # 环境隔离仍然生效：生产副本在开发环境不可触发。
-    assert _trigger(rig.client, "post_liked_prod").status_code == 404
-    assert _trigger(rig.client, "post_liked_prod", environment="production").status_code == 200
+    # 没有留下任何副本：跨环境的请求在写库之前就被挡下了。
+    assert not [wf for wf in rig.workflows.list() if wf.name == "post_liked_prod"]
+
+
+def test_duplicate_without_environment_follows_request_header(rig):
+    source = _by_name(rig.workflows, "post_liked")
+    created = rig.client.post(
+        f"/v1/workflows/{source.id}/duplicate",
+        json={"name": "post_liked_prod", "active": True},
+        headers={"X-Environment": "production"},
+    )
+    assert created.status_code == 404, "源模板只存在于开发环境，生产环境看不到它"
 
 
 def test_duplicate_preserves_digest_step_config(rig):

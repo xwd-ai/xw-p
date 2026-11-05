@@ -20,8 +20,8 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from .auth import EnvContext, require_env
-from .models.entities import Step, Workflow
+from .auth import ENV_HEADER, EnvContext, require_env
+from .models.entities import Environment, Step, Workflow
 from .step_validation import StepValidationError
 from .workflow_ops import AUTO_NAME_ATTEMPTS, clone_workflow, copy_name, set_active
 from .workflow_schemas import (
@@ -36,11 +36,39 @@ from .workflow_schemas import (
 from .workflow_store import (
     WorkflowConflictError,
     WorkflowNotFoundError,
+    environment_of,
     get_workflow_store,
     validate_workflow,
 )
 
 router = APIRouter(prefix="/v1/workflows", tags=["workflows"])
+
+
+def _require_same_environment(requested: Optional[Environment], env: EnvContext) -> None:
+    """请求体里的环境必须与请求头一致。
+
+    允许一个请求写另一套环境，等于用开发环境的凭据改生产数据——隔离在
+    存储层做得再细也会从这一个入口漏掉。留空即「跟随请求头」。
+    """
+    if requested is not None and requested.value != env.environment:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                f"请求体 environment={requested.value} 与 {ENV_HEADER}={env.environment} 不一致；"
+                "跨环境写入请带着目标环境的请求头单独调用"
+            ),
+        )
+
+
+def _load(store, workflow_id: str, env: EnvContext) -> Workflow:
+    """按标识取模板；另一套环境的同名标识视为不存在（404）。"""
+    workflow = store.get(workflow_id)
+    if workflow is None or environment_of(workflow) != env.environment:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"工作流不存在：{workflow_id}（环境 {env.environment}）",
+        )
+    return workflow
 
 
 def _steps_out(workflow: Workflow) -> list[StepOut]:
@@ -77,7 +105,10 @@ def _workflow_out(workflow: Workflow) -> WorkflowOut:
     description=(
         "创建一个工作流模板，版本号从 1 开始，默认启用。\n\n"
         "步骤按数组顺序执行；步骤标识可以自带（客户端维护 ``config.depends_on`` 时需要它稳定），"
-        "留空由服务端生成。同名工作流在同一环境内唯一，重复创建返回 409。\n\n"
+        "留空由服务端生成。同名工作流在同一环境内唯一，重复创建返回 409；"
+        "另一套环境里的同名模板不影响这次创建。\n\n"
+        "模板落在请求头 ``X-Environment`` 指明的环境；请求体里的 ``environment`` "
+        "要么不传，要么与请求头一致，写错返回 422。\n\n"
         "创建时会按步骤类型校验依赖：悬空引用、自依赖与依赖环都在这一层拒绝，"
         "不会等到第一条消息投递失败才暴露。"
     ),
@@ -86,6 +117,7 @@ def create_workflow(
     body: WorkflowCreate, env: EnvContext = Depends(require_env)
 ) -> WorkflowOut:
     """创建一个工作流模板（版本号初始为 1）。"""
+    _require_same_environment(body.environment, env)
     steps = [
         Step(
             id=s.id or str(uuid.uuid4()),
@@ -101,7 +133,7 @@ def create_workflow(
         description=body.description,
         steps=steps,
         version=1,
-        environment=body.environment,
+        environment=body.environment or Environment(env.environment),
         active=True,
         created_at=datetime.now(timezone.utc),
     )
@@ -130,13 +162,12 @@ def create_workflow(
 def list_workflows(env: EnvContext = Depends(require_env)) -> list[WorkflowOut]:
     """列出当前环境的工作流模板。
 
-    列表按请求环境收窄：另一套环境的模板混在同一张表里，「停用」到底改了
-    谁只能靠猜。要看某个特定环境，显式带 ``X-Environment``。
+    列表按请求环境在存储层收窄（Postgres 下推成 ``WHERE environment``）：
+    另一套环境的模板混在同一张表里，「停用」到底改了谁只能靠猜。
     """
     return [
         _workflow_out(wf)
-        for wf in get_workflow_store().list()
-        if getattr(wf.environment, "value", wf.environment) == env.environment
+        for wf in get_workflow_store().list(environment=env.environment)
     ]
 
 
@@ -144,16 +175,16 @@ def list_workflows(env: EnvContext = Depends(require_env)) -> list[WorkflowOut]:
     "/{workflow_id}",
     response_model=WorkflowOut,
     summary="按标识读取工作流模板",
-    description="读取单个模板的当前版本。已停用的模板照样能读到，``active`` 标明状态。",
+    description=(
+        "读取单个模板的当前版本。已停用的模板照样能读到，``active`` 标明状态；"
+        "只存在于另一套环境的模板按不存在处理（404）。"
+    ),
 )
 def get_workflow(
     workflow_id: str, env: EnvContext = Depends(require_env)
 ) -> WorkflowOut:
     """按 id 查询工作流模板。"""
-    workflow = get_workflow_store().get(workflow_id)
-    if workflow is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"工作流不存在：{workflow_id}")
-    return _workflow_out(workflow)
+    return _workflow_out(_load(get_workflow_store(), workflow_id, env))
 
 
 @router.put(
@@ -165,6 +196,8 @@ def get_workflow(
         "没传 ``active`` 就保留当前启停状态。\n\n"
         "版本号是「模板内容改过一次」的标记。只是启停请走 ``PUT /v1/workflows/{id}/active``，"
         "那条路径不动版本号，按版本回溯模板时才分得清哪一版是真正的改动。\n\n"
+        "模板所属环境不在这里改：请求体里的 ``environment`` 要么不传，要么与请求头一致，"
+        "写错返回 422。把一份模板搬到另一套环境需要在新环境里重新创建。\n\n"
         "已入队并携带步骤快照的消息按快照执行，不受本次更新影响。"
     ),
 )
@@ -172,10 +205,9 @@ def update_workflow(
     workflow_id: str, body: WorkflowUpdate, env: EnvContext = Depends(require_env)
 ) -> WorkflowOut:
     """更新工作流模板（版本号自增 1）。"""
+    _require_same_environment(body.environment, env)
     store = get_workflow_store()
-    existing = store.get(workflow_id)
-    if existing is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"工作流不存在：{workflow_id}")
+    existing = _load(store, workflow_id, env)
 
     new_steps = existing.steps
     if body.steps is not None:
@@ -223,9 +255,13 @@ def delete_workflow(
     workflow_id: str, env: EnvContext = Depends(require_env)
 ) -> None:
     """删除工作流模板。"""
-    deleted = get_workflow_store().delete(workflow_id)
-    if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"工作流不存在：{workflow_id}")
+    store = get_workflow_store()
+    _load(store, workflow_id, env)
+    if not store.delete(workflow_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"工作流不存在：{workflow_id}（环境 {env.environment}）",
+        )
     return None
 
 
@@ -252,9 +288,7 @@ def set_workflow_active(
 ) -> WorkflowActivationOut:
     """启用或停用工作流（幂等，不改版本号）。"""
     store = get_workflow_store()
-    existing = store.get(workflow_id)
-    if existing is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"工作流不存在：{workflow_id}")
+    existing = _load(store, workflow_id, env)
 
     if existing.active == body.active:
         # 幂等：状态本来就对，不写库也不推进版本号。
@@ -282,6 +316,8 @@ def set_workflow_active(
         "标识重映射，``config`` 深拷贝，版本号从 1 开始。\n\n"
         "副本默认不启用（``active=false``），确认步骤与文案后再启用；也可以在"
         "请求体里直接给 ``active=true``。\n\n"
+        "副本落在本次请求的环境里：``environment`` 留空即跟随请求头，指定时必须与"
+        "之一致，否则 422——复制是写操作，不能顺手写到另一套环境。"
         "``name`` 留空时按「源名称 + ``_copy``」生成，重复复制依次得到 "
         "``_copy2`` / ``_copy3``；显式指定的名称已被占用返回 409，不会悄悄改名。"
     ),
@@ -299,17 +335,17 @@ def duplicate_workflow(
 ) -> WorkflowOut:
     """复制工作流模板。"""
     store = get_workflow_store()
-    source = store.get(workflow_id)
-    if source is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"工作流不存在：{workflow_id}")
+    source = _load(store, workflow_id, env)
 
     requested = body.name.strip() if body and body.name else None
     if requested == "":
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="副本名称不能为空白"
         )
+    _require_same_environment(body.environment if body else None, env)
     environment = body.environment if body else None
     active = bool(body.active) if body else False
+    target_env = Environment(env.environment)
 
     # 自动命名时允许重试：重名多半是并发复制撞上了，换下一个候选即可。
     attempts = 1 if requested else AUTO_NAME_ATTEMPTS
@@ -317,7 +353,11 @@ def duplicate_workflow(
         if requested:
             name = requested
         else:
-            name = copy_name(source.name, [wf.name for wf in store.list()])
+            # 候选名只在本环境里比：另一套环境的同名副本与这次命名无关。
+            name = copy_name(
+                source.name,
+                [wf.name for wf in store.list(environment=target_env)],
+            )
 
         duplicate = clone_workflow(
             source, name=name, environment=environment, active=active

@@ -208,7 +208,7 @@ if errors.As(err, &apiErr) {
 
 ## 多租户
 
-请求用 `X-Tenant-Id` 声明租户（缺省 `default`），数据按租户分区：默认租户沿用原路径，其他租户落在 `api/data/tenants/<租户>/`。API Key 用 `XW_API_KEYS` 声明绑定的租户与允许的环境，跨租户访问返回 403。解析规则、隔离范围与配置示例见 [docs/isolation.md](docs/isolation.md)。
+请求用 `X-Tenant-Id` 声明租户（缺省 `default`），数据按租户分区：默认租户沿用原路径，其他租户落在 `api/data/tenants/<租户>/`。API Key 用 `XW_API_KEYS` 声明绑定的租户与允许的环境，跨租户访问返回 403。`X-Environment` 是另一半边界：订阅者与工作流按环境各存一份，按标识访问另一套环境的记录返回 404，写操作只落在请求头指明的环境。解析规则、隔离范围与配置示例见 [docs/isolation.md](docs/isolation.md)。
 
 ## API 文档
 

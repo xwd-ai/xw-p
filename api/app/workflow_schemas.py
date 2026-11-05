@@ -65,7 +65,10 @@ class WorkflowCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255, description="工作流标识（业务侧使用）")
     description: Optional[str] = Field(default=None, description="描述")
     steps: list[StepIn] = Field(default_factory=list, description="步骤序列（有序）")
-    environment: Environment = Field(default=Environment.DEVELOPMENT)
+    environment: Optional[Environment] = Field(
+        default=None,
+        description="所属环境；不传则落在请求头 ``X-Environment`` 指明的环境，传了必须与之一致",
+    )
 
     model_config = {
         "json_schema_extra": {
@@ -156,7 +159,8 @@ class WorkflowDuplicateIn(BaseModel):
         description="副本名称，留空按「源名称 + _copy」生成",
     )
     environment: Optional[Environment] = Field(
-        default=None, description="副本所属环境，留空跟随源模板"
+        default=None,
+        description="副本所属环境，留空跟随请求头；指定时必须与请求头一致",
     )
     active: bool = Field(
         default=False, description="副本是否立即启用，默认关闭（副本先当草稿）"

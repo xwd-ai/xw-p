@@ -39,9 +39,10 @@ def resolve_workflow(name: str, environment: str) -> Optional[Workflow]:
     - 预置模板只兜住「存储里还没有这条记录」的情况，例如 Postgres 后端尚未
       导入预置模板、或测试替换掉了存储。
 
-    两处都要做环境匹配，实现环境间隔离。
+    两个来源都按环境查找：同名模板在开发与生产各有一份，按名称查而不带环境
+    会拿到另一套环境的那份，「停用」或改名都会作用到错误的模板上。
     """
-    stored = get_workflow_store().get_by_name(name)
+    stored = get_workflow_store().get_by_name(name, environment=environment)
     if stored is not None and not env_mismatch(stored.environment, environment):
         return stored if stored.active else None
 

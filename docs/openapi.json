@@ -1712,8 +1712,15 @@
             "title": "Description"
           },
           "environment": {
-            "$ref": "#/components/schemas/Environment",
-            "default": "development"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Environment"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "所属环境；不传则落在请求头 ``X-Environment`` 指明的环境，传了必须与之一致"
           },
           "name": {
             "description": "工作流标识（业务侧使用）",
@@ -1755,7 +1762,7 @@
                 "type": "null"
               }
             ],
-            "description": "副本所属环境，留空跟随源模板"
+            "description": "副本所属环境，留空跟随请求头；指定时必须与请求头一致"
           },
           "name": {
             "anyOf": [
@@ -5241,7 +5248,7 @@
     },
     "/v1/subscribers": {
       "get": {
-        "description": "按创建顺序翻页返回订阅者；``channel`` 只保留启用了该渠道的条目，用于回答「哪些人有邮箱」。``nextCursor`` 为空表示没有更多。\n\n列表按调用方所属租户收窄，但不按环境收窄：订阅者标识在租户内全局唯一，档案里带 ``environment`` 字段，由调用方按需过滤。",
+        "description": "按创建顺序翻页返回订阅者；``channel`` 只保留启用了该渠道的条目，用于回答「哪些人有邮箱」。``nextCursor`` 为空表示没有更多。\n\n列表按调用方所属租户与环境收窄：另一样本环境的档案不会混进来，同一个标识在两套环境各有一条时也会分别出现。",
         "operationId": "getV1Subscribers",
         "parameters": [
           {
@@ -5414,7 +5421,7 @@
         ]
       },
       "post": {
-        "description": "登记一个收件人：渠道绑定 + 各渠道的收件地址。标识可自带（把业务侧的用户 ID 带进来），留空则生成 UUID。\n\n**唯一性**：标识重复、或邮箱/手机号已被别人绑定，返回 409 并点名占用者，而不是覆盖——渠道绑定被悄悄换掉比创建失败更难查。\n\n**规范化**：邮箱统一存小写、手机号存 E.164，因此查重、渲染与投递看到的是同一个字符串。只有本地手机号时按 ``XW_SUBSCRIBER_COUNTRY_CODE`` 补区号，没配就报错而不是按位数猜。",
+        "description": "登记一个收件人：渠道绑定 + 各渠道的收件地址。标识可自带（把业务侧的用户 ID 带进来），留空则生成 UUID。\n\n**唯一性**：标识重复、或邮箱/手机号已被别人绑定，返回 409 并点名占用者，而不是覆盖——渠道绑定被悄悄换掉比创建失败更难查。唯一性按环境判定：同一个标识、同一个邮箱可以在开发与生产各有一份档案。\n\n**规范化**：邮箱统一存小写、手机号存 E.164，因此查重、渲染与投递看到的是同一个字符串。只有本地手机号时按 ``XW_SUBSCRIBER_COUNTRY_CODE`` 补区号，没配就报错而不是按位数猜。",
         "operationId": "postV1Subscribers",
         "parameters": [
           {
@@ -5551,7 +5558,7 @@
     },
     "/v1/subscribers/{subscriber_id}": {
       "delete": {
-        "description": "删除档案并释放其占用的地址，之后同一个邮箱或手机号可以被别人认领。\n\n历史消息与执行明细保留：它们是投递事实的记录，删档案不应连带抹掉排查线索。",
+        "description": "删除档案并释放其占用的地址，之后同一个邮箱或手机号可以被别人认领。\n\n只删当前环境的那一条：同一个标识在另一套环境还有档案时，那边照旧。历史消息与执行明细保留：它们是投递事实的记录，删档案不应连带抹掉排查线索。",
         "operationId": "deleteV1SubscribersBySubscriberId",
         "parameters": [
           {
@@ -5678,7 +5685,7 @@
         ]
       },
       "get": {
-        "description": "读取单个档案，含渠道绑定与规范化后的地址。标识不存在返回 404。",
+        "description": "读取单个档案，含渠道绑定与规范化后的地址。标识不存在、或只存在于另一套环境，都返回 404——跨环境读别人的档案与读一个不存在的标识，对调用方是同一件事。",
         "operationId": "getV1SubscribersBySubscriberId",
         "parameters": [
           {
@@ -8041,7 +8048,7 @@
         ]
       },
       "post": {
-        "description": "创建一个工作流模板，版本号从 1 开始，默认启用。\n\n步骤按数组顺序执行；步骤标识可以自带（客户端维护 ``config.depends_on`` 时需要它稳定），留空由服务端生成。同名工作流在同一环境内唯一，重复创建返回 409。\n\n创建时会按步骤类型校验依赖：悬空引用、自依赖与依赖环都在这一层拒绝，不会等到第一条消息投递失败才暴露。",
+        "description": "创建一个工作流模板，版本号从 1 开始，默认启用。\n\n步骤按数组顺序执行；步骤标识可以自带（客户端维护 ``config.depends_on`` 时需要它稳定），留空由服务端生成。同名工作流在同一环境内唯一，重复创建返回 409；另一套环境里的同名模板不影响这次创建。\n\n模板落在请求头 ``X-Environment`` 指明的环境；请求体里的 ``environment`` 要么不传，要么与请求头一致，写错返回 422。\n\n创建时会按步骤类型校验依赖：悬空引用、自依赖与依赖环都在这一层拒绝，不会等到第一条消息投递失败才暴露。",
         "operationId": "postV1Workflows",
         "parameters": [
           {
@@ -8305,7 +8312,7 @@
         ]
       },
       "get": {
-        "description": "读取单个模板的当前版本。已停用的模板照样能读到，``active`` 标明状态。",
+        "description": "读取单个模板的当前版本。已停用的模板照样能读到，``active`` 标明状态；只存在于另一套环境的模板按不存在处理（404）。",
         "operationId": "getV1WorkflowsByWorkflowId",
         "parameters": [
           {
@@ -8439,7 +8446,7 @@
         ]
       },
       "put": {
-        "description": "整体更新模板内容，版本号自增 1。只改请求里出现的字段：没传 ``steps`` 就保留原步骤，没传 ``active`` 就保留当前启停状态。\n\n版本号是「模板内容改过一次」的标记。只是启停请走 ``PUT /v1/workflows/{id}/active``，那条路径不动版本号，按版本回溯模板时才分得清哪一版是真正的改动。\n\n已入队并携带步骤快照的消息按快照执行，不受本次更新影响。",
+        "description": "整体更新模板内容，版本号自增 1。只改请求里出现的字段：没传 ``steps`` 就保留原步骤，没传 ``active`` 就保留当前启停状态。\n\n版本号是「模板内容改过一次」的标记。只是启停请走 ``PUT /v1/workflows/{id}/active``，那条路径不动版本号，按版本回溯模板时才分得清哪一版是真正的改动。\n\n模板所属环境不在这里改：请求体里的 ``environment`` 要么不传，要么与请求头一致，写错返回 422。把一份模板搬到另一套环境需要在新环境里重新创建。\n\n已入队并携带步骤快照的消息按快照执行，不受本次更新影响。",
         "operationId": "putV1WorkflowsByWorkflowId",
         "parameters": [
           {
@@ -8734,7 +8741,7 @@
     },
     "/v1/workflows/{workflow_id}/duplicate": {
       "post": {
-        "description": "按源模板复制出一份新模板：新标识、新步骤标识，``depends_on`` 按原步骤标识重映射，``config`` 深拷贝，版本号从 1 开始。\n\n副本默认不启用（``active=false``），确认步骤与文案后再启用；也可以在请求体里直接给 ``active=true``。\n\n``name`` 留空时按「源名称 + ``_copy``」生成，重复复制依次得到 ``_copy2`` / ``_copy3``；显式指定的名称已被占用返回 409，不会悄悄改名。",
+        "description": "按源模板复制出一份新模板：新标识、新步骤标识，``depends_on`` 按原步骤标识重映射，``config`` 深拷贝，版本号从 1 开始。\n\n副本默认不启用（``active=false``），确认步骤与文案后再启用；也可以在请求体里直接给 ``active=true``。\n\n副本落在本次请求的环境里：``environment`` 留空即跟随请求头，指定时必须与之一致，否则 422——复制是写操作，不能顺手写到另一套环境。``name`` 留空时按「源名称 + ``_copy``」生成，重复复制依次得到 ``_copy2`` / ``_copy3``；显式指定的名称已被占用返回 409，不会悄悄改名。",
         "operationId": "postV1WorkflowsByWorkflowIdDuplicate",
         "parameters": [
           {

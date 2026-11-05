@@ -305,8 +305,10 @@ def add_topic_member(
     environment = _environment(env.environment)
     topic = _load_topic(topic_id, environment)
 
-    subscriber = get_subscriber_store().get(body.subscriberId)
-    if subscriber is None or subscriber.environment is not environment:
+    subscriber = get_subscriber_store().get(
+        body.subscriberId, environment=environment.value
+    )
+    if subscriber is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"订阅者不存在：{body.subscriberId}（环境 {environment.value}）",

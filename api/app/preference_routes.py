@@ -151,11 +151,12 @@ def _scope_or_422(raw: Optional[str]) -> Optional[Scope]:
 def _require_subscriber(subscriber_id: str, env: EnvContext) -> str:
     """按环境取出订阅者；不存在或不属于本环境一律 404。
 
-    订阅者标识在环境之间不共享，因此「本环境没有这个人」也包括「这个标识
-    属于另一个环境」——偏好跟着订阅者走，不能跨环境读别人的设置。
+    记录的键是「环境 + 标识」，同一标识在两套环境各有一份档案，查询时带上
+    环境即可区分；「本环境没有这个人」也包括「这个标识只属于另一个环境」——
+    偏好跟着订阅者走，不能跨环境读别人的设置。
     """
-    subscriber = get_subscriber_store().get(subscriber_id)
-    if subscriber is None or subscriber.environment.value != env.environment:
+    subscriber = get_subscriber_store().get(subscriber_id, environment=env.environment)
+    if subscriber is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"订阅者不存在：{subscriber_id}（环境 {env.environment}）",

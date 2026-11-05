@@ -14,6 +14,13 @@
   进程在写一半时被中断不会留下半截文件。读之前按文件大小与修改时刻判断
   是否被其它进程写过，变了就重扫，避免在共享卷上读到过期索引。
 
+**环境是记录身份的一部分**：同一个订阅者标识（例如业务侧的用户 ID）在开发
+环境与生产环境各有一条档案，两者的渠道绑定互不影响——在开发环境改文案、加
+一个测试邮箱，不应该动到线上那个人。因此记录的键是 ``(环境, 标识)``，按标识
+读取时总是带上环境；不带环境只用于运维脚本这类「先找到再说」的场合，按开发
+环境优先的顺序取第一条。删除同理，不会因为一次不带环境的调用把两套环境里的
+同名档案一起删掉。
+
 地址唯一性按「环境 + 字段 + 比较键」建索引：同一个邮箱不能在两个订阅者身上，
 但开发环境与生产环境是两套数据，各自可以有同一个邮箱。比较键由
 :func:`app.subscriber_identity.address_key` 算出，因此 ``Creator@Example.com``
@@ -180,6 +187,28 @@ def _sort_key(subscriber: Subscriber) -> tuple[datetime, str]:
     return (subscriber.created_at, subscriber.id)
 
 
+def _environment_of(value: object) -> Optional[str]:
+    """把环境参数归一成字符串；``None`` / 空白表示「不限环境」。"""
+    if value is None:
+        return None
+    if isinstance(value, Environment):
+        return value.value
+    text = str(value).strip().lower()
+    return text or None
+
+
+def _record_key(subscriber: Subscriber) -> tuple[str, str]:
+    """记录的键：``(环境, 标识)``。"""
+    return (subscriber.environment.value, subscriber.id)
+
+
+#: 不带环境查询时的环境优先顺序：开发环境在前，便于本地调试时直接拿到
+#: 自己刚建的那条。请求路径总是显式带环境，这里只服务于运维脚本。
+_ENVIRONMENT_ORDER: tuple[str, ...] = (Environment.DEVELOPMENT.value,) + tuple(
+    env.value for env in Environment if env is not Environment.DEVELOPMENT
+)
+
+
 #: 地址索引：``(环境, 字段, 比较键) -> 订阅者标识``。加环境是因为两套环境是
 #: 两套数据，同一个人可以在 development 与 production 各有一条档案。
 AddressIndex = dict[tuple[str, str, str], str]
@@ -232,14 +261,20 @@ class SubscriberStore(Protocol):
         """
         ...
 
-    def get(self, subscriber_id: str) -> Optional[Subscriber]:
-        """按标识读取，不存在返回 ``None``。"""
+    def get(
+        self, subscriber_id: str, *, environment: object = None
+    ) -> Optional[Subscriber]:
+        """按标识读取，不存在返回 ``None``。
+
+        ``environment`` 给定时只在该环境查找，另一套环境的同名档案视为不存在。
+        """
         ...
 
     def list(
         self,
         *,
         channel: Optional[Channel] = None,
+        environment: object = None,
         limit: int = DEFAULT_PAGE_SIZE,
         cursor: Optional[str] = None,
     ) -> tuple[list[Subscriber], Optional[str]]:
@@ -247,10 +282,10 @@ class SubscriberStore(Protocol):
         ...
 
     def update(self, subscriber: Subscriber) -> Subscriber:
-        """整体覆盖同标识记录；不存在或地址与他人重复时抛错。"""
+        """整体覆盖同环境同标识记录；不存在或地址与他人重复时抛错。"""
         ...
 
-    def delete(self, subscriber_id: str) -> bool:
+    def delete(self, subscriber_id: str, *, environment: object = None) -> bool:
         """删除记录，返回是否真的删掉了一条。"""
         ...
 
@@ -259,6 +294,7 @@ def _page(
     items: list[Subscriber],
     *,
     channel: Optional[Channel],
+    environment: object = None,
     limit: int,
     cursor: Optional[str],
 ) -> tuple[list[Subscriber], Optional[str]]:
@@ -267,6 +303,9 @@ def _page(
     内存与文件后端共用这一处逻辑：两边各写一遍，游标语义迟早会不一致。
     """
     ordered = sorted(items, key=_sort_key)
+    wanted_env = _environment_of(environment)
+    if wanted_env is not None:
+        ordered = [s for s in ordered if s.environment.value == wanted_env]
     if channel is not None:
         ordered = [s for s in ordered if channel in s.channels]
 
@@ -290,11 +329,11 @@ class MemorySubscriberStore:
     """进程内订阅者存储（线程安全）。"""
 
     def __init__(self, seed: Optional[list[Subscriber]] = None) -> None:
-        self._by_id: dict[str, Subscriber] = {}
+        self._by_id: dict[tuple[str, str], Subscriber] = {}
         self._addresses: AddressIndex = {}
         self._lock = threading.Lock()
         for subscriber in seed or []:
-            self._by_id[subscriber.id] = subscriber
+            self._by_id[_record_key(subscriber)] = subscriber
         self._addresses = _build_address_index(self._by_id.values())
 
     def _reindex(self) -> None:
@@ -307,40 +346,74 @@ class MemorySubscriberStore:
 
     def create(self, subscriber: Subscriber) -> Subscriber:
         with self._lock:
-            if subscriber.id in self._by_id:
-                raise SubscriberConflictError(f"订阅者已存在：{subscriber.id}")
+            key = _record_key(subscriber)
+            if key in self._by_id:
+                raise SubscriberConflictError(
+                    f"订阅者已存在：{subscriber.id}（环境 {key[0]}）"
+                )
             self._reject_duplicate_address(subscriber)
-            self._by_id[subscriber.id] = subscriber
+            self._by_id[key] = subscriber
             self._reindex()
             return subscriber
 
-    def get(self, subscriber_id: str) -> Optional[Subscriber]:
+    def get(
+        self, subscriber_id: str, *, environment: object = None
+    ) -> Optional[Subscriber]:
+        subscriber_id = str(subscriber_id).strip()
+        wanted_env = _environment_of(environment)
         with self._lock:
-            return self._by_id.get(str(subscriber_id).strip())
+            if wanted_env is not None:
+                return self._by_id.get((wanted_env, subscriber_id))
+            for env in _ENVIRONMENT_ORDER:
+                found = self._by_id.get((env, subscriber_id))
+                if found is not None:
+                    return found
+            return None
 
     def list(
         self,
         *,
         channel: Optional[Channel] = None,
+        environment: object = None,
         limit: int = DEFAULT_PAGE_SIZE,
         cursor: Optional[str] = None,
     ) -> tuple[list[Subscriber], Optional[str]]:
         with self._lock:
             snapshot = list(self._by_id.values())
-        return _page(snapshot, channel=channel, limit=limit, cursor=cursor)
+        return _page(
+            snapshot,
+            channel=channel,
+            environment=environment,
+            limit=limit,
+            cursor=cursor,
+        )
 
     def update(self, subscriber: Subscriber) -> Subscriber:
         with self._lock:
-            if subscriber.id not in self._by_id:
-                raise SubscriberNotFoundError(f"订阅者不存在：{subscriber.id}")
+            key = _record_key(subscriber)
+            if key not in self._by_id:
+                raise SubscriberNotFoundError(
+                    f"订阅者不存在：{subscriber.id}（环境 {key[0]}）"
+                )
             self._reject_duplicate_address(subscriber)
-            self._by_id[subscriber.id] = subscriber
+            self._by_id[key] = subscriber
             self._reindex()
             return subscriber
 
-    def delete(self, subscriber_id: str) -> bool:
+    def delete(self, subscriber_id: str, *, environment: object = None) -> bool:
+        subscriber_id = str(subscriber_id).strip()
+        wanted_env = _environment_of(environment)
         with self._lock:
-            removed = self._by_id.pop(str(subscriber_id).strip(), None)
+            if wanted_env is None:
+                # 不带环境时只删那条「按标识读得到」的记录：一次误调用不该把
+                # 两套环境里的同名档案一起删掉。
+                for env in _ENVIRONMENT_ORDER:
+                    if (env, subscriber_id) in self._by_id:
+                        wanted_env = env
+                        break
+                else:
+                    return False
+            removed = self._by_id.pop((wanted_env, subscriber_id), None)
             if removed is None:
                 return False
             self._reindex()
@@ -357,7 +430,7 @@ class JsonlSubscriberStore:
     def __init__(self, path: str | os.PathLike[str] = DEFAULT_SUBSCRIBERS_PATH) -> None:
         self._path = Path(path)
         self._lock = threading.Lock()
-        self._by_id: dict[str, Subscriber] = {}
+        self._by_id: dict[tuple[str, str], Subscriber] = {}
         self._addresses: AddressIndex = {}
         self._stamp: Optional[tuple[int, int]] = None
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -378,7 +451,7 @@ class JsonlSubscriberStore:
 
     def _reload(self) -> None:
         """整份重读；一行坏掉只跳过这一行，不影响其它订阅者。"""
-        records: dict[str, Subscriber] = {}
+        records: dict[tuple[str, str], Subscriber] = {}
         if self._path.exists():
             with self._path.open("r", encoding="utf-8") as handle:
                 for line in handle:
@@ -392,7 +465,7 @@ class JsonlSubscriberStore:
                         continue
                     subscriber = subscriber_from_row(raw)
                     if subscriber is not None:
-                        records[subscriber.id] = subscriber
+                        records[_record_key(subscriber)] = subscriber
         self._by_id = records
         self._addresses = _build_address_index(records.values())
         self._stamp = self._file_stamp()
@@ -442,49 +515,80 @@ class JsonlSubscriberStore:
     def create(self, subscriber: Subscriber) -> Subscriber:
         with self._lock:
             self._ensure_fresh()
-            if subscriber.id in self._by_id:
-                raise SubscriberConflictError(f"订阅者已存在：{subscriber.id}")
+            key = _record_key(subscriber)
+            if key in self._by_id:
+                raise SubscriberConflictError(
+                    f"订阅者已存在：{subscriber.id}（环境 {key[0]}）"
+                )
             self._reject_duplicate_address(subscriber)
             self._append(subscriber)
-            self._by_id[subscriber.id] = subscriber
+            self._by_id[key] = subscriber
             self._reindex()
             return subscriber
 
-    def get(self, subscriber_id: str) -> Optional[Subscriber]:
+    def get(
+        self, subscriber_id: str, *, environment: object = None
+    ) -> Optional[Subscriber]:
+        subscriber_id = str(subscriber_id).strip()
+        wanted_env = _environment_of(environment)
         with self._lock:
             self._ensure_fresh()
-            return self._by_id.get(str(subscriber_id).strip())
+            if wanted_env is not None:
+                return self._by_id.get((wanted_env, subscriber_id))
+            for env in _ENVIRONMENT_ORDER:
+                found = self._by_id.get((env, subscriber_id))
+                if found is not None:
+                    return found
+            return None
 
     def list(
         self,
         *,
         channel: Optional[Channel] = None,
+        environment: object = None,
         limit: int = DEFAULT_PAGE_SIZE,
         cursor: Optional[str] = None,
     ) -> tuple[list[Subscriber], Optional[str]]:
         with self._lock:
             self._ensure_fresh()
             snapshot = list(self._by_id.values())
-        return _page(snapshot, channel=channel, limit=limit, cursor=cursor)
+        return _page(
+            snapshot,
+            channel=channel,
+            environment=environment,
+            limit=limit,
+            cursor=cursor,
+        )
 
     def update(self, subscriber: Subscriber) -> Subscriber:
         with self._lock:
             self._ensure_fresh()
-            if subscriber.id not in self._by_id:
-                raise SubscriberNotFoundError(f"订阅者不存在：{subscriber.id}")
+            key = _record_key(subscriber)
+            if key not in self._by_id:
+                raise SubscriberNotFoundError(
+                    f"订阅者不存在：{subscriber.id}（环境 {key[0]}）"
+                )
             self._reject_duplicate_address(subscriber)
-            self._by_id[subscriber.id] = subscriber
+            self._by_id[key] = subscriber
             self._rewrite()
             self._reindex()
             return subscriber
 
-    def delete(self, subscriber_id: str) -> bool:
-        key = str(subscriber_id).strip()
+    def delete(self, subscriber_id: str, *, environment: object = None) -> bool:
+        subscriber_id = str(subscriber_id).strip()
+        wanted_env = _environment_of(environment)
         with self._lock:
             self._ensure_fresh()
-            if key not in self._by_id:
+            if wanted_env is None:
+                for env in _ENVIRONMENT_ORDER:
+                    if (env, subscriber_id) in self._by_id:
+                        wanted_env = env
+                        break
+                else:
+                    return False
+            if (wanted_env, subscriber_id) not in self._by_id:
                 return False
-            del self._by_id[key]
+            del self._by_id[(wanted_env, subscriber_id)]
             self._rewrite()
             self._reindex()
             return True
