@@ -1,7 +1,6 @@
 -- xw-notify 消息执行明细表 DDL（Phase 1）
 -- 与 api/app/execution_log.py 的 PostgresExecutionStore 保持一致。
 -- worker 逐渠道投递时写入一条执行明细（sent/failed/reason），供后台排查。
--- 用法：psql "$XW_DATABASE_URL" -f scripts/migrations/004_execution_details.sql
 
 CREATE TABLE IF NOT EXISTS execution_details (
     id          BIGSERIAL   PRIMARY KEY,

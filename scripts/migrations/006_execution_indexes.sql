@@ -1,6 +1,5 @@
 -- xw-notify 执行明细查询索引（Phase R6）
 -- GET /v1/executions 改为「过滤下推到存储 + 游标翻页」后配套的复合索引。
--- 用法：psql "$XW_DATABASE_URL" -f scripts/migrations/006_execution_indexes.sql
 --
 -- 排序键是 (created_at DESC, id DESC)：一次触发会写出多条渠道明细，
 -- created_at 可能撞车，用自增主键做次级键才是全序。游标条件是

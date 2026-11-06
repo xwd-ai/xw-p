@@ -407,7 +407,7 @@ class PostgresExecutionStore:
         where, params = self._build_where(q)
         params["limit"] = max(1, int(q.limit))
         sql = (
-            "SELECT id, trigger_id, channel, status, reason, duration_ms, created_at "
+            "SELECT id, trigger_id, channel, status, reason, duration_ms, tenant, environment, created_at "
             "FROM execution_details"
         )
         if where:
@@ -454,7 +454,7 @@ class PostgresExecutionStore:
             where.append("created_at <= :until")
             params["until"] = until
         sql = (
-            "SELECT id, trigger_id, channel, status, reason, duration_ms, created_at "
+            "SELECT id, trigger_id, channel, status, reason, duration_ms, tenant, environment, created_at "
             "FROM execution_details"
         )
         if where:
@@ -476,7 +476,7 @@ class PostgresExecutionStore:
             rows = conn.execute(
                 text(
                     "SELECT id, trigger_id, channel, status, reason, duration_ms, "
-                    "created_at FROM execution_details ORDER BY created_at, id"
+                    "tenant, environment, created_at FROM execution_details ORDER BY created_at, id"
                 )
             ).mappings().all()
         return [self._to_record(dict(r)) for r in rows]

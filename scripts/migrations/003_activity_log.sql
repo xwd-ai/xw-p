@@ -1,7 +1,6 @@
 -- xw-notify 活动日志表 DDL（Phase 1）
 -- 与 api/app/activity_log.py 的 PostgresActivityStore 保持一致。
 -- 触发 API 返回回执前同步写入一条活动日志，供活动流查询展示。
--- 用法：psql "$XW_DATABASE_URL" -f scripts/migrations/003_activity_log.sql
 
 CREATE TABLE IF NOT EXISTS activity_log (
     id            BIGSERIAL   PRIMARY KEY,

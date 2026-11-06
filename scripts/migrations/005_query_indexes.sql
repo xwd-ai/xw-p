@@ -1,6 +1,5 @@
 -- xw-notify 查询索引（Phase R6）
 -- 活动流与统计接口改为「过滤下推到存储 / 数据库侧聚合」后，配套的复合索引。
--- 用法：psql "$XW_DATABASE_URL" -f scripts/migrations/005_query_indexes.sql
 --
 -- 索引列顺序与查询的排序键一致：(过滤列, created_at DESC, trigger_id DESC)。
 -- 活动流按游标翻页，游标条件是 (created_at, trigger_id) < (?, ?)，因此这两个列

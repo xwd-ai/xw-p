@@ -20,6 +20,26 @@ docker compose up -d --build api engine redis
 只起依赖、代码在本机跑的开发方式不变：`docker compose up -d postgres redis
 rabbitmq` 后照 README 起 uvicorn 与引擎。
 
+## PostgreSQL 建表与升级
+
+使用 PostgreSQL 持久化时，先设置 `XW_DATABASE_URL`，从仓库根目录执行：
+
+```bash
+./scripts/migrate_postgres.sh
+```
+
+脚本需要 `psql`，接受 PostgreSQL URI 与 API 使用的 `postgresql+psycopg://`
+URI。它按文件编号执行 SQL，对同一数据库的并发调用串行化，任一语句失败会
+回滚本次执行。空库与已有数据库使用同一入口。升级会取得表锁，建议在服务
+启动前执行。
+
+投递记录仍存于 `messages`。如果旧库仅用过核心实体建表脚本，原
+`messages` 中的工作流消息实例会随表迁至 `workflow_messages`，保留原数据与外键。
+历史记录归入默认租户，缺少环境的执行明细归入 `development`。
+
+`./scripts/test_postgres_migrations.sh` 使用临时 PostgreSQL 实例验证初始化、
+升级与重复执行，需要本机 PostgreSQL 服务端和客户端工具。
+
 ## 镜像构建
 
 ```bash

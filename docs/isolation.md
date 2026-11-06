@@ -80,7 +80,7 @@
 
 执行明细里的 `workflow` 与 `provider` 由投递方回填，管理统计的工作流排行与实现排行依赖它们；内存与 JSONL 后端都会保留，Postgres 建表脚本暂时只有固定几列。
 
-已知限制：`scripts/migrations/002_core_entities.sql` 还是按租户之前的结构（`workflows.name` 全局唯一、没有 `tenant` 列），内存与 JSONL 后端按本节实现；Postgres 建表脚本与上述约束对齐属于后续工作。
+Postgres 工作流按 `(tenant, environment, name)` 保持名称唯一，历史工作流归入默认租户。迁移入口见 [部署文档](deploy.md#postgresql-建表与升级)。
 
 ## 隔离范围
 

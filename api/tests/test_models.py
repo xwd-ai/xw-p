@@ -75,7 +75,7 @@ def test_workflow_version_ge_one():
 
 def test_orm_tables_registered():
     tables = set(Base.metadata.tables)
-    assert {"workflows", "subscribers", "messages"} <= tables
+    assert {"workflows", "subscribers", "workflow_messages"} <= tables
 
 
 def test_orm_message_columns():

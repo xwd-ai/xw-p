@@ -2,7 +2,7 @@
 
 对应 ROADMAP Phase 1 的建表 DDL。采用 SQLAlchemy 2.0 声明式风格，为后续
 Alembic 迁移预留；同时提供一份等价的纯 SQL 迁移脚本（见
-``scripts/migrations/002_core_entities.sql``）。
+``scripts/migrations/``）。
 
 设计约定：
 - 主键统一为 ``UUID`` 字符串，业务侧生成，避免依赖数据库序列。
@@ -39,7 +39,8 @@ class WorkflowModel(Base):
     __tablename__ = "workflows"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    tenant: Mapped[str] = mapped_column(String(32), nullable=False, default="default", server_default="default")
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     steps: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
@@ -61,7 +62,7 @@ class SubscriberModel(Base):
 
 
 class MessageModel(Base):
-    __tablename__ = "messages"
+    __tablename__ = "workflow_messages"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     workflow_id: Mapped[str] = mapped_column(
@@ -80,8 +81,16 @@ class MessageModel(Base):
     )
 
 
+Index(
+    "idx_workflows_tenant_environment_name",
+    WorkflowModel.tenant,
+    WorkflowModel.environment,
+    WorkflowModel.name,
+    unique=True,
+)
+
 # 常见查询索引：按订阅者、工作流、状态与时间。
-Index("idx_messages_subscriber", MessageModel.subscriber_id)
-Index("idx_messages_workflow", MessageModel.workflow_id)
-Index("idx_messages_status", MessageModel.status)
-Index("idx_messages_created_at", MessageModel.created_at)
+Index("idx_workflow_messages_subscriber", MessageModel.subscriber_id)
+Index("idx_workflow_messages_workflow", MessageModel.workflow_id)
+Index("idx_workflow_messages_status", MessageModel.status)
+Index("idx_workflow_messages_created_at", MessageModel.created_at)

@@ -340,6 +340,7 @@ class PostgresActivityStore:
                 "channels": json.dumps(record.get("channels") or [], ensure_ascii=False),
                 "status": record.get("status", "triggered"),
                 "title": record.get("title") or record["workflow"],
+                "tenant": record.get("tenant") or "default",
                 "environment": record.get("environment") or config.ENV,
             }
             for record in records
@@ -349,9 +350,9 @@ class PostgresActivityStore:
                 text(
                     """
                     INSERT INTO activity_log
-                        (trigger_id, workflow, subscriber_id, channels, status, title, environment)
+                        (trigger_id, workflow, subscriber_id, channels, status, title, tenant, environment)
                     VALUES
-                        (:trigger_id, :workflow, :subscriber_id, :channels, :status, :title, :environment)
+                        (:trigger_id, :workflow, :subscriber_id, :channels, :status, :title, :tenant, :environment)
                     """
                 ),
                 params,
@@ -424,7 +425,7 @@ class PostgresActivityStore:
         params["limit"] = max(1, int(q.limit))
         sql = (
             "SELECT trigger_id, workflow, subscriber_id, channels, status, title, "
-            "environment, created_at FROM activity_log"
+            "tenant, environment, created_at FROM activity_log"
         )
         if where:
             sql += " WHERE " + " AND ".join(where)
@@ -461,7 +462,7 @@ class PostgresActivityStore:
         where, params = self._build_where(q, include_cursor=False)
         sql = (
             "SELECT trigger_id, workflow, subscriber_id, channels, status, title, "
-            "environment, created_at FROM activity_log"
+            "tenant, environment, created_at FROM activity_log"
         )
         if where:
             sql += " WHERE " + " AND ".join(where)
@@ -482,7 +483,7 @@ class PostgresActivityStore:
             rows = conn.execute(
                 text(
                     "SELECT trigger_id, workflow, subscriber_id, channels, status, "
-                    "title, environment, created_at FROM activity_log "
+                    "title, tenant, environment, created_at FROM activity_log "
                     "ORDER BY created_at, trigger_id"
                 )
             ).mappings().all()
