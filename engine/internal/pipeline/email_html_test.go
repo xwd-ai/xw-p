@@ -361,7 +361,11 @@ func TestDispatchEmailHTMLOnlyFallsBackToText(t *testing.T) {
 	if len(results) != 1 || !results[0].Sent {
 		t.Fatalf("邮件步骤应投递成功，实际 %+v", results)
 	}
-	parts := parseMailParts(t, srv.Mails()[0].Data)
+	mails := srv.Mails()
+	if len(mails) != 1 {
+		t.Fatalf("中继应收到 1 封，实际 %d 封", len(mails))
+	}
+	parts := parseMailParts(t, mails[0].Data)
 	if got := partOf(t, parts, "text/plain"); got != htmlOnlyFallback {
 		t.Errorf("纯文本降级文案 = %q，期望 %q", got, htmlOnlyFallback)
 	}

@@ -260,10 +260,11 @@ func (s *Server) handle(conn net.Conn) {
 			current.Data = body.String()
 			// 同一连接上第二封起不再发 AUTH，认证用户要延续下来。
 			current.AuthUser = authedUser
-			send("250 2.0.0 queued as FAKE123")
+			// 客户端收到确认时，已接收的邮件应可通过 Mails 查询。
 			s.mu.Lock()
 			s.mails = append(s.mails, current)
 			s.mu.Unlock()
+			send("250 2.0.0 queued as FAKE123")
 			current = Mail{}
 
 		case upper == "NOOP":
