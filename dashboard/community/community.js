@@ -104,7 +104,9 @@ function showDetail(post) {
         });
         if (!result.acknowledged) throw new Error('评论未受理，请重试。');
         await refresh();
-        showDetail(posts.find((entry) => entry.post_id === post.post_id) || post);
+        if (role && byId('detail').open) {
+          showDetail(posts.find((entry) => entry.post_id === post.post_id) || post);
+        }
         announce('评论已发送。');
       });
     });
@@ -122,8 +124,9 @@ function render() {
   byId('role').textContent = role === 'owner' ? '已登录 · 站长' : '已登录 · 游客';
   byId('manage').hidden = role !== 'owner';
   byId('composer').hidden = role !== 'owner';
-  byId('discovery').hidden = admin;
-  byId('admin').hidden = !admin;
+  byId('login-required').hidden = Boolean(role);
+  byId('discovery').hidden = !role || admin;
+  byId('admin').hidden = role !== 'owner' || !admin;
   byId('discover').classList.toggle('active', !admin);
   byId('manage').classList.toggle('active', admin);
   byId('discover').setAttribute('aria-current', admin ? 'false' : 'page');
@@ -171,8 +174,10 @@ function render() {
 }
 
 async function loadOverview() {
-  const data = await request('/community-overview');
-  if (role !== 'owner') return;
+  const authorization = credentials;
+  const [data, guests] = await Promise.all([request('/community-overview'), request('/guest-accounts')]);
+  if (role !== 'owner' || credentials !== authorization) return;
+  byId('guest-accounts').textContent = guests.join('、') || '暂无访客账号。';
   byId('post-count').textContent = data.posts;
   byId('like-count').textContent = data.likes;
   byId('unread-count').textContent = data.unread;
@@ -206,7 +211,11 @@ byId('manage').addEventListener('click', () => {
 byId('refresh-overview').addEventListener('click', () => withButton(byId('refresh-overview'), loadOverview));
 
 async function refresh() {
-  posts = await request('/posts', { authorization: '' });
+  if (!role) return;
+  const authorization = credentials;
+  const entries = await request('/posts', { authorization });
+  if (credentials !== authorization) return;
+  posts = entries;
   render();
 }
 
@@ -219,7 +228,7 @@ byId('login').addEventListener('submit', (event) => {
     if (!/^[\x20-\x7E]+$/.test(values.get('password'))) {
       throw new Error('请输入有效口令。');
     }
-    if (!['owner', 'guest'].includes(username)) throw new Error('请输入 owner 或 guest。');
+    if (!/^[a-z][a-z0-9_-]{2,23}$/.test(username)) throw new Error('请输入有效账号。');
     const authorization = 'Basic ' + btoa(`${username}:${values.get('password')}`);
     const session = await request('/session', { authorization });
     credentials = authorization;
@@ -227,6 +236,7 @@ byId('login').addEventListener('submit', (event) => {
     form.reset();
     render();
     announce('登录成功。');
+    await refresh();
   });
 });
 
@@ -234,10 +244,28 @@ byId('logout').addEventListener('click', () => {
   credentials = '';
   role = '';
   admin = false;
+  posts = [];
+  byId('detail').close();
+  byId('detail-content').replaceChildren();
+  byId('guest-accounts').textContent = '';
   byId('notifications').replaceChildren();
   for (const id of ['post-count', 'like-count', 'unread-count']) byId(id).textContent = '—';
   render();
   announce('已退出登录。');
+});
+
+byId('save-guest').addEventListener('submit', (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const fields = new FormData(form);
+  withButton(form.querySelector('button'), async () => {
+    await request('/guest-accounts', { method: 'PUT', body: {
+      username: fields.get('username').trim(), password: fields.get('password'),
+    } });
+    form.reset();
+    await loadOverview();
+    announce('访客账号已保存。');
+  });
 });
 
 byId('publish').addEventListener('submit', (event) => {
@@ -260,4 +288,4 @@ byId('publish').addEventListener('submit', (event) => {
 });
 
 byId('refresh').addEventListener('click', () => withButton(byId('refresh'), refresh));
-refresh().catch((error) => announce(error.message, true));
+render();

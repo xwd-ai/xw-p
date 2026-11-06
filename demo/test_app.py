@@ -101,9 +101,10 @@ def test_guest_can_interact_but_cannot_publish(monkeypatch) -> None:
     _seed(client, auth=owner)
 
     post = {"id": "P-2", "creator_id": "creator-1001", "title": "第二支 Vlog"}
-    assert client.get("/session", auth=guest).json() == {"role": "guest"}
-    assert client.get("/session", auth=owner).json() == {"role": "owner"}
-    assert client.get("/posts").json() == [{
+    assert client.get("/session", auth=guest).json() == {"username": "guest", "role": "guest"}
+    assert client.get("/session", auth=owner).json() == {"username": "owner", "role": "owner"}
+    assert client.get("/posts").status_code == 401
+    assert client.get("/posts", auth=guest).json() == [{
         "post_id": "P-1", "creator_id": "creator-1001", "creator_name": "小林",
         "title": "第一支 Vlog", "body": "", "likes": 0, "comments": [],
     }]
@@ -118,12 +119,30 @@ def test_guest_can_interact_but_cannot_publish(monkeypatch) -> None:
     assert client.post("/posts/P-1/comment", json={"actor": "owner", "text": "好看"}, auth=guest).status_code == 200
     assert client.post("/posts/P-1/mention", json={"actor": "阿澈", "target": "creator-1001"}, auth=guest).status_code == 403
     assert [json.loads(request.body)["name"] for request in transport.requests] == ["post_liked", "post_commented"]
-    visible = client.get("/posts").json()[0]
+    visible = client.get("/posts", auth=guest).json()[0]
     assert visible["likes"] == 1
     assert visible["comments"] == [{"id": "trig-2", "actor": "guest", "text": "好看"}]
     assert client.get("/community-overview", auth=owner).json() == {
         "posts": 1, "likes": 1, "unread": 0, "notifications": [],
     }
+
+
+def test_accounts_and_community_survive_restart(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XW_DEMO_DB", str(tmp_path / "community.sqlite3"))
+    monkeypatch.setenv("XW_DEMO_OWNER_PASSWORD", "private-creator")
+    owner = ("owner", "private-creator")
+    guest = ("reader-1", "private-reader")
+    first, _ = _client()
+    _seed(first, auth=owner)
+    account = {"username": guest[0], "password": guest[1]}
+    assert first.put("/guest-accounts", auth=owner, json=account).status_code == 200
+    assert first.post("/posts/P-1/like", auth=guest, json={"actor": "reader-1"}).status_code == 200
+
+    restarted, _ = _client()
+    assert restarted.get("/posts").status_code == 401
+    assert restarted.get("/posts", auth=guest).json()[0]["likes"] == 1
+    assert restarted.get("/guest-accounts", auth=owner).json() == ["reader-1"]
+    assert restarted.put("/guest-accounts", auth=guest, json=account).status_code == 403
 
 
 def test_community_page_serves_frontend_assets() -> None:

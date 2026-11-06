@@ -82,9 +82,9 @@ docker build -f engine/Dockerfile -t xw-notify-engine .
 ## 域名发布
 
 `infra/release/compose.yml` 在宿主机的 `127.0.0.1:2027` 提供社区演示，
-供 `xwp.xwd.info` 的反向代理接入。根路径打开社区首页，公开显示帖子。
+供 `xwp.xwd.info` 的反向代理接入。根路径显示登录入口，登录后可浏览帖子。
 `owner` 可发帖并查看社区概况，`guest` 可点赞和评论。API、Go 引擎和 Redis 均在
-Compose 网络内。Redis 和通知文件存于命名卷，演示帖与创作者档案存于应用内存。
+Compose 网络内。账号、帖子和互动保存在 `community_data` 卷中的 SQLite 文件。
 
 完整控制台由 API 托管，监听宿主机的 `127.0.0.1:2028`。用 SSH 转发后，
 在 `http://127.0.0.1:2028/console/admin.html` 用 owner 登录，再进入工作台查看

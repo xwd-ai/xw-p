@@ -4,23 +4,22 @@
     api/.venv/bin/uvicorn demo.app:app --port 8100
 
 路由只做「解析请求 → 调服务 → 把回执折成响应」，通知语义全部在
-:mod:`demo.community` 与 SDK 里。应用不落库，帖子与档案
-存在进程内存里，重启即空——演示项目要展示的是接入方式，不是存储。
+:mod:`demo.community` 与 SDK 里。配置数据库文件后，账号和社区状态可跨重启保留。
 """
 from __future__ import annotations
 
 import os
 from pathlib import Path
-from secrets import compare_digest
 from typing import Any, Dict, Optional
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .community import Community, CommunityError, build_client  # 先装配 SDK 路径
+from .store import Store, guest_name_valid, import_posts
 from xw_notify import TriggerAck
 
 
@@ -54,6 +53,11 @@ class MentionIn(BaseModel):
     text: str = Field(default="")
 
 
+class GuestIn(BaseModel):
+    username: str
+    password: str = Field(min_length=8, max_length=128, pattern=r"^[ -~]+$")
+
+
 def _ack(receipt: TriggerAck) -> Dict[str, Any]:
     return {
         "triggerId": receipt.trigger_id,
@@ -66,8 +70,14 @@ def _ack(receipt: TriggerAck) -> Dict[str, Any]:
 def create_app(client: Optional[Any] = None) -> FastAPI:
     """装配应用；测试里传入带假传输层的客户端，运行时从环境变量取。"""
     app = FastAPI(title="xw-notify 内容社区演示", version="0.1.0")
-    community = Community(client if client is not None else build_client())
-    if os.getenv("XW_DEMO_SEED") == "1":
+    database = os.getenv("XW_DEMO_DB")
+    store = Store(database)
+    snapshot = Path(database).with_name("import-posts.json") if database else None
+    if snapshot and snapshot.is_file() and store.load() is None:
+        store.save(import_posts(snapshot))
+    seed = store.load() is None and os.getenv("XW_DEMO_SEED") == "1"
+    community = Community(client if client is not None else build_client(), store if database else None)
+    if seed:
         community.register_creator("demo-creator", name="演示创作者")
         for post_id, title, body in (
             ("plants", "阳台的一平方米春天", "把耐阴植物放在内侧，给窗边留一点位置晒太阳。"),
@@ -84,18 +94,27 @@ def create_app(client: Optional[Any] = None) -> FastAPI:
     guest_password = os.getenv("XW_DEMO_GUEST_PASSWORD", "")
     if guest_password and (not owner_password or guest_password == owner_password):
         raise ValueError("请为 owner 和 guest 分别配置不同的口令")
+    if database and not owner_password:
+        raise ValueError("持久化部署需要配置 owner 口令")
+    if owner_password:
+        store.set_account("owner", owner_password, "owner", bootstrap=True)
+    if guest_password:
+        store.set_account("guest", guest_password, "guest", bootstrap=True)
 
     basic = HTTPBasic(auto_error=False)
 
-    def account(credentials: Optional[HTTPBasicCredentials] = Depends(basic)) -> str:
+    def identity(credentials: Optional[HTTPBasicCredentials] = Depends(basic)) -> tuple[str, str]:
         if not owner_password:
-            return "owner"
+            return "owner", "owner"
         if credentials:
-            expected = {"owner": owner_password, "guest": guest_password}.get(credentials.username)
-            if expected and compare_digest(credentials.password.encode(), expected.encode()):
-                return credentials.username
+            role = store.authenticate(credentials.username, credentials.password)
+            if role:
+                return credentials.username, role
         raise HTTPException(status_code=401, detail="账号或口令不正确",
                             headers={"WWW-Authenticate": "Basic"})
+
+    def account(user: tuple[str, str] = Depends(identity)) -> str:
+        return user[1]
 
     def require_owner(role: str = Depends(account)) -> None:
         if role != "owner":
@@ -109,12 +128,24 @@ def create_app(client: Optional[Any] = None) -> FastAPI:
         return FileResponse(assets / "index.html", headers={"Cache-Control": "no-cache"})
 
     @app.get("/session")
-    def session(role: str = Depends(account)) -> Dict[str, str]:
-        return {"role": role}
+    def session(user: tuple[str, str] = Depends(identity)) -> Dict[str, str]:
+        return {"username": user[0], "role": user[1]}
 
-    @app.get("/posts")
-    def posts() -> list[Dict[str, Any]]:
+    @app.get("/posts", dependencies=[Depends(account)])
+    def posts(response: Response) -> list[Dict[str, Any]]:
+        response.headers["Cache-Control"] = "no-store"
         return community.list_posts()
+
+    @app.get("/guest-accounts", dependencies=[Depends(require_owner)])
+    def guest_accounts() -> list[str]:
+        return store.guest_names()
+
+    @app.put("/guest-accounts", dependencies=[Depends(require_owner)])
+    def set_guest(body: GuestIn) -> Dict[str, str]:
+        if not guest_name_valid(body.username) or body.password == owner_password:
+            raise HTTPException(status_code=422, detail="请使用独立的访客账号和口令")
+        store.set_account(body.username, body.password, "guest")
+        return {"username": body.username}
 
     @app.get("/community-overview", dependencies=[Depends(require_owner)])
     def overview() -> Dict[str, Any]:
@@ -143,13 +174,13 @@ def create_app(client: Optional[Any] = None) -> FastAPI:
         return _call(community.create_post, body.id,
                      creator_id=body.creator_id, title=body.title, body=body.body)
 
-    @app.post("/posts/{post_id}/like", dependencies=[Depends(account)])
-    def like(post_id: str, body: ActorIn) -> Dict[str, Any]:
-        return _ack(_call(community.like, post_id, actor=body.actor))
+    @app.post("/posts/{post_id}/like")
+    def like(post_id: str, body: ActorIn, user: tuple[str, str] = Depends(identity)) -> Dict[str, Any]:
+        return _ack(_call(community.like, post_id, actor=user[0] if user[1] == "guest" else body.actor))
 
     @app.post("/posts/{post_id}/comment")
-    def comment(post_id: str, body: CommentIn, role: str = Depends(account)) -> Dict[str, Any]:
-        return _ack(_call(community.comment, post_id, actor="guest" if role == "guest" else body.actor,
+    def comment(post_id: str, body: CommentIn, user: tuple[str, str] = Depends(identity)) -> Dict[str, Any]:
+        return _ack(_call(community.comment, post_id, actor=user[0] if user[1] == "guest" else body.actor,
                           text=body.text, comment_id=body.comment_id))
 
     @app.post("/posts/{post_id}/mention", dependencies=[Depends(require_owner)])

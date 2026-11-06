@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>拾页 · 生活分享社区</title>
   <link rel="stylesheet" href="/community-assets/community.css?v=2">
-  <script defer src="/community-assets/community.js?v=2"></script>
+  <script defer src="/community-assets/community.js?v=3"></script>
 </head>
 <body>
   <aside class="sidebar">
@@ -20,13 +20,14 @@
         <label>密码<input name="password" type="password" autocomplete="current-password" required></label>
         <button class="primary">登录</button>
       </form>
-      <p id="guest-hint" class="hint">游客账号和密码均为 guest</p>
+      <p id="guest-hint" class="hint">使用站长提供的账号登录</p>
       <div id="identity" hidden><p id="role"></p><button id="logout" class="quiet">退出登录</button></div>
     </section>
     <p class="tagline">记录日常，发现同好。</p>
   </aside>
   <main>
-    <section id="discovery">
+    <section id="login-required"><h1>欢迎来到拾页</h1><p>请登录后浏览社区帖子。</p></section>
+    <section id="discovery" hidden>
       <header class="toolbar">
         <label class="search"><span aria-hidden="true">⌕</span><input id="search" type="search" aria-label="搜索帖子" placeholder="搜索你感兴趣的内容"></label>
         <button id="refresh" class="quiet" aria-label="刷新帖子">↻</button>
@@ -39,7 +40,7 @@
       <header class="admin-heading"><div><p class="hint">站长工作台</p><h1>社区概况</h1></div><button id="refresh-overview" class="quiet">刷新数据</button></header>
       <div class="metrics">
         <div><span>帖子总数</span><strong id="post-count">—</strong></div>
-        <div><span>本次运行收到的点赞</span><strong id="like-count">—</strong></div>
+        <div><span>帖子点赞数</span><strong id="like-count">—</strong></div>
         <div><span>未读通知</span><strong id="unread-count">—</strong></div>
       </div>
       <div class="admin-grid">
@@ -50,6 +51,15 @@
             <label>标题<input name="title" maxlength="120" required></label>
             <label>正文<textarea name="body" maxlength="4000" rows="5" required></textarea></label>
             <button class="primary">发布</button>
+          </form>
+        </section>
+        <section class="panel">
+          <h2>访客账号</h2>
+          <p id="guest-accounts" class="hint"></p>
+          <form id="save-guest">
+            <label>访客账号<input name="username" pattern="[a-z][a-z0-9_\-]{2,23}" maxlength="24" required></label>
+            <label>密码<input name="password" type="password" autocomplete="new-password" minlength="8" maxlength="128" required></label>
+            <button class="primary">创建或重置账号</button>
           </form>
         </section>
       </div>

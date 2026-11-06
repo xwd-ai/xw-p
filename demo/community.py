@@ -18,6 +18,8 @@ from threading import Lock
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
+from .store import Store
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "sdk" / "python"))
 
 from xw_notify import Client, TriggerAck  # noqa: E402  （需在路径装配之后）
@@ -39,13 +41,20 @@ class Community:
         community.like("P-1", actor="阿澈")
     """
 
-    def __init__(self, client: Client) -> None:
+    def __init__(self, client: Client, store: Store | None = None) -> None:
         self._client = client
-        self._creators: Dict[str, Dict[str, Any]] = {}
-        self._posts: Dict[str, Dict[str, Any]] = {}
-        self._likes: Dict[str, int] = {}
-        self._comments: Dict[str, list[Dict[str, str]]] = {}
+        self._store = store
+        state = (store.load() if store else None) or {}
+        self._creators: Dict[str, Dict[str, Any]] = state.get("creators", {})
+        self._posts: Dict[str, Dict[str, Any]] = state.get("posts", {})
+        self._likes: Dict[str, int] = state.get("likes", {})
+        self._comments: Dict[str, list[Dict[str, str]]] = state.get("comments", {})
         self._interaction_lock = Lock()
+
+    def _save(self) -> None:
+        if self._store:
+            self._store.save({"creators": self._creators, "posts": self._posts,
+                              "likes": self._likes, "comments": self._comments})
 
     # -- 档案与帖子 -------------------------------------------------------
 
@@ -69,7 +78,9 @@ class Community:
             "email": (email or "").strip() or None,
             "device_token": (device_token or "").strip() or None,
         }
-        self._creators[key] = record
+        with self._interaction_lock:
+            self._creators[key] = record
+            self._save()
         return dict(record)
 
     def create_post(self, post_id: str, *, creator_id: str, title: str, body: str = "") -> Dict[str, Any]:
@@ -81,7 +92,9 @@ class Community:
             "title": self._required(title, "title"),
             "body": body.strip(),
         }
-        self._posts[key] = record
+        with self._interaction_lock:
+            self._posts[key] = record
+            self._save()
         return dict(record)
 
     def list_posts(self) -> list[Dict[str, Any]]:
@@ -103,6 +116,7 @@ class Community:
             with self._interaction_lock:
                 key = post["post_id"]
                 self._likes[key] = self._likes.get(key, 0) + 1
+                self._save()
         return receipt
 
     def comment(
@@ -135,6 +149,7 @@ class Community:
                 if key is None or all(comment["id"] != key for comment in comments):
                     comments.append({"id": key or receipt.trigger_id, "actor": actor, "text": text})
                     del comments[:-20]
+                    self._save()
         return receipt
 
     def mention(
