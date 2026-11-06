@@ -12,11 +12,13 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Response
-from fastapi.responses import FileResponse
+import httpx
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 
 from .community import Community, CommunityError, build_client  # 先装配 SDK 路径
 from .store import Store, guest_name_valid, import_posts
@@ -69,7 +71,41 @@ def _ack(receipt: TriggerAck) -> Dict[str, Any]:
     }
 
 
-def create_app(client: Optional[Any] = None) -> FastAPI:
+# 站长工作台里除了社区前台，还有控制台页面（/console）、控制台调用的接口
+# （/v1）和社区管理页（/community）。这三者都由 API 服务托管，而公网只暴露
+# 演示站，所以在这里透传给 API；否则站长页里的 iframe 请求的是不存在的路径。
+_PROXY_PREFIXES = ("console", "community", "v1")
+
+# 逐跳首部不跨代理转发；Host 要按上游重写，长度与编码交给上游响应自己声明。
+_HOP_BY_HOP = frozenset({
+    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+    "te", "trailers", "transfer-encoding", "upgrade", "host", "content-length",
+})
+
+
+def _end_to_end(headers: Any) -> Dict[str, str]:
+    """只留下该跨代理传递的首部。"""
+    return {k: v for k, v in headers.items() if k.lower() not in _HOP_BY_HOP}
+
+
+async def _relay_body(response: Any) -> Any:
+    """原样搬运响应体：按块转发，收件箱的事件流因此不会被攒成一整段。"""
+    try:
+        async for chunk in response.aiter_raw():
+            yield chunk
+    finally:
+        await response.aclose()
+
+
+async def _release(client: Any, response: Any) -> None:
+    await response.aclose()
+    await client.aclose()
+
+
+def create_app(
+    client: Optional[Any] = None,
+    console_transport: Optional[Any] = None,
+) -> FastAPI:
     """装配应用；测试里传入带假传输层的客户端，运行时从环境变量取。"""
     app = FastAPI(title="xw-notify 内容社区演示", version="0.1.0")
     database = os.getenv("XW_DEMO_DB")
@@ -210,6 +246,56 @@ def create_app(client: Optional[Any] = None) -> FastAPI:
     @app.get("/creators/{creator_id}/inbox", dependencies=[Depends(require_owner)])
     def inbox(creator_id: str, unread: bool = False, limit: int = 20) -> Dict[str, Any]:
         return _call(community.inbox, creator_id, unread=unread, limit=limit)
+
+    # 上游留空时（本地只想跑社区前台）不挂这组路由，原有行为完全不变。
+    console_upstream = (
+        os.getenv("XW_CONSOLE_UPSTREAM") or os.getenv("XW_BASE_URL", "")
+    ).rstrip("/")
+    if console_upstream:
+
+        async def forward(request: Request, path: str) -> Response:
+            if ".." in path.split("/"):
+                raise HTTPException(status_code=404, detail="控制台路径不存在")
+            target = f"{console_upstream}/{path}"
+            if request.url.query:
+                target = f"{target}?{request.url.query}"
+            proxy = httpx.AsyncClient(
+                transport=console_transport,
+                trust_env=False,
+                # 收件箱事件流是长连接，读超时给足；连接与写入仍快速失败。
+                timeout=httpx.Timeout(connect=5.0, read=300.0, write=30.0, pool=5.0),
+            )
+            outgoing = proxy.build_request(
+                request.method,
+                target,
+                headers=_end_to_end(request.headers),
+                content=await request.body() or None,
+            )
+            try:
+                incoming = await proxy.send(outgoing, stream=True)
+            except httpx.RequestError as error:
+                await proxy.aclose()
+                raise HTTPException(status_code=502, detail="控制台服务暂不可用") from error
+            return StreamingResponse(
+                _relay_body(incoming),
+                status_code=incoming.status_code,
+                headers=_end_to_end(incoming.headers),
+                background=BackgroundTask(_release, proxy, incoming),
+            )
+
+        def route_for(prefix: str):
+            async def route(request: Request, path: str) -> Response:
+                return await forward(request, f"{prefix}/{path}")
+
+            return route
+
+        for prefix in _PROXY_PREFIXES:
+            app.add_api_route(
+                f"/{prefix}/{{path:path}}",
+                route_for(prefix),
+                methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+                include_in_schema=False,
+            )
 
     return app
 

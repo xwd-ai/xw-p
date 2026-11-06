@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 from typing import List
 
+import httpx
 import pytest
 
 pytest.importorskip("fastapi")
@@ -176,3 +177,102 @@ def test_guest_requires_distinct_owner_password(monkeypatch) -> None:
     monkeypatch.setenv("XW_DEMO_GUEST_PASSWORD", "community-demo")
     with pytest.raises(ValueError, match="不同的口令"):
         _client()
+
+
+class UpstreamStub:
+    """记录转发到控制台上游的请求，按路径给出固定响应。"""
+
+    def __init__(self, unreachable: bool = False) -> None:
+        self.requests: List[httpx.Request] = []
+        self.unreachable = unreachable
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        if self.unreachable:
+            raise httpx.ConnectError("upstream down", request=request)
+        if request.url.path == "/console/index.html":
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "text/html; charset=utf-8"},
+                stream=httpx.ByteStream(b"<h1>console</h1>"),
+            )
+        if request.url.path == "/v1/auth/token":
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "application/json"},
+                stream=httpx.ByteStream(b'{"accessToken":"token-1"}'),
+            )
+        return httpx.Response(
+            404,
+            headers={"Content-Type": "application/json"},
+            stream=httpx.ByteStream(b'{"detail":"Not Found"}'),
+        )
+
+
+def _console_client(monkeypatch, stub: UpstreamStub) -> TestClient:
+    monkeypatch.setenv("XW_BASE_URL", "http://api.test")
+    app = create_app(
+        Client("http://xw.test", transport=FakeTransport()),
+        console_transport=httpx.MockTransport(stub),
+    )
+    return TestClient(app)
+
+
+def test_console_pages_come_from_api(monkeypatch) -> None:
+    stub = UpstreamStub()
+    client = _console_client(monkeypatch, stub)
+    response = client.get("/console/index.html?view=inbox")
+    assert response.status_code == 200
+    assert response.text == "<h1>console</h1>"
+    forwarded = stub.requests[-1]
+    assert forwarded.url.host == "api.test"
+    assert forwarded.url.path == "/console/index.html"
+    assert forwarded.url.query == b"view=inbox"
+
+
+def test_console_api_forwards_method_body_and_credentials(monkeypatch) -> None:
+    stub = UpstreamStub()
+    client = _console_client(monkeypatch, stub)
+    response = client.post(
+        "/v1/auth/token",
+        json={"username": "owner", "password": "pw"},
+        headers={"Authorization": "Bearer seed", "X-Environment": "production"},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"accessToken": "token-1"}
+    forwarded = stub.requests[-1]
+    assert forwarded.method == "POST"
+    assert json.loads(forwarded.content)["username"] == "owner"
+    assert forwarded.headers["authorization"] == "Bearer seed"
+    assert forwarded.headers["x-environment"] == "production"
+
+
+def test_console_proxy_reports_unreachable_upstream(monkeypatch) -> None:
+    client = _console_client(monkeypatch, UpstreamStub(unreachable=True))
+    response = client.get("/console/")
+    assert response.status_code == 502
+    assert "控制台服务暂不可用" in response.json()["detail"]
+
+
+def test_console_proxy_rejects_traversal(monkeypatch) -> None:
+    stub = UpstreamStub()
+    client = _console_client(monkeypatch, stub)
+    response = client.get("/console/%2E%2E/%2E%2E/v1/workflows")
+    assert response.status_code == 404
+    assert stub.requests == []
+
+
+def test_console_proxy_leaves_community_assets_local(monkeypatch) -> None:
+    stub = UpstreamStub()
+    client = _console_client(monkeypatch, stub)
+    assert client.get("/community-assets/community.css").status_code == 200
+    assert stub.requests == []
+
+
+def test_console_routes_absent_without_upstream(monkeypatch) -> None:
+    monkeypatch.delenv("XW_BASE_URL", raising=False)
+    monkeypatch.delenv("XW_CONSOLE_UPSTREAM", raising=False)
+    client, _ = _client()
+    assert client.get("/console/index.html").status_code == 404
+    assert client.get("/v1/workflows").status_code == 404
+
