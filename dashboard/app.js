@@ -23,7 +23,7 @@
     });
   });
   const requestedView = new URLSearchParams(location.search).get('view');
-  if (requestedView === 'workflows') document.querySelector('[data-view="workflows"]').click();
+  if (Object.hasOwn(views, requestedView)) document.querySelector('[data-view="' + requestedView + '"]').click();
 
   /* ============ 错误横幅（后端连接状态） ============ */
   const banner = document.getElementById('xw-banner');

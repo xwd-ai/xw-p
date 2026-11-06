@@ -8,6 +8,7 @@ let role = '';
 let posts = [];
 let category = '推荐';
 let admin = false;
+let consoleView = '';
 let statusTimer;
 const covers = Object.assign(Object.create(null), {
   'demo-post': ['ride', '户外', '4/5'],
@@ -124,18 +125,25 @@ function render() {
   byId('login').hidden = Boolean(role);
   byId('guest-hint').hidden = Boolean(role);
   byId('console-entry').hidden = privateConsole;
-  byId('console-links').hidden = !privateConsole;
+  const showConsole = privateConsole && role === 'owner' && Boolean(consoleView);
+  byId('notification-nav').hidden = !privateConsole || role !== 'owner';
+  byId('notification-platform').hidden = !showConsole;
   byId('identity').hidden = !role;
   byId('role').textContent = role === 'owner' ? '已登录 · 站长' : '已登录 · 游客';
   byId('manage').hidden = role !== 'owner';
   byId('composer').hidden = role !== 'owner';
   byId('login-required').hidden = Boolean(role);
-  byId('discovery').hidden = !role || admin;
-  byId('admin').hidden = role !== 'owner' || !admin;
-  byId('discover').classList.toggle('active', !admin);
-  byId('manage').classList.toggle('active', admin);
-  byId('discover').setAttribute('aria-current', admin ? 'false' : 'page');
-  byId('manage').setAttribute('aria-current', admin ? 'page' : 'false');
+  byId('discovery').hidden = !role || admin || showConsole;
+  byId('admin').hidden = role !== 'owner' || !admin || showConsole;
+  byId('discover').classList.toggle('active', !admin && !showConsole);
+  byId('manage').classList.toggle('active', admin && !showConsole);
+  byId('discover').setAttribute('aria-current', admin || showConsole ? 'false' : 'page');
+  byId('manage').setAttribute('aria-current', admin && !showConsole ? 'page' : 'false');
+  for (const button of document.querySelectorAll('[data-console-view]')) {
+    const selected = showConsole && button.dataset.consoleView === consoleView;
+    button.classList.toggle('active', selected);
+    button.setAttribute('aria-current', selected ? 'page' : 'false');
+  }
 
   const feed = byId('feed');
   feed.replaceChildren();
@@ -207,13 +215,50 @@ for (const label of ['推荐', '户外', '美食', '旅行', '家居', '随手�
   byId('categories').append(button);
 }
 byId('search').addEventListener('input', render);
-byId('discover').addEventListener('click', () => { admin = false; render(); });
+byId('discover').addEventListener('click', () => { consoleView = ''; admin = false; render(); });
 byId('manage').addEventListener('click', () => {
+  consoleView = '';
   admin = true;
   render();
   withButton(byId('refresh-overview'), loadOverview);
 });
 byId('refresh-overview').addEventListener('click', () => withButton(byId('refresh-overview'), loadOverview));
+
+const consoleFrame = byId('console-frame');
+const operationsFrame = byId('operations-frame');
+const consoleButtons = Array.from(document.querySelectorAll('[data-console-view]'));
+for (const frame of [consoleFrame, operationsFrame]) {
+  frame.addEventListener('load', () => {
+    frame.contentDocument?.addEventListener('click', (event) => {
+      const link = event.target.closest('[data-workspace-view]');
+      if (!link || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const view = link.dataset.workspaceView;
+      const destination = view === 'community' ? byId('manage') :
+        consoleButtons.find((button) => button.dataset.consoleView === view);
+      if (destination) {
+        event.preventDefault();
+        destination.click();
+      }
+    });
+  });
+}
+for (const button of consoleButtons) {
+  button.addEventListener('click', () => {
+    consoleView = button.dataset.consoleView;
+    const operations = consoleView === 'operations';
+    consoleFrame.hidden = operations;
+    operationsFrame.hidden = !operations;
+    if (operations) {
+      if (!operationsFrame.hasAttribute('src')) operationsFrame.src = '/console/admin.html';
+    } else {
+      const nav = consoleFrame.contentDocument?.querySelectorAll('[data-view]');
+      const item = nav && Array.from(nav).find((link) => link.dataset.view === consoleView);
+      if (item) item.click();
+      else consoleFrame.src = '/console/index.html?view=' + encodeURIComponent(consoleView);
+    }
+    render();
+  });
+}
 
 async function refresh() {
   if (!role) return;
@@ -258,6 +303,9 @@ byId('logout').addEventListener('click', () => {
   credentials = '';
   role = '';
   admin = false;
+  consoleView = '';
+  consoleFrame.removeAttribute('src');
+  operationsFrame.removeAttribute('src');
   posts = [];
   byId('detail').close();
   byId('detail-content').replaceChildren();
@@ -304,6 +352,9 @@ byId('publish').addEventListener('submit', (event) => {
 byId('refresh').addEventListener('click', () => withButton(byId('refresh'), refresh));
 render();
 if (privateConsole) {
+  window.addEventListener('storage', (event) => {
+    if (event.key === tokenKey && !event.newValue && role) byId('logout').click();
+  });
   const storedToken = localStorage.getItem(tokenKey);
   if (storedToken) {
     credentials = 'Bearer ' + storedToken;

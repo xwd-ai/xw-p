@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>拾页 · 生活分享社区</title>
-  <link rel="stylesheet" href="/community-assets/community.css?v=2">
-  <script defer src="/community-assets/community.js?v=4"></script>
+  <link rel="stylesheet" href="/community-assets/community.css?v=3">
+  <script defer src="/community-assets/community.js?v=5"></script>
 </head>
 <body>
   <aside class="sidebar">
@@ -13,6 +13,16 @@
     <nav aria-label="主导航">
       <button id="discover" class="nav active" aria-current="page"><span aria-hidden="true">⌂</span> 发现</button>
       <button id="manage" class="nav" hidden><span aria-hidden="true">▤</span> 社区管理</button>
+      <div id="notification-nav" hidden>
+        <p class="hint">通知平台</p>
+        <button class="nav" data-console-view="dashboard">仪表盘</button>
+        <button class="nav" data-console-view="workflows">工作流编排</button>
+        <button class="nav" data-console-view="activity">活动流</button>
+        <button class="nav" data-console-view="inbox">收件箱</button>
+        <button class="nav" data-console-view="subscribers">创作者</button>
+        <button class="nav" data-console-view="settings">设置</button>
+        <button class="nav" data-console-view="operations">运营后台</button>
+      </div>
     </nav>
     <section class="account">
       <form id="login">
@@ -44,13 +54,9 @@
         <div><span>未读通知</span><strong id="unread-count">—</strong></div>
       </div>
       <div class="admin-grid">
-        <section class="panel">
+        <section id="console-entry" class="panel">
           <h2>通知平台</h2>
-          <p id="console-entry"><a class="quiet" href="http://127.0.0.1:2028/community/">进入统一站长工作台 ↗</a></p>
-          <div id="console-links" hidden>
-            <p><a class="quiet" href="/console/admin.html">运营后台 →</a></p>
-            <p><a class="quiet" href="/console/index.html?view=workflows">工作流编排 →</a></p>
-          </div>
+          <p><a class="quiet" href="http://127.0.0.1:2028/community/">进入统一站长工作台 ↗</a></p>
         </section>
         <section class="panel"><h2>最新通知</h2><div id="notifications"></div></section>
         <section id="composer" class="panel" hidden>
@@ -71,6 +77,10 @@
           </form>
         </section>
       </div>
+    </section>
+    <section id="notification-platform" aria-label="通知平台" hidden>
+      <iframe id="console-frame" class="console-frame" title="内容社区互动触达"></iframe>
+      <iframe id="operations-frame" class="console-frame" title="运营后台" hidden></iframe>
     </section>
     <p id="status" role="status" aria-live="polite" hidden></p>
   </main>
