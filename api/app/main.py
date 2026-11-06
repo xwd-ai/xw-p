@@ -8,19 +8,23 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+import httpx
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import app_metrics, config, openapi as openapi_docs, tokens
 from .activity_log import build_activity, record_activities, record_activity
 from .admin_activity_routes import router as admin_activity_router
 from .admin_routes import router as admin_router
+from .admin_auth import AdminPrincipal, require_admin
 from .auth import EnvContext, require_env
 from .auth_routes import router as auth_router
 from .activity_routes import router as activity_router
@@ -162,6 +166,40 @@ app.include_router(metrics_router)
 console_dir = os.getenv("XW_CONSOLE_DIR")
 if console_dir:
     app.mount("/console", StaticFiles(directory=Path(console_dir), html=True), name="console")
+
+community_url = os.getenv("XW_CONSOLE_COMMUNITY_URL")
+if console_dir and community_url:
+    community_assets = Path(console_dir) / "community"
+    app.mount("/community-assets", StaticFiles(directory=community_assets), name="community-assets")
+
+    @app.get("/community/", include_in_schema=False)
+    def community_page() -> FileResponse:
+        return FileResponse(community_assets / "index.html", headers={"Cache-Control": "no-cache"})
+
+    @app.api_route("/community/api/{path:path}", methods=["GET", "POST", "PUT"], include_in_schema=False)
+    async def community_request(
+        path: str, request: Request, principal: AdminPrincipal = Depends(require_admin),
+    ) -> Response:
+        if principal.credential != "jwt" or principal.subject != "owner":
+            raise HTTPException(status_code=403, detail="请用站长账号登录")
+        allowed = {
+            "GET": r"session|posts|community-overview|guest-accounts",
+            "POST": r"creators|posts|posts/[^/]+/(?:like|comment)",
+            "PUT": r"guest-accounts",
+        }
+        if not re.fullmatch(allowed[request.method], path) or any(part in (".", "..") for part in path.split("/")):
+            raise HTTPException(status_code=404, detail="社区接口不存在")
+        try:
+            async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
+                upstream = await client.request(
+                    request.method, f"{community_url.rstrip('/')}/{quote(path, safe='/')}",
+                    auth=("owner", config.ADMIN_PASSWORD), content=await request.body(),
+                    headers={"Content-Type": request.headers.get("Content-Type", "application/json")},
+                )
+        except httpx.RequestError as exc:
+            raise HTTPException(status_code=502, detail="社区服务暂不可用") from exc
+        return Response(upstream.content, status_code=upstream.status_code,
+                        media_type="application/json", headers={"Cache-Control": "no-store"})
 
 # 文档 schema 在路由注册完成后装配：分组说明、鉴权与公共错误响应都依赖最终
 # 的路由表，提前安装只会拿到一份不完整的 paths。

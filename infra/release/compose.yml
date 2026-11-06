@@ -22,6 +22,7 @@ services:
       XW_STORAGE: jsonl
       XW_API_KEYS: ${XW_API_KEYS:?缺少 API Key 配置}
       XW_CONSOLE_DIR: /app/console
+      XW_CONSOLE_COMMUNITY_URL: http://demo:8100
       XW_JWT_SECRET: ${XW_JWT_SECRET:?缺少后台令牌签名密钥}
       XW_ADMIN_USERNAME: owner
       XW_ADMIN_PASSWORD: ${XW_DEMO_OWNER_PASSWORD:?缺少 owner 口令}

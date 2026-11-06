@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>拾页 · 生活分享社区</title>
   <link rel="stylesheet" href="/community-assets/community.css?v=2">
-  <script defer src="/community-assets/community.js?v=3"></script>
+  <script defer src="/community-assets/community.js?v=4"></script>
 </head>
 <body>
   <aside class="sidebar">
-    <a class="brand" href="/"><span>拾页</span> <strong>生活社区</strong></a>
+    <a class="brand" href="./"><span>拾页</span> <strong>生活社区</strong></a>
     <nav aria-label="主导航">
       <button id="discover" class="nav active" aria-current="page"><span aria-hidden="true">⌂</span> 发现</button>
       <button id="manage" class="nav" hidden><span aria-hidden="true">▤</span> 社区管理</button>
@@ -46,10 +46,11 @@
       <div class="admin-grid">
         <section class="panel">
           <h2>通知平台</h2>
-          <p class="hint">先登录运营后台，再到工作台左侧选择「工作流编排」。</p>
-          <p><a class="quiet" href="http://127.0.0.1:2028/console/admin.html" target="_blank" rel="noreferrer">打开运营后台 ↗</a></p>
-          <p><a class="quiet" href="http://127.0.0.1:2028/console/index.html" target="_blank" rel="noreferrer">打开工作台与编排器 ↗</a></p>
-          <p class="hint">通过本机 SSH 隧道访问，可查看活动流、收件箱和投递统计。</p>
+          <p id="console-entry"><a class="quiet" href="http://127.0.0.1:2028/community/">进入统一站长工作台 ↗</a></p>
+          <div id="console-links" hidden>
+            <p><a class="quiet" href="/console/admin.html">运营后台 →</a></p>
+            <p><a class="quiet" href="/console/index.html?view=workflows">工作流编排 →</a></p>
+          </div>
         </section>
         <section class="panel"><h2>最新通知</h2><div id="notifications"></div></section>
         <section id="composer" class="panel" hidden>

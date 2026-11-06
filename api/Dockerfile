@@ -13,6 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY api/app ./app
 COPY dashboard/*.html dashboard/*.css dashboard/*.js ./console/
+COPY dashboard/community ./console/community
 
 # 数据目录统一挂载点：XW_DATA_DIR 指向它，收件箱/执行明细/偏好等 JSONL 都落在这里，
 # 与引擎容器共享同一个卷即可完成「引擎写、API 读」。

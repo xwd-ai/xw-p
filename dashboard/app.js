@@ -22,6 +22,8 @@
       document.getElementById('crumb-name').textContent = views[li.dataset.view];
     });
   });
+  const requestedView = new URLSearchParams(location.search).get('view');
+  if (requestedView === 'workflows') document.querySelector('[data-view="workflows"]').click();
 
   /* ============ 错误横幅（后端连接状态） ============ */
   const banner = document.getElementById('xw-banner');

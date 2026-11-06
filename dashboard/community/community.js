@@ -1,6 +1,8 @@
 'use strict';
 
 const byId = (id) => document.getElementById(id);
+const privateConsole = location.pathname === '/community/';
+const tokenKey = 'xw.adminToken';
 let credentials = '';
 let role = '';
 let posts = [];
@@ -31,7 +33,8 @@ async function request(path, { method = 'GET', body, authorization = credentials
   const headers = {};
   if (authorization) headers.Authorization = authorization;
   if (body) headers['Content-Type'] = 'application/json';
-  const response = await fetch(path, {
+  const url = privateConsole && !path.startsWith('/v1/') ? '/community/api' + path : path;
+  const response = await fetch(url, {
     method, headers, body: body ? JSON.stringify(body) : undefined, credentials: 'omit',
   });
   if (!response.ok) {
@@ -120,6 +123,8 @@ function showDetail(post) {
 function render() {
   byId('login').hidden = Boolean(role);
   byId('guest-hint').hidden = Boolean(role);
+  byId('console-entry').hidden = privateConsole;
+  byId('console-links').hidden = !privateConsole;
   byId('identity').hidden = !role;
   byId('role').textContent = role === 'owner' ? '已登录 · 站长' : '已登录 · 游客';
   byId('manage').hidden = role !== 'owner';
@@ -229,8 +234,16 @@ byId('login').addEventListener('submit', (event) => {
       throw new Error('请输入有效口令。');
     }
     if (!/^[a-z][a-z0-9_-]{2,23}$/.test(username)) throw new Error('请输入有效账号。');
-    const authorization = 'Basic ' + btoa(`${username}:${values.get('password')}`);
+    let authorization;
+    if (privateConsole) {
+      const token = await request('/v1/auth/token', { method: 'POST',
+        body: { username, password: values.get('password') } });
+      authorization = 'Bearer ' + token.accessToken;
+    } else {
+      authorization = 'Basic ' + btoa(`${username}:${values.get('password')}`);
+    }
     const session = await request('/session', { authorization });
+    if (privateConsole) localStorage.setItem(tokenKey, authorization.slice(7));
     credentials = authorization;
     role = session.role;
     form.reset();
@@ -241,6 +254,7 @@ byId('login').addEventListener('submit', (event) => {
 });
 
 byId('logout').addEventListener('click', () => {
+  if (privateConsole) localStorage.removeItem(tokenKey);
   credentials = '';
   role = '';
   admin = false;
@@ -289,3 +303,16 @@ byId('publish').addEventListener('submit', (event) => {
 
 byId('refresh').addEventListener('click', () => withButton(byId('refresh'), refresh));
 render();
+if (privateConsole) {
+  const storedToken = localStorage.getItem(tokenKey);
+  if (storedToken) {
+    credentials = 'Bearer ' + storedToken;
+    request('/session').then(async (session) => {
+      role = session.role;
+      await refresh();
+    }).catch((error) => {
+      byId('logout').click();
+      announce(error.message, true);
+    });
+  }
+}

@@ -87,8 +87,8 @@ docker build -f engine/Dockerfile -t xw-notify-engine .
 Compose 网络内。账号、帖子和互动保存在 `community_data` 卷中的 SQLite 文件。
 
 完整控制台由 API 托管，监听宿主机的 `127.0.0.1:2028`。用 SSH 转发后，
-在 `http://127.0.0.1:2028/console/admin.html` 用 owner 登录，再进入工作台查看
-工作流编排器与收件箱。控制台收件箱用带登录凭据的请求轮询。
+在 `http://127.0.0.1:2028/community/` 用 owner 登录。社区管理、运营后台和工作流
+编排共享本机工作台的登录状态。控制台收件箱用带登录凭据的请求轮询。
 
 ```sh
 ssh -NT -L 127.0.0.1:2028:127.0.0.1:2028 aly
