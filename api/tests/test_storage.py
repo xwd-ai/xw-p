@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from datetime import date, datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -162,7 +163,11 @@ def test_postgres_read_all_parses_json_columns():
     assert records[1]["channels"] == ["email"]
 
 
-def test_postgres_stats_aggregates_three_queries():
+def test_postgres_stats_aggregates_three_queries(monkeypatch):
+    now = datetime(2026, 11, 5, 12, tzinfo=timezone.utc)
+    clock = SimpleNamespace(now=lambda tz: now.astimezone(tz))
+    monkeypatch.setattr("app.storage.datetime", clock)
+    monkeypatch.setattr("app.stats.datetime", clock)
     totals = _Result([{"total": 10, "sent": 7, "skipped": 1}])
     channels = _Result([{"channel": "in_app", "n": 6}, {"channel": "email", "n": 4}])
     days = _Result([{"day": date(2026, 11, 5), "n": 3}])
