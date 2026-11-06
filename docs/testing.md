@@ -23,6 +23,10 @@ api/.venv/bin/python scripts/export_openapi.py --check
 # 端到端场景验收（自起 Redis / API / 引擎三个真实进程）
 api/.venv/bin/python scripts/e2e_scenarios.py
 api/.venv/bin/python scripts/e2e_scenarios.py --scenario digest,idem   # 只跑部分场景
+
+# 执行明细的 Postgres 后端：真库用例，未设连接串时自动跳过
+cd engine && XW_TEST_POSTGRES_DSN='postgres://user@localhost:5432/postgres?sslmode=disable' \
+    go test ./internal/execution/ -run Integration -v
 ```
 
 本机需要 `HTTP_PROXY` / `HTTPS_PROXY` 指向代理时，跑 Python 测试要先把它们去掉
@@ -82,6 +86,7 @@ uvicorn 与编译出的引擎二进制，跑完即销毁，不碰 `api/data` 下
 | `app/health.py` | 存活与就绪分离、超时、错误文本脱敏 | `test_health.py` |
 | `engine/internal/metrics` | 桶累积、标签转义、总和口径 | `prometheus_test.go` |
 | `engine/internal/admin` | `/readyz` 语义、探测超时、`/metrics` 内容类型 | `health_test.go` |
+| `engine/internal/execution` | 连接池参数、预处理复用、事务边界、上下文取消、关闭语义 | `postgres_test.go`、`postgres_integration_test.go` |
 
 ## 已知缺口
 
@@ -96,6 +101,9 @@ uvicorn 与编译出的引擎二进制，跑完即销毁，不碰 `api/data` 下
 - **`app/providers/*` 的外部 HTTP 实现**按契约测（mock 传输层），没有打真实
   供应商；真实凭据与网络行为不在仓库内验证。
 - **前端只测纯逻辑**（收件箱组件、后台表单校验），DOM 渲染与交互靠人工冒烟。
+- **执行明细的 Postgres 后端分两层测**：假驱动验证 Go 侧的参数顺序、池参数与
+  事务边界，真库用例验证 SQL 的类型与默认值；后者需要本机有 Postgres，默认跳过。
+  真库用例不覆盖连接被中途掐断后 `ConnMaxLifetime` 的实际回收行为。
 
 ## 写测试的约定
 

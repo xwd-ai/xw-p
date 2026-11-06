@@ -79,6 +79,10 @@ docker build -f engine/Dockerfile -t xw-notify-engine .
 功能语义完全一致：镜像只是换个方式把两个进程跑起来，接口、文件格式与
 配置变量都没有容器专用的分支。
 
+执行明细默认写到共享卷里的 `executions.jsonl`。多实例部署时改用
+`XW_EXECUTION_STORE=postgres`，让 `XW_DATABASE_URL` 指向同一个库并先执行
+`scripts/migrate_postgres.sh`；参数与差异见 [execution-store.md](execution-store.md)。
+
 ## 域名发布
 
 `infra/release/compose.yml` 在宿主机的 `127.0.0.1:2027` 提供社区演示，

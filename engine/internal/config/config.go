@@ -77,6 +77,21 @@ type Config struct {
 	// 数据目录，默认指向 api/data/executions.jsonl；写 off/disabled/none/- 表示
 	// 不回写（只保留日志与执行汇总）。
 	ExecutionFile string
+	// ExecutionStore 选择执行明细的落库后端：jsonl（默认，本地文件）或 postgres。
+	ExecutionStore string
+	// DatabaseURL 是 Postgres 连接串，与 API 共用同一个 XW_DATABASE_URL：
+	// 两侧必须指向同一个库，引擎写进去的明细 API 才读得到。
+	DatabaseURL string
+	// 以下四项是连接池参数。默认值偏保守：执行明细是旁路写入，不值得为它
+	// 抢占数据库的连接配额；MaxIdleConns 会被夹紧到不超过 MaxOpenConns。
+	PGMaxOpenConns    int
+	PGMaxIdleConns    int
+	PGConnMaxLifetime time.Duration
+	PGConnMaxIdleTime time.Duration
+	// PGConnectTimeout 是启动时连通性检查与预编译语句的超时；
+	// PGWriteTimeout 是单条明细的写入预算，超时只影响这一条记录。
+	PGConnectTimeout time.Duration
+	PGWriteTimeout   time.Duration
 
 	// PreferencesFile 是订阅者偏好文件路径。引擎在投递前按「订阅者 + 工作流 +
 	// 渠道」解析这份文件，与 API 共用同一份数据目录；写 off/disabled/none/- 表示
@@ -155,6 +170,14 @@ func Load() Config {
 		ProviderProbeInterval: probeInterval(),
 		ProviderProbeTimeout:  envDuration("XW_PROVIDER_PROBE_TIMEOUT", provider.DefaultProbeTimeout),
 		ExecutionFile:         strings.TrimSpace(envOr("XW_EXECUTION_FILE", defaultExecutionFile)),
+		ExecutionStore:        strings.TrimSpace(envOr("XW_EXECUTION_STORE", ExecutionBackendJSONL)),
+		DatabaseURL:           strings.TrimSpace(os.Getenv("XW_DATABASE_URL")),
+		PGMaxOpenConns:        envInt("XW_PG_MAX_OPEN", defaultPGMaxOpen),
+		PGMaxIdleConns:        envInt("XW_PG_MAX_IDLE", defaultPGMaxIdle),
+		PGConnMaxLifetime:     envDuration("XW_PG_CONN_LIFETIME", defaultPGConnLifetime),
+		PGConnMaxIdleTime:     envDuration("XW_PG_CONN_IDLE_TIME", defaultPGConnIdleTime),
+		PGConnectTimeout:      envDuration("XW_PG_CONNECT_TIMEOUT", defaultPGConnectTimeout),
+		PGWriteTimeout:        envDuration("XW_PG_WRITE_TIMEOUT", defaultPGWriteTimeout),
 		PreferencesFile:       strings.TrimSpace(envOr("XW_PREFERENCES_FILE", defaultPreferencesFile)),
 		CallbackURL:           strings.TrimSpace(os.Getenv("XW_CALLBACK_URL")),
 		CallbackTimeout:       envDuration("XW_CALLBACK_TIMEOUT", webhook.DefaultTimeout),
@@ -249,6 +272,40 @@ func (c Config) CallbackArchiveDisabled() bool {
 // 与收件箱（api/data/inbox.jsonl）同理：引擎写、API 读，两个进程共用一份
 // 数据目录，因此默认指向 API 侧的执行明细文件。
 const defaultExecutionFile = "api/data/executions.jsonl"
+
+// 执行明细的两个后端。JSONL 是默认值：单机部署不需要数据库，零依赖即可跑通；
+// Postgres 用在多实例场景，写入与查询都交给同一张 execution_details 表。
+const (
+	ExecutionBackendJSONL    = "jsonl"
+	ExecutionBackendPostgres = "postgres"
+)
+
+// 连接池默认值。与 execution.PostgresConfig 的默认值保持同一组数字，
+// 配置层不重复夹紧，最终取值由存储层统一处理。
+const (
+	defaultPGMaxOpen        = 8
+	defaultPGMaxIdle        = 4
+	defaultPGConnLifetime   = 30 * time.Minute
+	defaultPGConnIdleTime   = 5 * time.Minute
+	defaultPGConnectTimeout = 5 * time.Second
+	defaultPGWriteTimeout   = 5 * time.Second
+)
+
+// ExecutionBackend 返回规范化后的执行明细后端，第二个返回值表示配置值是否被识别。
+//
+// 写错的值回退 jsonl 并由调用方记一条日志：拼错一个变量不该让引擎起不来，
+// 但也不能悄悄写到另一个地方——「配了 postgres、实际写文件」是最难发现的一类
+// 配置错误，因为两种情况都能跑。
+func (c Config) ExecutionBackend() (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(c.ExecutionStore)) {
+	case ExecutionBackendPostgres, "postgresql", "pg":
+		return ExecutionBackendPostgres, true
+	case "", ExecutionBackendJSONL, "file":
+		return ExecutionBackendJSONL, true
+	default:
+		return ExecutionBackendJSONL, false
+	}
+}
 
 // defaultPreferencesFile 是订阅者偏好文件的默认路径。
 //

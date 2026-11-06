@@ -357,8 +357,9 @@ func newDelayScheduler(logger *slog.Logger, pipe *pipeline.Pipeline, cfg config.
 			}
 		}
 		// 续跑同样是一次投递：不写执行明细的话，delay 之后的渠道在后台
-		// 就查不到结果（触发时刻只有前半程的明细）。
-		recorded := runner.RecordResults(recorder, logger, deferral.Message, results)
+		// 就查不到结果（触发时刻只有前半程的明细）。这里把调度器给的上下文
+		// 传下去：任务被取消时，写明细也跟着停。
+		recorded := runner.RecordResultsContext(ctx, recorder, logger, deferral.Message, results)
 		// 指标同理：续跑的这段投递同样是「这条渠道发了一次」，不计数会让
 		// 带 delay 的工作流在指标里少一截成功数。
 		runner.RecordMetrics(sink, results)
@@ -382,14 +383,25 @@ func newDelayScheduler(logger *slog.Logger, pipe *pipeline.Pipeline, cfg config.
 
 // newExecutionRecorder 装配投递结果的执行明细回写。
 //
-// 三种情况：显式关闭（XW_EXECUTION_FILE=off）、文件打不开（目录只读、路径被
-// 目录占位）、正常打开。前两种都返回 nil 记录器，投递照常进行——审计链路
+// 三种情况：显式关闭（XW_EXECUTION_FILE=off）、存储不可用（文件打不开、
+// 数据库连不上）、正常打开。前两种都返回 nil 记录器，投递照常进行——审计链路
 // 出问题不该拦住消息本身，但必须在启动日志里说清楚，否则「执行明细是空的」
 // 会被误当成「没有投递过」。
 func newExecutionRecorder(logger *slog.Logger, cfg config.Config) (*execution.Recorder, func()) {
 	if cfg.ExecutionDisabled() {
 		logger.Info("[engine] 执行明细回写已关闭", "reason", "XW_EXECUTION_FILE=off")
 		return nil, func() {}
+	}
+
+	backend, known := cfg.ExecutionBackend()
+	if !known {
+		logger.Warn("[engine] 未知的执行明细后端，按文件回写处理",
+			"value", cfg.ExecutionStore,
+			"fallback", config.ExecutionBackendJSONL,
+		)
+	}
+	if backend == config.ExecutionBackendPostgres {
+		return newPostgresExecutionRecorder(logger, cfg)
 	}
 
 	store, err := execution.NewJSONLStore(cfg.ExecutionFile)
@@ -401,10 +413,56 @@ func newExecutionRecorder(logger *slog.Logger, cfg config.Config) (*execution.Re
 		return nil, func() {}
 	}
 
-	logger.Info("[engine] 投递结果将回写执行明细", "file", store.Path())
+	logger.Info("[engine] 投递结果将回写执行明细", "backend", "jsonl", "file", store.Path())
 	return execution.NewRecorder(store, logger), func() {
 		if err := store.Close(); err != nil {
 			logger.Warn("[engine] 关闭执行明细文件失败", "file", store.Path(), "error", err)
+		}
+	}
+}
+
+// newPostgresExecutionRecorder 装配写入 execution_details 的记录器。
+//
+// 连接串缺失或建连失败时同样退回「不回写」：数据库是旁路依赖，它不可用时
+// 消息仍然要发出去。连接池参数与写入预算都从配置传入，存储层只负责应用。
+func newPostgresExecutionRecorder(logger *slog.Logger, cfg config.Config) (*execution.Recorder, func()) {
+	if cfg.DatabaseURL == "" {
+		logger.Error("[engine] 执行明细后端为 postgres 但 XW_DATABASE_URL 为空，本次不回写投递结果")
+		return nil, func() {}
+	}
+
+	connectCtx, cancel := context.WithTimeout(context.Background(), cfg.PGConnectTimeout)
+	defer cancel()
+	store, err := execution.NewPostgresStore(connectCtx, execution.PostgresConfig{
+		DSN:             cfg.DatabaseURL,
+		MaxOpenConns:    cfg.PGMaxOpenConns,
+		MaxIdleConns:    cfg.PGMaxIdleConns,
+		ConnMaxLifetime: cfg.PGConnMaxLifetime,
+		ConnMaxIdleTime: cfg.PGConnMaxIdleTime,
+		ConnectTimeout:  cfg.PGConnectTimeout,
+	}, logger)
+	if err != nil {
+		logger.Error("[engine] 执行明细数据库不可用，本次不回写投递结果", "error", err)
+		return nil, func() {}
+	}
+
+	recorder := execution.NewRecorder(store, logger).WithWriteTimeout(cfg.PGWriteTimeout)
+	logger.Info("[engine] 投递结果将回写执行明细", "backend", "postgres")
+	return recorder, func() {
+		// 退出时打一行池统计：WaitCount / WaitDuration 是判断池子够不够的
+		// 唯一依据，平时没有别的地方能看到「调用方排了多久的队」。
+		stats := store.Stats()
+		logger.Info("[engine] 执行明细连接池统计",
+			"maxOpen", stats.MaxOpen,
+			"open", stats.Open,
+			"inUse", stats.InUse,
+			"waitCount", stats.WaitCount,
+			"waitMs", stats.WaitDuration.Milliseconds(),
+			"maxIdleClosed", stats.MaxIdleClosed,
+			"maxLifetimeClosed", stats.MaxLifetimeClosed,
+		)
+		if err := store.Close(); err != nil {
+			logger.Warn("[engine] 关闭执行明细连接池失败", "error", err)
 		}
 	}
 }

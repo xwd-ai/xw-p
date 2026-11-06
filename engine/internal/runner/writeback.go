@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	"log/slog"
 	"strings"
 
@@ -19,6 +20,15 @@ import (
 // 并带上命中的层级。被过滤的步骤没有投递意图，偏好跳过的步骤有——区别在于
 // 「本来要发，因为用户设置没发」，这个结论事后无法从别处推出来。
 func RecordResults(recorder *execution.Recorder, logger *slog.Logger, msg queue.QueuedMessage, results []pipeline.StepResult) int {
+	return RecordResultsContext(context.Background(), recorder, logger, msg, results)
+}
+
+// RecordResultsContext 与 RecordResults 相同，但把调用方上下文传下去。
+//
+// 延迟续跑这类由调度器驱动的路径有明确的上下文：任务被取消或超过预算时，
+// 写明细也该跟着停，而不是在后台继续占着连接。正常消费路径没有可传的上下文，
+// 走 RecordResults 用后台 context。
+func RecordResultsContext(ctx context.Context, recorder *execution.Recorder, logger *slog.Logger, msg queue.QueuedMessage, results []pipeline.StepResult) int {
 	if recorder == nil {
 		return 0
 	}
@@ -31,7 +41,7 @@ func RecordResults(recorder *execution.Recorder, logger *slog.Logger, msg queue.
 		if !ok {
 			continue
 		}
-		if _, err := recorder.Write(record); err != nil {
+		if _, err := recorder.WriteContext(ctx, record); err != nil {
 			// 记录器已经打过 Warn，这里不再重复；继续写下一条，
 			// 一条记录写不进去不该让同一次执行的其他渠道也丢掉明细。
 			continue

@@ -2,6 +2,7 @@ package execution
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,16 @@ import (
 // 重试会留下多行，正好能看出「发了两次」）。
 type Store interface {
 	Append(record Record) error
+}
+
+// ContextStore 是支持调用方取消或超时的 Store。
+//
+// 单独一个接口而不是给 Store 的方法加参数：JSONL 与内存后端都是本地写入，
+// 加一个永远不会被取消的 ctx 只会让所有实现与测试跟着改一遍。远程后端
+// （Postgres）实现它，Recorder 按类型断言选择走哪条路径。
+type ContextStore interface {
+	Store
+	AppendContext(ctx context.Context, record Record) error
 }
 
 // ErrStoreClosed 表示存储已经关闭。

@@ -412,3 +412,60 @@ func TestLogDefaults(t *testing.T) {
 		t.Error("未配置日志级别时应输出 INFO 及以上")
 	}
 }
+
+func TestExecutionBackendConfig(t *testing.T) {
+	cases := map[string]struct {
+		want       string
+		recognized bool
+	}{
+		"":           {ExecutionBackendJSONL, true},
+		"jsonl":      {ExecutionBackendJSONL, true},
+		"file":       {ExecutionBackendJSONL, true},
+		"postgres":   {ExecutionBackendPostgres, true},
+		"PostgreSQL": {ExecutionBackendPostgres, true},
+		"pg":         {ExecutionBackendPostgres, true},
+		"postgre":    {ExecutionBackendJSONL, false},
+	}
+	for raw, want := range cases {
+		got, ok := (Config{ExecutionStore: raw}).ExecutionBackend()
+		if got != want.want || ok != want.recognized {
+			t.Errorf("ExecutionStore=%q 解析为 (%q,%v)，期望 (%q,%v)",
+				raw, got, ok, want.want, want.recognized)
+		}
+	}
+}
+
+func TestPostgresPoolConfig(t *testing.T) {
+	t.Setenv("XW_DATABASE_URL", "  postgres://u@localhost:5432/xw  ")
+	t.Setenv("XW_PG_MAX_OPEN", "12")
+	t.Setenv("XW_PG_MAX_IDLE", "6")
+	t.Setenv("XW_PG_CONN_LIFETIME", "10m")
+	t.Setenv("XW_PG_WRITE_TIMEOUT", "2s")
+
+	cfg := Load()
+	if cfg.DatabaseURL != "postgres://u@localhost:5432/xw" {
+		t.Errorf("XW_DATABASE_URL 应去空白，实际 %q", cfg.DatabaseURL)
+	}
+	if cfg.PGMaxOpenConns != 12 || cfg.PGMaxIdleConns != 6 {
+		t.Errorf("连接池参数解析错误: open=%d idle=%d", cfg.PGMaxOpenConns, cfg.PGMaxIdleConns)
+	}
+	if cfg.PGConnMaxLifetime != 10*time.Minute {
+		t.Errorf("连接存活时间解析错误: %s", cfg.PGConnMaxLifetime)
+	}
+	if cfg.PGWriteTimeout != 2*time.Second {
+		t.Errorf("写入预算解析错误: %s", cfg.PGWriteTimeout)
+	}
+}
+
+func TestPostgresPoolDefaults(t *testing.T) {
+	for _, key := range []string{"XW_PG_MAX_OPEN", "XW_PG_MAX_IDLE", "XW_PG_CONN_LIFETIME", "XW_PG_WRITE_TIMEOUT", "XW_PG_CONNECT_TIMEOUT"} {
+		t.Setenv(key, "")
+	}
+	cfg := Load()
+	if cfg.PGMaxOpenConns != defaultPGMaxOpen || cfg.PGMaxIdleConns != defaultPGMaxIdle {
+		t.Errorf("连接池默认值错误: open=%d idle=%d", cfg.PGMaxOpenConns, cfg.PGMaxIdleConns)
+	}
+	if cfg.PGWriteTimeout != defaultPGWriteTimeout {
+		t.Errorf("写入预算默认值错误: %s", cfg.PGWriteTimeout)
+	}
+}

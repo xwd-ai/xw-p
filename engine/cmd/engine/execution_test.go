@@ -92,3 +92,34 @@ func TestNewExecutionRecorderCloseReleasesFile(t *testing.T) {
 	// 重复调用关闭函数不应 panic。
 	closeFn()
 }
+
+// 后端选 postgres 但没给连接串：退回「不回写」，不阻塞启动。
+// 这是最容易配错的一种组合——切了后端却忘了填地址，表现出来只是明细为空。
+func TestNewExecutionRecorderPostgresWithoutDSN(t *testing.T) {
+	recorder, closeFn := newExecutionRecorder(discardLogger(), config.Config{
+		ExecutionFile:  filepath.Join(t.TempDir(), "executions.jsonl"),
+		ExecutionStore: config.ExecutionBackendPostgres,
+	})
+	defer closeFn()
+	if recorder != nil {
+		t.Fatalf("缺少连接串时不应接上记录器")
+	}
+}
+
+// 后端名写错：按文件回退，并保证仍然可写。
+func TestNewExecutionRecorderUnknownBackendFallsBackToFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "executions.jsonl")
+	recorder, closeFn := newExecutionRecorder(discardLogger(), config.Config{
+		ExecutionFile:  path,
+		ExecutionStore: "postgre",
+	})
+	defer closeFn()
+	if recorder == nil {
+		t.Fatalf("未知后端应回退到文件回写")
+	}
+	if _, err := recorder.Write(execution.Record{
+		TriggerID: "t-1", Channel: "email", Status: execution.StatusSent,
+	}); err != nil {
+		t.Fatalf("回退后写入失败: %v", err)
+	}
+}
