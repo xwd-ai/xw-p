@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import sys
+from threading import Lock
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
@@ -42,6 +43,9 @@ class Community:
         self._client = client
         self._creators: Dict[str, Dict[str, Any]] = {}
         self._posts: Dict[str, Dict[str, Any]] = {}
+        self._likes: Dict[str, int] = {}
+        self._comments: Dict[str, list[Dict[str, str]]] = {}
+        self._interaction_lock = Lock()
 
     # -- 档案与帖子 -------------------------------------------------------
 
@@ -81,17 +85,25 @@ class Community:
         return dict(record)
 
     def list_posts(self) -> list[Dict[str, Any]]:
-        return [
-            {**post, "creator_name": self._creators[post["creator_id"]]["name"]}
-            for post in reversed(list(self._posts.values()))
-        ]
+        with self._interaction_lock:
+            return [
+                {**post, "creator_name": self._creators[post["creator_id"]]["name"],
+                 "likes": self._likes.get(post["post_id"], 0),
+                 "comments": list(self._comments.get(post["post_id"], []))}
+                for post in reversed(list(self._posts.values()))
+            ]
 
     # -- 互动 -----------------------------------------------------------
 
     def like(self, post_id: str, *, actor: str) -> TriggerAck:
         """帖子被点赞 → ``post_liked``（按帖子聚合，多次点赞收敛为一张卡片）。"""
         post = self._post(post_id)
-        return self._notify("post_liked", post, actor=self._required(actor, "actor"))
+        receipt = self._notify("post_liked", post, actor=self._required(actor, "actor"))
+        if receipt.acknowledged:
+            with self._interaction_lock:
+                key = post["post_id"]
+                self._likes[key] = self._likes.get(key, 0) + 1
+        return receipt
 
     def comment(
         self,
@@ -108,13 +120,22 @@ class Community:
         """
         post = self._post(post_id)
         key = f"comment-{self._required(comment_id, 'comment_id')}" if comment_id else None
-        return self._notify(
+        actor = self._required(actor, "actor")
+        text = self._required(text, "text")
+        receipt = self._notify(
             "post_commented",
             post,
-            actor=self._required(actor, "actor"),
-            comment=self._required(text, "text"),
+            actor=actor,
+            comment=text,
             idempotency_key=key,
         )
+        if receipt.acknowledged:
+            with self._interaction_lock:
+                comments = self._comments.setdefault(post["post_id"], [])
+                if key is None or all(comment["id"] != key for comment in comments):
+                    comments.append({"id": key or receipt.trigger_id, "actor": actor, "text": text})
+                    del comments[:-20]
+        return receipt
 
     def mention(
         self,

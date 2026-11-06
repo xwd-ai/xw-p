@@ -26,6 +26,8 @@ class FakeTransport:
 
     def send(self, request: Request) -> Response:
         self.requests.append(request)
+        if request.method == "GET" and "/v1/inbox?" in request.url:
+            return Response(status=200, headers={}, body=b'{"items":[],"unread":0,"total":0}')
         if request.method == "POST" and request.url.endswith("/v1/events/trigger"):
             self._triggered += 1
             body = json.dumps({
@@ -103,7 +105,7 @@ def test_guest_can_interact_but_cannot_publish(monkeypatch) -> None:
     assert client.get("/session", auth=owner).json() == {"role": "owner"}
     assert client.get("/posts").json() == [{
         "post_id": "P-1", "creator_id": "creator-1001", "creator_name": "小林",
-        "title": "第一支 Vlog", "body": "",
+        "title": "第一支 Vlog", "body": "", "likes": 0, "comments": [],
     }]
     assert client.post("/posts", json=post).status_code == 401
     assert client.post("/posts", json=post, auth=("owner", guest[1])).status_code == 401
@@ -112,10 +114,16 @@ def test_guest_can_interact_but_cannot_publish(monkeypatch) -> None:
     assert client.get("/creators/creator-1001/inbox", auth=guest).status_code == 403
     assert client.post("/posts/P-1/like", json={"actor": "阿澈"}).status_code == 401
     assert client.post("/posts/P-1/like", json={"actor": "阿澈"}, auth=guest).status_code == 200
-    assert client.post("/posts/P-1/comment", json={"actor": "阿澈", "text": "好看"}, auth=guest).status_code == 403
+    assert client.get("/community-overview", auth=guest).status_code == 403
+    assert client.post("/posts/P-1/comment", json={"actor": "owner", "text": "好看"}, auth=guest).status_code == 200
     assert client.post("/posts/P-1/mention", json={"actor": "阿澈", "target": "creator-1001"}, auth=guest).status_code == 403
-    assert len(transport.requests) == 1
-    assert json.loads(transport.requests[-1].body)["name"] == "post_liked"
+    assert [json.loads(request.body)["name"] for request in transport.requests] == ["post_liked", "post_commented"]
+    visible = client.get("/posts").json()[0]
+    assert visible["likes"] == 1
+    assert visible["comments"] == [{"id": "trig-2", "actor": "guest", "text": "好看"}]
+    assert client.get("/community-overview", auth=owner).json() == {
+        "posts": 1, "likes": 1, "unread": 0, "notifications": [],
+    }
 
 
 def test_community_page_serves_frontend_assets() -> None:

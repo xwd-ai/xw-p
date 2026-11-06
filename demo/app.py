@@ -44,7 +44,7 @@ class ActorIn(BaseModel):
 
 class CommentIn(BaseModel):
     actor: str
-    text: str
+    text: str = Field(max_length=1000)
     comment_id: Optional[str] = None
 
 
@@ -69,8 +69,17 @@ def create_app(client: Optional[Any] = None) -> FastAPI:
     community = Community(client if client is not None else build_client())
     if os.getenv("XW_DEMO_SEED") == "1":
         community.register_creator("demo-creator", name="演示创作者")
-        community.create_post("demo-post", creator_id="demo-creator", title="周末骑行路线",
-                              body="周末准备沿江骑行。你最喜欢哪一段路线？欢迎留言分享。")
+        for post_id, title, body in (
+            ("plants", "阳台的一平方米春天", "把耐阴植物放在内侧，给窗边留一点位置晒太阳。"),
+            ("street", "周六的城市漫步", "从老街一路走到车站，路上遇见几家还想再来的小店。"),
+            ("coast", "在海边等一场日落", "傍晚的风刚刚好。带一件外套，等天色慢慢变蓝。"),
+            ("room", "把客厅留给午后的光", "换了一盏暖灯，把常看的书放在手边。"),
+            ("food", "一碗清爽的周末午餐", "蔬菜烤到边缘微焦，再拌一点柠檬汁和橄榄油。"),
+            ("mountain", "初秋徒步小记", "早一点出发，给沿途停下来拍照和休息留足时间。"),
+            ("coffee", "街角咖啡与慢下来的上午", "点了一杯手冲，在窗边读了半小时书。"),
+            ("demo-post", "周末骑行路线", "周末准备沿江骑行。你最喜欢哪一段路线？"),
+        ):
+            community.create_post(post_id, creator_id="demo-creator", title=title, body=body)
     owner_password = os.getenv("XW_DEMO_OWNER_PASSWORD", "")
     guest_password = os.getenv("XW_DEMO_GUEST_PASSWORD", "")
     if guest_password and (not owner_password or guest_password == owner_password):
@@ -107,6 +116,19 @@ def create_app(client: Optional[Any] = None) -> FastAPI:
     def posts() -> list[Dict[str, Any]]:
         return community.list_posts()
 
+    @app.get("/community-overview", dependencies=[Depends(require_owner)])
+    def overview() -> Dict[str, Any]:
+        entries = community.list_posts()
+        inboxes = [community.inbox(creator_id) for creator_id in dict.fromkeys(
+            post["creator_id"] for post in entries
+        )]
+        return {
+            "posts": len(entries),
+            "likes": sum(post["likes"] for post in entries),
+            "unread": sum(inbox["unread"] for inbox in inboxes),
+            "notifications": [item for inbox in inboxes for item in inbox["items"]],
+        }
+
     @app.get("/health")
     def health() -> Dict[str, str]:
         return {"status": "ok"}
@@ -125,9 +147,9 @@ def create_app(client: Optional[Any] = None) -> FastAPI:
     def like(post_id: str, body: ActorIn) -> Dict[str, Any]:
         return _ack(_call(community.like, post_id, actor=body.actor))
 
-    @app.post("/posts/{post_id}/comment", dependencies=[Depends(require_owner)])
-    def comment(post_id: str, body: CommentIn) -> Dict[str, Any]:
-        return _ack(_call(community.comment, post_id, actor=body.actor,
+    @app.post("/posts/{post_id}/comment")
+    def comment(post_id: str, body: CommentIn, role: str = Depends(account)) -> Dict[str, Any]:
+        return _ack(_call(community.comment, post_id, actor="guest" if role == "guest" else body.actor,
                           text=body.text, comment_id=body.comment_id))
 
     @app.post("/posts/{post_id}/mention", dependencies=[Depends(require_owner)])

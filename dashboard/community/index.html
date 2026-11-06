@@ -3,48 +3,62 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>xw-notify · 互动社区</title>
-  <link rel="stylesheet" href="/community-assets/community.css">
-  <script defer src="/community-assets/community.js"></script>
+  <title>拾页 · 生活分享社区</title>
+  <link rel="stylesheet" href="/community-assets/community.css?v=2">
+  <script defer src="/community-assets/community.js?v=2"></script>
 </head>
 <body>
-  <header class="top"><a href="/">xw-notify <span>互动社区</span></a><a href="/docs">接口文档 ↗</a></header>
-  <main>
-    <section class="hero">
-      <p class="eyebrow">内容社区 · 互动演示</p>
-      <h1>社区动态</h1>
-      <p>阅读社区帖子，给喜欢的内容点个赞。每次点赞都会触发模拟通知。</p>
+  <aside class="sidebar">
+    <a class="brand" href="/"><span>拾页</span> <strong>生活社区</strong></a>
+    <nav aria-label="主导航">
+      <button id="discover" class="nav active" aria-current="page"><span aria-hidden="true">⌂</span> 发现</button>
+      <button id="manage" class="nav" hidden><span aria-hidden="true">▤</span> 社区管理</button>
+    </nav>
+    <section class="account">
+      <form id="login">
+        <label>账号<input name="username" autocomplete="username" required></label>
+        <label>密码<input name="password" type="password" autocomplete="current-password" required></label>
+        <button class="primary">登录</button>
+      </form>
+      <p id="guest-hint" class="hint">游客账号和密码均为 guest</p>
+      <div id="identity" hidden><p id="role"></p><button id="logout" class="quiet">退出登录</button></div>
     </section>
-    <div class="layout">
-      <section aria-labelledby="feed-heading">
-        <div class="section-title"><h2 id="feed-heading">帖子</h2><button id="refresh" class="quiet">刷新</button></div>
-        <div id="feed" class="feed"></div>
-      </section>
-      <aside>
-        <section class="panel">
-          <h2>社区账号</h2>
-          <form id="login">
-            <label>账号<input name="username" autocomplete="username" required></label>
-            <label>密码<input name="password" type="password" autocomplete="current-password" required></label>
-            <button>登录</button>
-          </form>
-          <p id="guest-hint" class="hint">游客账号和密码均为 <strong>guest</strong>。</p>
-          <div id="identity" hidden>
-            <p id="role"></p>
-            <button id="logout" class="quiet">退出登录</button>
-          </div>
-        </section>
+    <p class="tagline">记录日常，发现同好。</p>
+  </aside>
+  <main>
+    <section id="discovery">
+      <header class="toolbar">
+        <label class="search"><span aria-hidden="true">⌕</span><input id="search" type="search" aria-label="搜索帖子" placeholder="搜索你感兴趣的内容"></label>
+        <button id="refresh" class="quiet" aria-label="刷新帖子">↻</button>
+      </header>
+      <div id="categories" class="categories" aria-label="帖子分类"></div>
+      <h1 class="sr-only">社区动态</h1>
+      <div id="feed" class="feed"></div>
+    </section>
+    <section id="admin" hidden>
+      <header class="admin-heading"><div><p class="hint">站长工作台</p><h1>社区概况</h1></div><button id="refresh-overview" class="quiet">刷新数据</button></header>
+      <div class="metrics">
+        <div><span>帖子总数</span><strong id="post-count">—</strong></div>
+        <div><span>本次运行收到的点赞</span><strong id="like-count">—</strong></div>
+        <div><span>未读通知</span><strong id="unread-count">—</strong></div>
+      </div>
+      <div class="admin-grid">
+        <section class="panel"><h2>最新通知</h2><div id="notifications"></div></section>
         <section id="composer" class="panel" hidden>
           <h2>发布帖子</h2>
           <form id="publish">
             <label>标题<input name="title" maxlength="120" required></label>
             <label>正文<textarea name="body" maxlength="4000" rows="5" required></textarea></label>
-            <button>发布</button>
+            <button class="primary">发布</button>
           </form>
         </section>
-        <p id="status" role="status" aria-live="polite"></p>
-      </aside>
-    </div>
+      </div>
+    </section>
+    <p id="status" role="status" aria-live="polite" hidden></p>
   </main>
+  <dialog id="detail">
+    <form method="dialog"><button class="quiet" aria-label="关闭帖子详情">×</button></form>
+    <div id="detail-content"></div>
+  </dialog>
 </body>
 </html>
