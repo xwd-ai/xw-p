@@ -86,6 +86,14 @@ docker build -f engine/Dockerfile -t xw-notify-engine .
 `owner` 可发帖并查看社区概况，`guest` 可点赞和评论。API、Go 引擎和 Redis 均在
 Compose 网络内。Redis 和通知文件存于命名卷，演示帖与创作者档案存于应用内存。
 
+完整控制台由 API 托管，监听宿主机的 `127.0.0.1:2028`。用 SSH 转发后，
+在 `http://127.0.0.1:2028/console/admin.html` 用 owner 登录，再进入工作台查看
+工作流编排器与收件箱。控制台收件箱用带登录凭据的请求轮询。
+
+```sh
+ssh -NT -L 127.0.0.1:2028:127.0.0.1:2028 aly
+```
+
 ### 服务器配置
 
 部署用户需要 Docker、支持 `up --wait` 的 Compose、`flock` 和读取 GHCR
@@ -103,6 +111,8 @@ install -d -m 700 "$HOME/.xw-notify"
 ```dotenv
 XW_API_KEYS='[{"key":"填入同一个 API Key","tenant":"default","environments":["development"]}]'
 ```
+
+另生成独立的随机签名密钥填入 `XW_JWT_SECRET`（例如使用 `openssl rand -hex 32`）。
 
 服务器无法访问 Docker Hub 时，可用 `XW_REDIS_IMAGE` 指定可达的 Redis 镜像。
 

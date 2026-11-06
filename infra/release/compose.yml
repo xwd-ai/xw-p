@@ -14,11 +14,17 @@ services:
   api:
     image: ${XW_IMAGE_PREFIX:?缺少镜像前缀}-api:${XW_IMAGE_TAG:?缺少镜像版本}
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:${XW_CONSOLE_PORT:-2028}:8000"
     environment:
       XW_BUS: redis
       XW_REDIS_URL: redis://redis:6379/0
       XW_STORAGE: jsonl
       XW_API_KEYS: ${XW_API_KEYS:?缺少 API Key 配置}
+      XW_CONSOLE_DIR: /app/console
+      XW_JWT_SECRET: ${XW_JWT_SECRET:?缺少后台令牌签名密钥}
+      XW_ADMIN_USERNAME: owner
+      XW_ADMIN_PASSWORD: ${XW_DEMO_OWNER_PASSWORD:?缺少 owner 口令}
     volumes:
       - app_data:/data
     depends_on:

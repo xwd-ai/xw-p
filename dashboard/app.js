@@ -162,6 +162,7 @@
     api: apiTrack,
     esc: esc,
     baseUrl: window.xwData.API_BASE,
+    pollingOnly: Boolean(window.xwData.consoleToken()),
     onUnread: updateInboxBadge,
     notify: showToast,
   });

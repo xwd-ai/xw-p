@@ -7,12 +7,15 @@ Phase 1：触发端点完整实现 —— 入参校验（Pydantic）、模板查
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from . import app_metrics, config, openapi as openapi_docs, tokens
 from .activity_log import build_activity, record_activities, record_activity
@@ -155,6 +158,10 @@ app.include_router(subscriber_router)
 app.include_router(preference_router)
 app.include_router(topic_router)
 app.include_router(metrics_router)
+
+console_dir = os.getenv("XW_CONSOLE_DIR")
+if console_dir:
+    app.mount("/console", StaticFiles(directory=Path(console_dir), html=True), name="console")
 
 # 文档 schema 在路由注册完成后装配：分组说明、鉴权与公共错误响应都依赖最终
 # 的路由表，提前安装只会拿到一份不完整的 paths。

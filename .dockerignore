@@ -8,6 +8,9 @@
 !demo/app.py
 !demo/community.py
 !dashboard/
+!dashboard/*.html
+!dashboard/*.css
+!dashboard/*.js
 !dashboard/community/
 !dashboard/community/**
 !engine/

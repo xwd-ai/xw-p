@@ -481,7 +481,7 @@
 
     function startStream() {
       if (disposed) return;
-      if (typeof root.EventSource !== 'function') {
+      if (opts.pollingOnly || typeof root.EventSource !== 'function') {
         startPolling();
         return;
       }

@@ -63,15 +63,28 @@
     return tenant ? { 'X-Tenant-Id': tenant } : {};
   }
 
+  function consoleToken() {
+    try {
+      return window.localStorage.getItem('xw.adminToken') || '';
+    } catch (err) {
+      return '';
+    }
+  }
+
   // 轻量 fetch 封装：失败时 reject，由调用方决定兜底策略
   // options 透传 fetch 参数（如 method/headers/body），支持 POST 触发等写操作
   async function api(path, options) {
     const opts = Object.assign({ headers: Object.assign({ 'Accept': 'application/json' }, tenantHeaders()) }, options || {});
+    const url = API_BASE + path;
+    if (new URL(url, window.location.href).origin === window.location.origin) {
+      const token = consoleToken();
+      if (token) opts.headers = Object.assign({ Authorization: 'Bearer ' + token }, opts.headers);
+    }
     if (opts.body && typeof opts.body !== 'string') {
       opts.body = JSON.stringify(opts.body);
       opts.headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers);
     }
-    const resp = await fetch(API_BASE + path, opts);
+    const resp = await fetch(url, opts);
     if (!resp.ok) {
       // 后端的 4xx 通常带一条能指导下一步的 detail（例如步骤校验失败的
       // 具体原因）。只抛「HTTP 422」等于把这层信息丢掉，调用方只能靠猜。
@@ -103,5 +116,5 @@
       .replace(/[&<>"']/g, ch => ESC_MAP[ch]);
   }
 
-  window.xwData = { CH, seed, subs, API_BASE, api, esc, currentTenant, tenantHeaders };
+  window.xwData = { CH, seed, subs, API_BASE, api, esc, currentTenant, tenantHeaders, consoleToken };
 })();
