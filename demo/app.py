@@ -10,11 +10,14 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from secrets import compare_digest
 from typing import Any, Dict, Optional
 
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .community import Community, CommunityError, build_client  # 先装配 SDK 路径
@@ -32,6 +35,7 @@ class PostIn(BaseModel):
     id: str
     creator_id: str
     title: str
+    body: str = Field(default="", max_length=4000)
 
 
 class ActorIn(BaseModel):
@@ -63,6 +67,10 @@ def create_app(client: Optional[Any] = None) -> FastAPI:
     """装配应用；测试里传入带假传输层的客户端，运行时从环境变量取。"""
     app = FastAPI(title="xw-notify 内容社区演示", version="0.1.0")
     community = Community(client if client is not None else build_client())
+    if os.getenv("XW_DEMO_SEED") == "1":
+        community.register_creator("demo-creator", name="演示创作者")
+        community.create_post("demo-post", creator_id="demo-creator", title="周末骑行路线",
+                              body="周末准备沿江骑行。你最喜欢哪一段路线？欢迎留言分享。")
     owner_password = os.getenv("XW_DEMO_OWNER_PASSWORD", "")
     guest_password = os.getenv("XW_DEMO_GUEST_PASSWORD", "")
     if guest_password and (not owner_password or guest_password == owner_password):
@@ -84,6 +92,21 @@ def create_app(client: Optional[Any] = None) -> FastAPI:
         if role != "owner":
             raise HTTPException(status_code=403, detail="此操作仅对 owner 开放")
 
+    assets = Path(__file__).resolve().parents[1] / "dashboard" / "community"
+    app.mount("/community-assets", StaticFiles(directory=assets), name="community-assets")
+
+    @app.get("/", include_in_schema=False)
+    def index() -> FileResponse:
+        return FileResponse(assets / "index.html", headers={"Cache-Control": "no-cache"})
+
+    @app.get("/session")
+    def session(role: str = Depends(account)) -> Dict[str, str]:
+        return {"role": role}
+
+    @app.get("/posts")
+    def posts() -> list[Dict[str, Any]]:
+        return community.list_posts()
+
     @app.get("/health")
     def health() -> Dict[str, str]:
         return {"status": "ok"}
@@ -96,18 +119,18 @@ def create_app(client: Optional[Any] = None) -> FastAPI:
     @app.post("/posts", status_code=201, dependencies=[Depends(require_owner)])
     def create_post(body: PostIn) -> Dict[str, Any]:
         return _call(community.create_post, body.id,
-                     creator_id=body.creator_id, title=body.title)
+                     creator_id=body.creator_id, title=body.title, body=body.body)
 
     @app.post("/posts/{post_id}/like", dependencies=[Depends(account)])
     def like(post_id: str, body: ActorIn) -> Dict[str, Any]:
         return _ack(_call(community.like, post_id, actor=body.actor))
 
-    @app.post("/posts/{post_id}/comment", dependencies=[Depends(account)])
+    @app.post("/posts/{post_id}/comment", dependencies=[Depends(require_owner)])
     def comment(post_id: str, body: CommentIn) -> Dict[str, Any]:
         return _ack(_call(community.comment, post_id, actor=body.actor,
                           text=body.text, comment_id=body.comment_id))
 
-    @app.post("/posts/{post_id}/mention", dependencies=[Depends(account)])
+    @app.post("/posts/{post_id}/mention", dependencies=[Depends(require_owner)])
     def mention(post_id: str, body: MentionIn) -> Dict[str, Any]:
         return _ack(_call(community.mention, post_id, actor=body.actor,
                           target=body.target, text=body.text))

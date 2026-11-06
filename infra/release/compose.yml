@@ -1,0 +1,73 @@
+services:
+  redis:
+    image: ${XW_REDIS_IMAGE:-redis:7-alpine}
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    image: ${XW_IMAGE_PREFIX:?缺少镜像前缀}-api:${XW_IMAGE_TAG:?缺少镜像版本}
+    restart: unless-stopped
+    environment:
+      XW_BUS: redis
+      XW_REDIS_URL: redis://redis:6379/0
+      XW_STORAGE: jsonl
+      XW_API_KEYS: ${XW_API_KEYS:?缺少 API Key 配置}
+    volumes:
+      - app_data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  engine:
+    image: ${XW_IMAGE_PREFIX:?缺少镜像前缀}-engine:${XW_IMAGE_TAG:?缺少镜像版本}
+    restart: unless-stopped
+    environment:
+      XW_REDIS_ADDR: redis:6379
+      XW_DIGEST_STORE: redis
+      XW_DELAY_STORE: redis
+    volumes:
+      - app_data:/data
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  demo:
+    image: ${XW_IMAGE_PREFIX:?缺少镜像前缀}-demo:${XW_IMAGE_TAG:?缺少镜像版本}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${XW_HOST_PORT:-2027}:8100"
+    environment:
+      XW_BASE_URL: http://api:8000
+      XW_DEMO_SEED: "1"
+      XW_API_KEY: ${XW_API_KEY:?缺少演示 API Key}
+      XW_DEMO_OWNER_PASSWORD: ${XW_DEMO_OWNER_PASSWORD:?缺少 owner 口令}
+      XW_DEMO_GUEST_PASSWORD: ${XW_DEMO_GUEST_PASSWORD:?缺少 guest 口令}
+    depends_on:
+      engine:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  app_data:
+  redis_data:

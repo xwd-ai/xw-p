@@ -78,3 +78,56 @@ docker build -f engine/Dockerfile -t xw-notify-engine .
 
 功能语义完全一致：镜像只是换个方式把两个进程跑起来，接口、文件格式与
 配置变量都没有容器专用的分支。
+
+## 域名发布
+
+`infra/release/compose.yml` 在宿主机的 `127.0.0.1:2027` 提供社区演示，
+供 `xwp.xwd.info` 的反向代理接入。根路径打开社区首页，公开显示帖子。
+`owner` 可发帖，`guest` 可点赞。API、Go 引擎和 Redis 均在
+Compose 网络内。Redis 和通知文件存于命名卷，演示帖与创作者档案存于应用内存。
+
+### 服务器配置
+
+部署用户需要 Docker、支持 `up --wait` 的 Compose、`flock` 和读取 GHCR
+镜像的权限。私有镜像由该用户提前使用具有 `read:packages` 的凭据登录
+`ghcr.io`。服务器端执行：
+
+```sh
+install -d -m 700 "$HOME/.xw-notify"
+```
+
+以 `infra/release/runtime.env.example` 为模板，在目录内保存权限为 `600` 的
+`runtime.env`，填写独立的 owner 和 guest 口令。生成随机 API Key，填入
+`XW_API_KEY`，并在 `XW_API_KEYS` 中配置同一值：
+
+```dotenv
+XW_API_KEYS='[{"key":"填入同一个 API Key","tenant":"default","environments":["development"]}]'
+```
+
+服务器无法访问 Docker Hub 时，可用 `XW_REDIS_IMAGE` 指定可达的 Redis 镜像。
+
+反向代理转发到 `http://127.0.0.1:2027`。配置 TLS 后通过 HTTPS 传输登录凭据。
+
+### GitHub 发布配置
+
+在仓库的 `production` 环境添加以下配置：
+
+| 类型 | 名称 | 值 |
+| --- | --- | --- |
+| Variable | `XW_DEPLOY_HOST` | SSH 可达的服务器主机名或 IP |
+| Variable | `XW_DEPLOY_USER` | 部署用户 |
+| Variable | `XW_DEPLOY_PORT` | SSH 端口，默认 22 |
+| Variable | `XW_PUBLIC_URL` | 站点 URL，默认 `http://xwp.xwd.info` |
+| Secret | `XW_DEPLOY_SSH_KEY` | 部署用户的 SSH 专用私钥 |
+| Secret | `XW_DEPLOY_KNOWN_HOSTS` | 已核验的服务器主机公钥记录 |
+
+`main` 的 CI 通过后，`release` 工作流发布带完整提交 SHA 的 API、引擎和演示
+镜像。服务器按 SHA 保存 Compose 配置并串行更新，全部容器就绪后记录当前
+SHA。容器就绪失败会尝试恢复上一版，公网探测在容器就绪后单独执行。
+
+手动回滚时，在服务器上将部署脚本的参数设为目标 SHA。该版本的 Compose
+文件须已保存在 `$HOME/.xw-notify/releases/<SHA>/compose.yml`。
+
+```sh
+sh apply.sh ghcr.io/xwd-ai/xw-p <SHA>
+```

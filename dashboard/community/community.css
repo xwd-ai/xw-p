@@ -1,0 +1,35 @@
+:root { color-scheme: light; font: 16px/1.55 system-ui, sans-serif; color: #16283b; background: #f4f7fa; }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; }
+a { color: inherit; }
+.top { display: flex; justify-content: space-between; gap: 1rem; padding: 1rem max(1.25rem, calc((100vw - 68rem) / 2)); background: #102a43; color: #fff; }
+.top a { text-decoration: none; white-space: nowrap; }
+.top a:first-child { font-weight: 750; }
+.top span { color: #9cc8eb; font-size: .85rem; margin-left: .4rem; }
+main { max-width: 70rem; margin: auto; padding: 1rem; }
+.hero { margin: 1rem 0 1.5rem; padding: clamp(1.25rem, 4vw, 2.5rem); background: #dcecf8; border-radius: 1rem; }
+.eyebrow { color: #315d80; font-size: .85rem; font-weight: 700; }
+h1 { margin: .2rem 0 .5rem; font-size: clamp(2rem, 5vw, 3rem); line-height: 1.1; }
+h2 { font-size: 1.1rem; margin: 0; }
+p { margin: .5rem 0; }
+.layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(15rem, 19rem); gap: 1.2rem; }
+.section-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: .7rem; }
+.panel, article, .empty { background: white; border: 1px solid #d9e3ec; padding: 1rem; border-radius: .8rem; margin-bottom: .85rem; }
+article h3 { margin: .4rem 0; }
+article p { overflow-wrap: anywhere; white-space: pre-wrap; }
+.hint, .byline { color: #4b6278; font-size: .88rem; }
+form { display: grid; gap: .65rem; margin-top: .7rem; }
+label { display: grid; gap: .2rem; font-size: .9rem; }
+input, textarea, button { font: inherit; border-radius: .45rem; padding: .48rem .65rem; }
+input, textarea { border: 1px solid #a4b6c8; width: 100%; }
+button { cursor: pointer; border: 1px solid transparent; background: #145b91; color: #fff; justify-self: start; }
+button:disabled { opacity: .6; cursor: wait; }
+button.quiet { background: #edf4fa; color: #194e75; border-color: #d6e5f0; }
+.actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .85rem; }
+#status { color: #235d47; overflow-wrap: anywhere; }
+#status[data-error="true"] { color: #a12828; }
+@media (max-width: 700px) {
+  .layout { grid-template-columns: 1fr; }
+  aside { grid-row: 1; }
+}

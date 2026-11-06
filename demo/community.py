@@ -68,16 +68,23 @@ class Community:
         self._creators[key] = record
         return dict(record)
 
-    def create_post(self, post_id: str, *, creator_id: str, title: str) -> Dict[str, Any]:
+    def create_post(self, post_id: str, *, creator_id: str, title: str, body: str = "") -> Dict[str, Any]:
         key = self._required(post_id, "post_id")
         self._creator(creator_id)
         record = {
             "post_id": key,
             "creator_id": creator_id,
             "title": self._required(title, "title"),
+            "body": body.strip(),
         }
         self._posts[key] = record
         return dict(record)
+
+    def list_posts(self) -> list[Dict[str, Any]]:
+        return [
+            {**post, "creator_name": self._creators[post["creator_id"]]["name"]}
+            for post in reversed(list(self._posts.values()))
+        ]
 
     # -- 互动 -----------------------------------------------------------
 

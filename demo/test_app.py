@@ -99,6 +99,12 @@ def test_guest_can_interact_but_cannot_publish(monkeypatch) -> None:
     _seed(client, auth=owner)
 
     post = {"id": "P-2", "creator_id": "creator-1001", "title": "第二支 Vlog"}
+    assert client.get("/session", auth=guest).json() == {"role": "guest"}
+    assert client.get("/session", auth=owner).json() == {"role": "owner"}
+    assert client.get("/posts").json() == [{
+        "post_id": "P-1", "creator_id": "creator-1001", "creator_name": "小林",
+        "title": "第一支 Vlog", "body": "",
+    }]
     assert client.post("/posts", json=post).status_code == 401
     assert client.post("/posts", json=post, auth=("owner", guest[1])).status_code == 401
     assert client.post("/posts", json=post, auth=guest).status_code == 403
@@ -106,7 +112,19 @@ def test_guest_can_interact_but_cannot_publish(monkeypatch) -> None:
     assert client.get("/creators/creator-1001/inbox", auth=guest).status_code == 403
     assert client.post("/posts/P-1/like", json={"actor": "阿澈"}).status_code == 401
     assert client.post("/posts/P-1/like", json={"actor": "阿澈"}, auth=guest).status_code == 200
+    assert client.post("/posts/P-1/comment", json={"actor": "阿澈", "text": "好看"}, auth=guest).status_code == 403
+    assert client.post("/posts/P-1/mention", json={"actor": "阿澈", "target": "creator-1001"}, auth=guest).status_code == 403
+    assert len(transport.requests) == 1
     assert json.loads(transport.requests[-1].body)["name"] == "post_liked"
+
+
+def test_community_page_serves_frontend_assets() -> None:
+    client, _ = _client()
+    page = client.get("/", follow_redirects=False)
+    assert page.status_code == 200
+    assert "社区动态" in page.text
+    assert client.get("/community-assets/community.js").status_code == 200
+    assert client.get("/community-assets/community.css").status_code == 200
 
 
 def test_guest_requires_distinct_owner_password(monkeypatch) -> None:
