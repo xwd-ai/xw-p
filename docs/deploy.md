@@ -86,13 +86,22 @@ docker build -f engine/Dockerfile -t xw-notify-engine .
 `owner` 可发帖并查看社区概况，`guest` 可点赞和评论。API、Go 引擎和 Redis 均在
 Compose 网络内。账号、帖子和互动保存在 `community_data` 卷中的 SQLite 文件。
 
-完整控制台由 API 托管，监听宿主机的 `127.0.0.1:2028`。用 SSH 转发后，
-在 `http://127.0.0.1:2028/community/` 用 owner 登录。社区管理、运营后台和工作流
-编排共享本机工作台的登录状态。控制台收件箱用带登录凭据的请求轮询。
+演示容器同时把控制台页面与接口透传给 API，所以站长工作台在
+`https://xwp.xwd.info/community/` 直接用 owner 登录即可，社区管理、运营后台和
+工作流编排共享同一份登录状态。API 本身仍只监听宿主机的 `127.0.0.1:2028`，
+需要绕过演示站直连时用 SSH 转发：
 
 ```sh
 ssh -NT -L 127.0.0.1:2028:127.0.0.1:2028 aly
 ```
+
+### HTTPS
+
+反向代理配置不随仓库分发，服务器上按下面的形态维护：80 端口保留
+`/.well-known/acme-challenge/` 供续期校验，其余一律 301 到 HTTPS；443 终止
+TLS 后转发到 `127.0.0.1:2027`，其中 `/v1/inbox/stream` 单独关闭缓冲，否则收件箱
+的事件流会被代理攒住、前端收不到增量。证书用 certbot 的 webroot 方式签发，
+`certbot-renew.timer` 负责续期，改完配置先 `nginx -t` 再 reload。
 
 ### 服务器配置
 
@@ -128,7 +137,7 @@ XW_API_KEYS='[{"key":"填入同一个 API Key","tenant":"default","environments"
 | Variable | `XW_DEPLOY_HOST` | SSH 可达的服务器主机名或 IP |
 | Variable | `XW_DEPLOY_USER` | 部署用户 |
 | Variable | `XW_DEPLOY_PORT` | SSH 端口，默认 22 |
-| Variable | `XW_PUBLIC_URL` | 站点 URL，默认 `http://xwp.xwd.info` |
+| Variable | `XW_PUBLIC_URL` | 站点 URL，默认 `https://xwp.xwd.info` |
 | Secret | `XW_DEPLOY_SSH_KEY` | 部署用户的 SSH 专用私钥 |
 | Secret | `XW_DEPLOY_KNOWN_HOSTS` | 已核验的服务器主机公钥记录 |
 
