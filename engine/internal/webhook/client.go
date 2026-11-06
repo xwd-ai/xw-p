@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -252,8 +253,10 @@ func cancelHint(err error) string {
 	if errors.As(err, &urlErr) {
 		err = urlErr.Err
 	}
+	var networkErr net.Error
 	switch {
-	case errors.Is(err, context.DeadlineExceeded):
+	case errors.Is(err, context.DeadlineExceeded),
+		errors.As(err, &networkErr) && networkErr.Timeout():
 		return "超时，接收方未在预算内响应"
 	case errors.Is(err, context.Canceled):
 		return "请求被取消"

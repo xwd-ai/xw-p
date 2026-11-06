@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -164,6 +166,13 @@ func TestClientTimeout(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Errorf("超时预算没有生效，耗时 %v", elapsed)
+	}
+}
+
+func TestCancelHintRecognizesNetworkTimeout(t *testing.T) {
+	err := &url.Error{Op: "Post", URL: "https://example.com/callback", Err: os.ErrDeadlineExceeded}
+	if got := cancelHint(err); !strings.Contains(got, "超时") {
+		t.Errorf("网络超时原因应指明超时: %q", got)
 	}
 }
 
