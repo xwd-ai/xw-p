@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -127,6 +128,19 @@ type Config struct {
 	// AdminAddr 是运维接口（死信查询/重放）的监听地址。
 	// 空字符串表示不启动；未配置 XW_ADMIN_ADDR 时沿用 ENGINE_PORT。
 	AdminAddr string
+
+	// PprofEnabled 打开挂在管理接口上的 /debug/pprof/ 采样端点。
+	// 默认关闭：端点没有鉴权，profile 里带得出调用栈、命令行与堆上的内容。
+	PprofEnabled bool
+	// PprofAllowRemote 允许在非回环地址上开采样端点。默认只认回环，
+	// 需要从别的机器直接连进来时显式打开，让这次暴露是一个有意识的决定。
+	PprofAllowRemote bool
+	// PprofBlockRate 是阻塞采样的纳秒阈值（runtime.SetBlockProfileRate），
+	// 0 表示不采集。阈值以下是概率采样，设 1 等于全采、开销最大。
+	PprofBlockRate int
+	// PprofMutexFraction 是锁竞争的采样比例（runtime.SetMutexProfileFraction），
+	// 1 表示全采、0 表示不采集。
+	PprofMutexFraction int
 }
 
 // Load 从环境变量读取配置。
@@ -193,6 +207,11 @@ func Load() Config {
 		CallbackEventFile:     strings.TrimSpace(envOr("XW_CALLBACK_EVENT_FILE", defaultCallbackEventFile)),
 
 		AdminAddr: adminListenAddr(),
+
+		PprofEnabled:       envFlag("XW_PPROF"),
+		PprofAllowRemote:   envFlag("XW_PPROF_ALLOW_REMOTE"),
+		PprofBlockRate:     envNonNegativeInt("XW_PPROF_BLOCK_RATE", 0),
+		PprofMutexFraction: envNonNegativeInt("XW_PPROF_MUTEX_FRACTION", 0),
 	}
 }
 
@@ -381,6 +400,40 @@ func adminListenAddr() string {
 	return fmt.Sprintf("127.0.0.1:%d", envInt("ENGINE_PORT", 8081))
 }
 
+// ProfilingActive 判断采样端点最终有没有开。
+//
+// 除了 XW_PPROF 本身，还要管理接口存在且绑在回环地址上：端点在管理接口上挂着，
+// 而管理接口没有鉴权，profile 又能带出调用栈与堆上的字符串内容。确实需要在
+// 别的地址上采样时（容器里共用宿主网络，或经 SSH 转发到容器端口），显式写
+// XW_PPROF_ALLOW_REMOTE=1，让这次暴露变成一个看得见的决定。
+func (c Config) ProfilingActive() bool {
+	if !c.PprofEnabled || c.AdminAddr == "" {
+		return false
+	}
+	if c.PprofAllowRemote {
+		return true
+	}
+	return isLoopbackAddr(c.AdminAddr)
+}
+
+// isLoopbackAddr 判断监听地址是否只在本机可达。
+// 空主机名（":8081"）表示监听所有网卡，按非回环处理。
+func isLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(addr))
+	if err != nil {
+		host = strings.TrimSpace(addr)
+	}
+	host = strings.Trim(strings.TrimSpace(host), "[]")
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 // WorkersOrDefault 返回生效的并发度：非法值回退默认，并收敛到上限以内。
 func (c Config) WorkersOrDefault() int {
 	if c.Workers <= 0 {
@@ -459,6 +512,24 @@ func envInt(key string, fallback int) int {
 		}
 	}
 	return fallback
+}
+
+// envFlag 读取布尔开关：1 / true / yes / on 为真，其余（含空值）为假。
+// 不把无法识别的值当错误：开关类配置写错时，保持关闭比误开更安全。
+func envFlag(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
+// envNonNegativeInt 读取非负整数配置，负数按 0 处理。
+func envNonNegativeInt(key string, fallback int) int {
+	if v := envInt(key, fallback); v > 0 {
+		return v
+	}
+	return 0
 }
 
 // envFloat 读取浮点配置（如抖动比例），无法解析时回退默认值。

@@ -469,3 +469,52 @@ func TestPostgresPoolDefaults(t *testing.T) {
 		t.Errorf("写入预算默认值错误: %s", cfg.PGWriteTimeout)
 	}
 }
+
+func TestProfilingConfig(t *testing.T) {
+	t.Setenv("XW_PPROF", "on")
+	t.Setenv("XW_PPROF_BLOCK_RATE", "10000")
+	t.Setenv("XW_PPROF_MUTEX_FRACTION", "-3")
+
+	cfg := Load()
+	if !cfg.PprofEnabled {
+		t.Fatalf("XW_PPROF=on 应视为开启")
+	}
+	if cfg.PprofBlockRate != 10000 {
+		t.Errorf("阻塞采样阈值应为 10000，实际 %d", cfg.PprofBlockRate)
+	}
+	if cfg.PprofMutexFraction != 0 {
+		t.Errorf("负数采样比例应按 0 处理，实际 %d", cfg.PprofMutexFraction)
+	}
+}
+
+func TestProfilingActiveRequiresLoopback(t *testing.T) {
+	cases := []struct {
+		name        string
+		pprof       string
+		adminAddr   string
+		allowRemote string
+		want        bool
+	}{
+		{name: "回环 IPv4", pprof: "1", adminAddr: "127.0.0.1:9090", want: true},
+		{name: "localhost", pprof: "1", adminAddr: "localhost:9090", want: true},
+		{name: "回环 IPv6", pprof: "1", adminAddr: "[::1]:9090", want: true},
+		{name: "监听所有网卡", pprof: "1", adminAddr: ":9090", want: false},
+		{name: "显式所有网卡", pprof: "1", adminAddr: "0.0.0.0:9090", want: false},
+		{name: "内网地址", pprof: "1", adminAddr: "10.0.0.5:9090", want: false},
+		{name: "显式允许远程", pprof: "1", adminAddr: "10.0.0.5:9090", allowRemote: "1", want: true},
+		{name: "管理接口关闭", pprof: "1", adminAddr: "off", allowRemote: "1", want: false},
+		{name: "未开采样", adminAddr: "127.0.0.1:9090", want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("XW_PPROF", tc.pprof)
+			t.Setenv("XW_PPROF_ALLOW_REMOTE", tc.allowRemote)
+			t.Setenv("XW_ADMIN_ADDR", tc.adminAddr)
+
+			if got := Load().ProfilingActive(); got != tc.want {
+				t.Fatalf("adminAddr=%q allowRemote=%q 应为 %v，实际 %v",
+					tc.adminAddr, tc.allowRemote, tc.want, got)
+			}
+		})
+	}
+}

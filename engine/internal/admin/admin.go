@@ -5,7 +5,8 @@
 // 所以这层只做「HTTP 入参 → 队列方法 → JSON 出参」，不自己拼键名。渠道
 // 的启停与健康同理：状态存在注册表与健康记录器里，这里只做转发与入参校验。
 // 指标是一次快照拷贝，读接口不会拖住投递路径。
-// 接口默认关闭，需要时用 XW_ADMIN_ADDR 显式打开。
+// 接口默认关闭，需要时用 XW_ADMIN_ADDR 显式打开；性能采样端点（/debug/pprof/）
+// 另由 XW_PPROF 打开，且默认只挂在回环地址上。
 package admin
 
 import (
@@ -85,6 +86,8 @@ type Server struct {
 	feed *eventbus.Feed
 	// probes 是就绪检查的依赖探测项；为空时就绪与存活等价。
 	probes []Probe
+	// profiling 是 /debug/pprof/ 的开关与采样率，默认全部关闭。
+	profiling Profiling
 }
 
 // WebhookReplayer 是回调重放能力，由 webhook.Dispatcher 实现。
@@ -141,6 +144,12 @@ func (s *Server) WithProbes(probes ...Probe) *Server {
 	return s
 }
 
+// WithProfiling 装配 /debug/pprof/ 采样端点，返回自身便于链式调用。
+func (s *Server) WithProfiling(p Profiling) *Server {
+	s.profiling = p
+	return s
+}
+
 // Handler 返回路由。方法不匹配由路由层直接回 405。
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -177,6 +186,9 @@ func (s *Server) Handler() http.Handler {
 	if s.feed != nil {
 		mux.HandleFunc("GET /admin/events/recent", s.handleRecentEvents)
 	}
+	if s.profiling.Enabled {
+		registerProfiling(mux)
+	}
 	return mux
 }
 
@@ -197,6 +209,9 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 		Handler:           s.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	// 采样率是进程级设置，在这里落地而不是在 Handler 里：Handler 会被测试
+	// 反复调用，把全局状态改在构造路径上会让用例之间互相影响。
+	applyProfilingRates(s.profiling)
 	s.logger.Info("[engine] 管理接口已启动", "addr", ln.Addr().String())
 
 	errCh := make(chan error, 1)

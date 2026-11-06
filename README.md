@@ -231,6 +231,8 @@ API 与引擎默认输出一行一条 JSON（`XW_LOG_FORMAT=text` 换成文本�
 
 存活与就绪分开：`/health/live` 只回答「进程还在跑」，`/health/ready` 逐项检查总线、存储与内置消费线程，依赖不可用时返回 503 并点名失败项。引擎对应 `/healthz` 与 `/readyz`。检查项与编排示例见 [docs/health.md](docs/health.md)。
 
+引擎可以打开 `/debug/pprof/` 采样端点（`XW_PPROF=1`，默认只允许回环地址），CPU、堆、goroutine、锁竞争与阻塞都能抓。开关、采样率与实测结果见 [docs/profiling.md](docs/profiling.md)。
+
 ## API 文档
 
 服务跑起来后，`/docs` 是 Swagger UI，`/redoc` 是 ReDoc，`/openapi.json` 是 schema 本体。schema 由 `api/app/openapi.py` 统一装配，而不只是 FastAPI 的自动生成结果：

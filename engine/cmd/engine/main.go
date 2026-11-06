@@ -256,6 +256,33 @@ func main() {
 		)
 	}
 
+	// 性能采样：端点挂在管理接口上，没有独立鉴权，因此默认只在回环地址生效。
+	// 启动时把「开没开、为什么没开」写进日志：抓不到 profile 的原因有一半是
+	// 开关没生效，而端点在没开时返回的是 404，看起来像路径写错了。
+	profilingActive := cfg.ProfilingActive()
+	profilingOpts := admin.Profiling{
+		Enabled:       profilingActive,
+		BlockRate:     cfg.PprofBlockRate,
+		MutexFraction: cfg.PprofMutexFraction,
+	}
+	switch {
+	case !cfg.PprofEnabled:
+	case cfg.AdminAddr == "":
+		logger.Warn("[engine] 采样端点未启用", "reason", "XW_ADMIN_ADDR=off")
+	case !profilingActive:
+		logger.Warn("[engine] 采样端点未启用",
+			"reason", "管理接口不在回环地址",
+			"addr", cfg.AdminAddr,
+			"hint", "确需远程采样时设置 XW_PPROF_ALLOW_REMOTE=1",
+		)
+	default:
+		logger.Info("[engine] 性能采样端点已启用",
+			"path", "/debug/pprof/",
+			"blockRate", cfg.PprofBlockRate,
+			"mutexFraction", cfg.PprofMutexFraction,
+		)
+	}
+
 	// 运维接口：死信查询、重放与丢弃，以及渠道健康查询、启停与手动探测。
 	// 死信的键布局与记录格式由队列包定义，这里只把队列方法挂到 HTTP 上，
 	// 避免出现第二份「键名拼装」的实现。
@@ -275,7 +302,8 @@ func main() {
 			WithMetrics(sink).
 			WithWebhookAudit(audit, callback).
 			WithEventFeed(feed).
-			WithProbes(redisProbe)
+			WithProbes(redisProbe).
+			WithProfiling(profilingOpts)
 		go func() {
 			defer wg.Done()
 			if err := adminServer.Run(ctx, cfg.AdminAddr); err != nil {

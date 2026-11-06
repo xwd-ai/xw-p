@@ -83,6 +83,11 @@ docker build -f engine/Dockerfile -t xw-notify-engine .
 `XW_EXECUTION_STORE=postgres`，让 `XW_DATABASE_URL` 指向同一个库并先执行
 `scripts/migrate_postgres.sh`；参数与差异见 [execution-store.md](execution-store.md)。
 
+排查性能问题可以在引擎上打开采样端点（`XW_PPROF=1`）。容器里的管理接口绑在容器
+自己的回环地址上，从宿主机直接连不到：要么 `docker exec` 进容器采集，要么把管理
+端口映射出来并同时设置 `XW_PPROF_ALLOW_REMOTE=1`。开关、采样率与采集命令见
+[profiling.md](profiling.md)。
+
 ## 域名发布
 
 `infra/release/compose.yml` 在宿主机的 `127.0.0.1:2027` 提供社区演示，
