@@ -51,6 +51,9 @@ jobs:
     needs: images
     runs-on: ubuntu-latest
     environment: production
+    permissions:
+      contents: read
+      packages: read
     concurrency:
       group: xw-notify-production
       cancel-in-progress: false
@@ -91,11 +94,13 @@ jobs:
             -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15
             -o "UserKnownHostsFile=$key_dir/known_hosts")
           target="$DEPLOY_USER@$DEPLOY_HOST"
-          release_dir="\$HOME/.xw-notify/releases/$RELEASE_SHA"
-          ssh "${ssh_args[@]}" -- "$target" \
-            "umask 077; mkdir -p \"$release_dir\" && cat > \"$release_dir/compose.yml.tmp\" && mv \"$release_dir/compose.yml.tmp\" \"$release_dir/compose.yml\"" \
-            < infra/release/compose.yml
-          ssh "${ssh_args[@]}" -- "$target" \
-            "sh -s -- ghcr.io/${GITHUB_REPOSITORY,,} $RELEASE_SHA" < infra/release/apply.sh
+          if ! ssh "${ssh_args[@]}" -- "$target" xw-release-check > /dev/null; then
+            echo "服务器未就绪：$target 需要已安装 receive.sh 与 apply.sh，" >&2
+            echo "且该密钥在 authorized_keys 中绑定 restrict,command= 指向 receive.sh。" >&2
+            exit 1
+          fi
+          [[ "$GITHUB_ACTOR" =~ ^[A-Za-z0-9_-]+$ ]]
+          { printf '%s\n' "$GH_TOKEN"; cat infra/release/compose.yml; } |
+            ssh "${ssh_args[@]}" -- "$target" "xw-release $RELEASE_SHA $GITHUB_ACTOR"
           curl --fail --silent --show-error --location --max-time 15 --retry 4 \
             --retry-connrefused "${PUBLIC_URL%/}/" > /dev/null

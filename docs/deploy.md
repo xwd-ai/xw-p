@@ -96,12 +96,13 @@ ssh -NT -L 127.0.0.1:2028:127.0.0.1:2028 aly
 
 ### 服务器配置
 
-部署用户需要 Docker、支持 `up --wait` 的 Compose、`flock` 和读取 GHCR
-镜像的权限。私有镜像由该用户提前使用具有 `read:packages` 的凭据登录
-`ghcr.io`。服务器端执行：
+部署用户需要 Docker、支持 `up --wait` 的 Compose 和 `flock`。发布任务通过
+SSH 传入短期 GHCR 令牌，服务器拉取镜像后清理临时登录配置。服务器端执行：
 
 ```sh
 install -d -m 700 "$HOME/.xw-notify"
+install -m 700 infra/release/apply.sh "$HOME/.xw-notify/apply.sh"
+install -m 700 infra/release/receive.sh "$HOME/.xw-notify/receive.sh"
 ```
 
 以 `infra/release/runtime.env.example` 为模板，在目录内保存权限为 `600` 的
@@ -131,9 +132,17 @@ XW_API_KEYS='[{"key":"填入同一个 API Key","tenant":"default","environments"
 | Secret | `XW_DEPLOY_SSH_KEY` | 部署用户的 SSH 专用私钥 |
 | Secret | `XW_DEPLOY_KNOWN_HOSTS` | 已核验的服务器主机公钥记录 |
 
+部署公钥在服务器的 `authorized_keys` 中加上
+`restrict,command="/root/.xw-notify/receive.sh"`。按实际部署用户调整绝对路径。
+
 `main` 的 CI 通过后，`release` 工作流发布带完整提交 SHA 的 API、引擎和演示
-镜像。服务器按 SHA 保存 Compose 配置并串行更新，全部容器就绪后记录当前
-SHA。容器就绪失败会尝试恢复上一版，公网探测在容器就绪后单独执行。
+镜像。发布前先用 `xw-release-check` 确认服务器已装好脚本、`runtime.env` 与
+Compose，缺任何一项直接失败，不会走到一半才发现。
+
+服务器按 SHA 保存 Compose 配置并串行更新。`up --wait` 只重建配置有变化的
+容器，没重建的那些照样报健康、跑的却是上一版镜像，所以就绪后会逐个核对
+运行中的镜像版本，与本版对不上按失败处理并恢复上一版。全部对上才记录当前
+SHA，公网探测在容器就绪后单独执行。
 
 手动回滚时，在服务器上将部署脚本的参数设为目标 SHA。该版本的 Compose
 文件须已保存在 `$HOME/.xw-notify/releases/<SHA>/compose.yml`。
