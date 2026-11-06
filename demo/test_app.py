@@ -145,6 +145,23 @@ def test_accounts_and_community_survive_restart(tmp_path, monkeypatch) -> None:
     assert restarted.put("/guest-accounts", auth=guest, json=account).status_code == 403
 
 
+def test_single_creator_consolidates_existing_posts(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XW_DEMO_DB", str(tmp_path / "community.sqlite3"))
+    monkeypatch.setenv("XW_DEMO_OWNER_PASSWORD", "private-creator")
+    owner = ("owner", "private-creator")
+    first, _ = _client()
+    _seed(first, auth=owner)
+    monkeypatch.setenv("XW_DEMO_SINGLE_CREATOR", "1")
+    restarted, _ = _client()
+    post = restarted.get("/posts", auth=owner).json()[0]
+    assert (post["post_id"], post["creator_name"], post["creator_id"]) == ("P-1", "owner", "demo-creator")
+    response = restarted.post("/posts", auth=owner, json={
+        "id": "P-2", "creator_id": "another-creator", "title": "周末徒步",
+    })
+    assert response.status_code == 201
+    assert response.json()["creator_id"] == post["creator_id"]
+
+
 def test_community_page_serves_frontend_assets() -> None:
     client, _ = _client()
     page = client.get("/", follow_redirects=False)

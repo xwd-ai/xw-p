@@ -143,8 +143,8 @@
   }
 
   /* ============ 收件箱（组件见 inbox.js） ============ */
-  // 默认创作者（demo 触发使用 creator_demo，收件箱默认读同一订阅者）
-  const INBOX_SUBSCRIBER = 'creator_demo';
+  const hostedConsole = location.pathname.startsWith('/console/');
+  const INBOX_SUBSCRIBER = hostedConsole ? 'demo-creator' : 'creator_demo';
 
   // 更新侧边栏未读角标
   function updateInboxBadge(unread) {
@@ -177,7 +177,8 @@
 
   /* ============ 订阅者列表 ============ */
   function renderSubs() {
-    document.getElementById('sub-list').innerHTML = subs.map(s => `
+    const creators = hostedConsole ? [{ n: 'owner', id: INBOX_SUBSCRIBER, ch: [] }] : subs;
+    document.getElementById('sub-list').innerHTML = creators.map(s => `
       <div class="act">
         <div class="ch" style="background:#eef0ff">${esc(s.n[0])}</div>
         <div class="meta"><div class="t">${esc(s.n)}</div><div class="d">${esc(s.id)}</div></div>
@@ -257,7 +258,7 @@
     busy = true;
     const orig = document.getElementById('trigger-btn').textContent;
     setTriggerState('⏳ 触发中…', true);
-    triggerEvent('post_liked', { subscriberId: 'creator_demo', channels: ['in_app', 'push'] }, { actor: '小林', count: 128, post_id: 'P-2026-1001', post_title: '我的第一支 Vlog', title: '点赞聚合 · 站内信 + 推送' })
+    triggerEvent('post_liked', { subscriberId: INBOX_SUBSCRIBER, channels: ['in_app', 'push'] }, { actor: '小林', count: 128, post_id: 'P-2026-1001', post_title: '我的第一支 Vlog', title: '点赞聚合 · 站内信 + 推送' })
       .then(() => {
         // 触发成功：重新拉取活动流与统计，展示真实落库结果
         return Promise.all([loadActivity(), loadDashboardStats(), loadInbox()]);
@@ -281,7 +282,7 @@
       return;
     }
     window.xwEditor.run(() => {
-      triggerEvent(wf.name, { subscriberId: 'creator_demo' }, { actor: '小林', count: 128, post_id: 'P-2026-1001', post_title: '我的第一支 Vlog', title: '工作流「' + wf.name + '」测试触发' })
+      triggerEvent(wf.name, { subscriberId: INBOX_SUBSCRIBER }, { actor: '小林', count: 128, post_id: 'P-2026-1001', post_title: '我的第一支 Vlog', title: '工作流「' + wf.name + '」测试触发' })
         .then(() => Promise.all([loadActivity(), loadDashboardStats(), loadInbox()]))
         .catch(err => {
           console.warn('工作流运行触发失败（后端未就绪？）', err);

@@ -338,9 +338,9 @@ byId('publish').addEventListener('submit', (event) => {
     const title = values.get('title').trim();
     const body = values.get('body').trim();
     if (!title || !body) throw new Error('请填写标题和正文。');
-    const creatorId = 'community-owner';
+    const creatorId = 'demo-creator';
     const id = Array.from(crypto.getRandomValues(new Uint32Array(4)), (part) => part.toString(16).padStart(8, '0')).join('');
-    await request('/creators', { method: 'POST', body: { id: creatorId, name: '社区站长' } });
+    await request('/creators', { method: 'POST', body: { id: creatorId, name: 'owner' } });
     await request('/posts', { method: 'POST', body: { id, creator_id: creatorId, title, body } });
     form.reset();
     announce('帖子已发布。');

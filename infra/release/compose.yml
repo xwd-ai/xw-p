@@ -63,6 +63,7 @@ services:
     environment:
       XW_BASE_URL: http://api:8000
       XW_DEMO_SEED: "1"
+      XW_DEMO_SINGLE_CREATOR: "1"
       XW_DEMO_DB: /community-data/community.sqlite3
       XW_API_KEY: ${XW_API_KEY:?缺少演示 API Key}
       XW_DEMO_OWNER_PASSWORD: ${XW_DEMO_OWNER_PASSWORD:?缺少 owner 口令}

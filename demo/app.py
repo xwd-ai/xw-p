@@ -22,6 +22,8 @@ from .community import Community, CommunityError, build_client  # 先装配 SDK 
 from .store import Store, guest_name_valid, import_posts
 from xw_notify import TriggerAck
 
+OWNER_CREATOR_ID = "demo-creator"
+
 
 class CreatorIn(BaseModel):
     id: str
@@ -75,10 +77,21 @@ def create_app(client: Optional[Any] = None) -> FastAPI:
     snapshot = Path(database).with_name("import-posts.json") if database else None
     if snapshot and snapshot.is_file() and store.load() is None:
         store.save(import_posts(snapshot))
-    seed = store.load() is None and os.getenv("XW_DEMO_SEED") == "1"
+    state = store.load()
+    single_creator = os.getenv("XW_DEMO_SINGLE_CREATOR") == "1"
+    if single_creator and state is not None:
+        creators = state["creators"]
+        owner = creators.get(OWNER_CREATOR_ID) or creators.get("community-owner") or {}
+        state["creators"] = {
+            OWNER_CREATOR_ID: {**owner, "creator_id": OWNER_CREATOR_ID, "name": "owner"},
+        }
+        for post in state["posts"].values():
+            post["creator_id"] = OWNER_CREATOR_ID
+        store.save(state)
+    seed = state is None and os.getenv("XW_DEMO_SEED") == "1"
     community = Community(client if client is not None else build_client(), store if database else None)
     if seed:
-        community.register_creator("demo-creator", name="演示创作者")
+        community.register_creator(OWNER_CREATOR_ID, name="owner" if single_creator else "演示创作者")
         for post_id, title, body in (
             ("plants", "阳台的一平方米春天", "把耐阴植物放在内侧，给窗边留一点位置晒太阳。"),
             ("street", "周六的城市漫步", "从老街一路走到车站，路上遇见几家还想再来的小店。"),
@@ -89,7 +102,9 @@ def create_app(client: Optional[Any] = None) -> FastAPI:
             ("coffee", "街角咖啡与慢下来的上午", "点了一杯手冲，在窗边读了半小时书。"),
             ("demo-post", "周末骑行路线", "周末准备沿江骑行。你最喜欢哪一段路线？"),
         ):
-            community.create_post(post_id, creator_id="demo-creator", title=title, body=body)
+            community.create_post(post_id, creator_id=OWNER_CREATOR_ID, title=title, body=body)
+    elif single_creator and state is None:
+        community.register_creator(OWNER_CREATOR_ID, name="owner")
     owner_password = os.getenv("XW_DEMO_OWNER_PASSWORD", "")
     guest_password = os.getenv("XW_DEMO_GUEST_PASSWORD", "")
     if guest_password and (not owner_password or guest_password == owner_password):
@@ -166,13 +181,17 @@ def create_app(client: Optional[Any] = None) -> FastAPI:
 
     @app.post("/creators", status_code=201, dependencies=[Depends(require_owner)])
     def register_creator(body: CreatorIn) -> Dict[str, Any]:
-        return _call(community.register_creator, body.id, name=body.name,
+        if single_creator and not ({"email", "device_token"} & body.model_fields_set):
+            return {"creator_id": OWNER_CREATOR_ID, "name": "owner"}
+        return _call(community.register_creator, OWNER_CREATOR_ID if single_creator else body.id,
+                     name="owner" if single_creator else body.name,
                      email=body.email, device_token=body.device_token)
 
     @app.post("/posts", status_code=201, dependencies=[Depends(require_owner)])
     def create_post(body: PostIn) -> Dict[str, Any]:
         return _call(community.create_post, body.id,
-                     creator_id=body.creator_id, title=body.title, body=body.body)
+                     creator_id=OWNER_CREATOR_ID if single_creator else body.creator_id,
+                     title=body.title, body=body.body)
 
     @app.post("/posts/{post_id}/like")
     def like(post_id: str, body: ActorIn, user: tuple[str, str] = Depends(identity)) -> Dict[str, Any]:

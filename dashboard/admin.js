@@ -22,6 +22,7 @@
   let payloadTouched = false;
 
   const $ = function (id) { return document.getElementById(id); };
+  if (location.pathname.startsWith('/console/')) $('adm-trigger-subscriber').value = 'demo-creator';
 
   /* ============ 后台令牌 ============ */
 
