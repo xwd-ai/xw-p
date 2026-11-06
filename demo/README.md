@@ -23,6 +23,18 @@ api/.venv/bin/uvicorn demo.app:app --port 8100
 | `XW_API_KEY` | （空） | 部署配了 `XW_API_KEYS` 时必填 |
 | `XW_ENVIRONMENT` | `development` | 环境标识 |
 
+### 发帖与游客权限
+
+设置 `XW_DEMO_OWNER_PASSWORD` 启用 HTTP Basic 登录。账号 `owner` 可登记
+创作者、发帖、互动和读取收件箱。设置独立的 `XW_DEMO_GUEST_PASSWORD` 后，
+账号 `guest` 可点赞、评论和 @ 提及已有帖子，访问发帖、创作者登记或收件箱
+接口会收到 403。两项口令均为空时，接口保留本机无凭据用法。
+
+浏览器访问 `http://127.0.0.1:8100/docs`，通过 **Authorize** 登录；命令行
+可用 `curl -u guest` 交互输入游客口令。管理员先登记创作者和发布一篇帖子，
+再把帖子 ID 交给游客。对外提供演示时，通过 HTTPS 访问演示应用，后端 API
+绑定本地地址，并使用独立的数据目录、API Key 和 mock 渠道。
+
 ## 接口走一遍
 
 ```bash

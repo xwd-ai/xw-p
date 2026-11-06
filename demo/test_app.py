@@ -44,14 +44,14 @@ def _client() -> tuple[TestClient, FakeTransport]:
     return TestClient(app), transport
 
 
-def _seed(client: TestClient) -> None:
+def _seed(client: TestClient, auth: tuple[str, str] | None = None) -> None:
     assert client.post("/creators", json={
         "id": "creator-1001", "name": "小林",
         "email": "lin@example.com", "device_token": "fcm-9f2c1d",
-    }).status_code == 201
+    }, auth=auth).status_code == 201
     assert client.post("/posts", json={
         "id": "P-1", "creator_id": "creator-1001", "title": "第一支 Vlog",
-    }).status_code == 201
+    }, auth=auth).status_code == 201
 
 
 def test_like_endpoint_returns_ack() -> None:
@@ -88,3 +88,29 @@ def test_comment_endpoint_passes_idempotency_key() -> None:
 def test_health_endpoint() -> None:
     client, _ = _client()
     assert client.get("/health").json() == {"status": "ok"}
+
+
+def test_guest_can_interact_but_cannot_publish(monkeypatch) -> None:
+    monkeypatch.setenv("XW_DEMO_OWNER_PASSWORD", "private-creator")
+    monkeypatch.setenv("XW_DEMO_GUEST_PASSWORD", "community-demo")
+    client, transport = _client()
+    owner = ("owner", "private-creator")
+    guest = ("guest", "community-demo")
+    _seed(client, auth=owner)
+
+    post = {"id": "P-2", "creator_id": "creator-1001", "title": "第二支 Vlog"}
+    assert client.post("/posts", json=post).status_code == 401
+    assert client.post("/posts", json=post, auth=("owner", guest[1])).status_code == 401
+    assert client.post("/posts", json=post, auth=guest).status_code == 403
+    assert client.post("/creators", json={"id": "other", "name": "小夏"}, auth=guest).status_code == 403
+    assert client.get("/creators/creator-1001/inbox", auth=guest).status_code == 403
+    assert client.post("/posts/P-1/like", json={"actor": "阿澈"}).status_code == 401
+    assert client.post("/posts/P-1/like", json={"actor": "阿澈"}, auth=guest).status_code == 200
+    assert json.loads(transport.requests[-1].body)["name"] == "post_liked"
+
+
+def test_guest_requires_distinct_owner_password(monkeypatch) -> None:
+    monkeypatch.setenv("XW_DEMO_OWNER_PASSWORD", "community-demo")
+    monkeypatch.setenv("XW_DEMO_GUEST_PASSWORD", "community-demo")
+    with pytest.raises(ValueError, match="不同的口令"):
+        _client()
