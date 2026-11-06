@@ -190,6 +190,23 @@ def test_jsonl_store_detects_other_process_appends(tmp_path):
     assert len(path.read_text(encoding="utf-8").strip().splitlines()) == 1
 
 
+def test_jsonl_store_reads_last_version_of_appended_stream(tmp_path):
+    """引擎侧的改写是追加新版本：读路径必须取最后一行，否则拿到过期内容。"""
+    path = tmp_path / "inbox.jsonl"
+    older = _message("m1", body="1 人赞了你的帖子")
+    newer = _message("m1", body="3 人赞了你的帖子")
+    path.write_text(
+        "\n".join(json.dumps(m.to_dict(), ensure_ascii=False) for m in (older, newer)) + "\n",
+        encoding="utf-8",
+    )
+
+    store = JsonlMessageCenter(path)
+    stored = store.get("m1")
+    assert stored is not None
+    assert stored.body == "3 人赞了你的帖子"
+    assert [m.body for m in store.list("creator_1001")] == ["3 人赞了你的帖子"]
+
+
 def test_jsonl_store_rewrites_in_place(tmp_path):
     path = tmp_path / "inbox.jsonl"
     store = JsonlMessageCenter(path)

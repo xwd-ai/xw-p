@@ -107,6 +107,29 @@ func readInboxRaw(t *testing.T, path string) []map[string]any {
 	return out
 }
 
+// latestInboxRows 按条目 ID 只保留最后一行版本，用于断言读侧可见的卡片。
+// 收件箱是追加流：改写一条卡片会追加新行而不是覆盖旧行，因此文件行数
+// 大于等于条目数，直接数行会得出「卡片变多了」的错误结论。
+func latestInboxRows(rows []map[string]any) []map[string]any {
+	order := make([]string, 0, len(rows))
+	latest := make(map[string]map[string]any, len(rows))
+	for _, row := range rows {
+		id, _ := row["id"].(string)
+		if id == "" {
+			continue
+		}
+		if _, ok := latest[id]; !ok {
+			order = append(order, id)
+		}
+		latest[id] = row
+	}
+	out := make([]map[string]any, 0, len(order))
+	for _, id := range order {
+		out = append(out, latest[id])
+	}
+	return out
+}
+
 // TestDigestIntegrationFromQueueJSONToInboxFile 覆盖单实例的完整互动链路：
 // 多篇帖子的点赞进来 → 自赞被过滤 → 同一篇帖子的互动合并成一张卡片 →
 // 重投不重复计数 → 落盘结果按订阅者重新读取仍然只有两条卡片。
@@ -173,8 +196,9 @@ func TestDigestIntegrationFromQueueJSONToInboxFile(t *testing.T) {
 		t.Errorf("卡片正文应带上帖子标题，实际 %q", lastA.Rendered)
 	}
 
-	// 落盘：两篇帖子各一条卡片，没有因为重投或原地更新产生多余行。
-	rows := readInboxRaw(t, path)
+	// 落盘：两篇帖子各一张卡片。同一篇帖子的多次互动会各留一行版本，
+	// 读侧按 ID 取最后一行，因此这里按条目 ID 去重后再数。
+	rows := latestInboxRows(readInboxRaw(t, path))
 	if len(rows) != 2 {
 		t.Fatalf("收件箱应有 2 条卡片，实际 %d 条", len(rows))
 	}
@@ -292,7 +316,7 @@ func TestDigestIntegrationMultiInstanceSharedWindow(t *testing.T) {
 		t.Errorf("共享窗口下应只开卡 1 次，实际 %d 次", opened)
 	}
 
-	rows := readInboxRaw(t, path)
+	rows := latestInboxRows(readInboxRaw(t, path))
 	if len(rows) != 1 {
 		t.Fatalf("多实例应共享同一张卡片，实际落盘 %d 条", len(rows))
 	}
@@ -355,7 +379,7 @@ func TestDigestIntegrationConcurrentLikeStorm(t *testing.T) {
 		t.Errorf("并发累计峰值 = %d, 期望 %d（不能丢计数）", maxSeen, totalEvents)
 	}
 
-	rows := readInboxRaw(t, path)
+	rows := latestInboxRows(readInboxRaw(t, path))
 	if len(rows) != 1 {
 		t.Fatalf("并发互动应只留下 1 条卡片，实际 %d 条", len(rows))
 	}
@@ -418,9 +442,10 @@ func TestJSONLInboxStoreDetectsOtherProcessWrites(t *testing.T) {
 		t.Errorf("同 ID 写入应幂等，实际 inserted=%v err=%v", inserted, err)
 	}
 
-	rows := readInboxRaw(t, path)
+	// 追加流里留了两行版本，读侧按 ID 只认最后一行。
+	rows := latestInboxRows(readInboxRaw(t, path))
 	if len(rows) != 1 {
-		t.Fatalf("同一张卡片只应有一行，实际 %d 行", len(rows))
+		t.Fatalf("同一张卡片只应有一条，实际 %d 条", len(rows))
 	}
 	if body, _ := rows[0]["body"].(string); body != "2 人赞了你的帖子" {
 		t.Errorf("卡片正文未更新，实际 %q", body)

@@ -18,7 +18,8 @@
   ``api/data/inbox.jsonl``，可由 ``XW_INBOX_FILE`` 覆盖）。追加是单次
   ``O_APPEND`` 写，改写走「同目录临时文件 + rename」，进程在写一半时被中断也
   不会留下半截文件；索引未命中时按文件大小判断是否被其它进程追加过，变了就
-  重扫一遍再下结论，避免在共享卷上写出重复条目。
+  重扫一遍再下结论，避免在共享卷上写出重复条目。读路径按 ``id`` 取最后一行：
+  引擎侧的改写是追加新版本而不是覆盖旧行，同一条消息因此可能在文件里出现多次。
 
 已读状态不在这里：它属于订阅者维度、与消息内容分开演进，由 ``app.inbox`` 的
 ``ReadStateStore`` 维护；本模块写入的 ``read`` 字段固定为 ``false``，与引擎侧
@@ -505,29 +506,32 @@ class JsonlMessageCenter:
         target = _text(message_id)
         if not target:
             return None
+        found: Optional[Message] = None
         for raw in self._iter_raw():
             if _text(raw.get("id")) != target:
                 continue
             try:
-                return Message.from_dict(raw)
+                # 同一条消息可能有多行版本（引擎侧改写走追加），后写的才是当前内容。
+                found = Message.from_dict(raw)
             except MessageError as exc:
                 logger.warning("跳过不合法的消息 %s：%s", target, exc)
-                return None
-        return None
+        return found
 
     def list(self, subscriber_id: str) -> list[Message]:
         target = _text(subscriber_id)
         if not target:
             return []
-        out: list[Message] = []
+        latest: dict[str, Message] = {}
         for raw in self._iter_raw():
             if _text(raw.get("subscriber_id")) != target:
                 continue
             try:
-                out.append(Message.from_dict(raw))
+                message = Message.from_dict(raw)
             except MessageError as exc:
                 logger.warning("跳过不合法的消息：%s", exc)
-        return out
+                continue
+            latest[message.id] = message
+        return list(latest.values())
 
     def revision(self) -> object:
         try:

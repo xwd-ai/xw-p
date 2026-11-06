@@ -221,6 +221,30 @@ def test_inbox_skips_corrupted_engine_line(client, monkeypatch, tmp_path):
     data = client.get("/v1/inbox", params={"subscriberId": "u1"}).json()
     assert "e1" in [i["trigger_id"] for i in data["items"]]
 
+
+def test_inbox_reads_latest_version_of_engine_entry(client, monkeypatch, tmp_path):
+    """同一条消息的多行版本只保留最后一行。
+
+    引擎改写聚合卡片时是在文件末尾追加新版本，旧行留在原处；按先出现的行
+    渲染会显示过期的计数。
+    """
+    import app.inbox as inbox_mod
+
+    path = tmp_path / "engine_inbox.jsonl"
+    _write_engine_inbox(
+        path,
+        [
+            _engine_entry("e1", body="1 人赞了你的帖子"),
+            _engine_entry("e1", body="3 人赞了你的帖子"),
+        ],
+    )
+    monkeypatch.setattr(inbox_mod, "_INBOX_FILE", path)
+
+    data = client.get("/v1/inbox", params={"subscriberId": "u1"}).json()
+    items = [i for i in data["items"] if i["trigger_id"] == "e1"]
+    assert len(items) == 1
+    assert items[0]["body"] == "3 人赞了你的帖子"
+
 # ---------------------------------------------------------------------------
 # 聚合卡片：同一张卡在窗口内被原地改写，未读计数按消息条数联动
 # ---------------------------------------------------------------------------

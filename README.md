@@ -233,6 +233,8 @@ API 与引擎默认输出一行一条 JSON（`XW_LOG_FORMAT=text` 换成文本�
 
 引擎可以打开 `/debug/pprof/` 采样端点（`XW_PPROF=1`，默认只允许回环地址），CPU、堆、goroutine、锁竞争与阻塞都能抓。开关、采样率与实测结果见 [docs/profiling.md](docs/profiling.md)。
 
+站内信收件箱文件是「一行一个版本」的追加流：改写一张聚合卡片只追加一版，读取按条目取最后一行，废弃行超过比例后再压缩。格式、多实例读取与实测吞吐见 [docs/inbox.md](docs/inbox.md)。
+
 ## API 文档
 
 服务跑起来后，`/docs` 是 Swagger UI，`/redoc` 是 ReDoc，`/openapi.json` 是 schema 本体。schema 由 `api/app/openapi.py` 统一装配，而不只是 FastAPI 的自动生成结果：

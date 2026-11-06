@@ -87,6 +87,7 @@ uvicorn 与编译出的引擎二进制，跑完即销毁，不碰 `api/data` 下
 | `engine/internal/metrics` | 桶累积、标签转义、总和口径 | `prometheus_test.go` |
 | `engine/internal/admin` | `/readyz` 语义、探测超时、`/metrics` 内容类型 | `health_test.go` |
 | `engine/internal/execution` | 连接池参数、预处理复用、事务边界、上下文取消、关闭语义 | `postgres_test.go`、`postgres_integration_test.go` |
+| `engine/internal/pipeline`（收件箱） | 追加改写、版本去重、压缩阈值、跨进程增量刷新、半行忽略、并发改写 | `inbox_jsonl_test.go`、`inbox_format_test.go` |
 
 ## 已知缺口
 

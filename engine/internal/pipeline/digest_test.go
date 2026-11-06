@@ -596,7 +596,9 @@ func TestDigestWritesCardToJSONLInbox(t *testing.T) {
 		}
 	}
 
-	// 落盘结果应只有一行（卡片被原地改写而非追加三行）。
+	// 落盘是追加流：三次命中留下三行版本，最后一行是累计后的卡片。
+	// 这里同时钉住「改写不整文件重写」这个约束——行数随命中次数增长，
+	// 而读侧看到的条目数不变。
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("读取收件箱文件失败: %v", err)
@@ -607,11 +609,22 @@ func TestDigestWritesCardToJSONLInbox(t *testing.T) {
 			lines = append(lines, line)
 		}
 	}
-	if len(lines) != 1 {
-		t.Fatalf("收件箱文件应只有 1 行卡片，实际 %d 行", len(lines))
+	if len(lines) != 3 {
+		t.Fatalf("三次命中应留下 3 行版本，实际 %d 行", len(lines))
 	}
-	if !strings.Contains(lines[0], "3 人赞了你的帖子 P9201") {
-		t.Errorf("落盘卡片正文未原地累加，实际 %s", lines[0])
+	if !strings.Contains(lines[len(lines)-1], "3 人赞了你的帖子 P9201") {
+		t.Errorf("最后一行应是累计后的卡片，实际 %s", lines[len(lines)-1])
+	}
+
+	entries, err := store.List("creator_1")
+	if err != nil {
+		t.Fatalf("读取收件箱失败: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("同一条目多行版本应只算 1 条，实际 %d 条", len(entries))
+	}
+	if !strings.Contains(entries[0].Body, "3 人赞了你的帖子 P9201") {
+		t.Errorf("读回的是旧版本，实际 %q", entries[0].Body)
 	}
 
 	// 重启后回放：文件索引仍认得这张卡（再次写同 ID 会被幂等去重）。

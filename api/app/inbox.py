@@ -513,6 +513,10 @@ def _engine_inbox_items(subscriber_id: str, store: "ReadStateStore") -> list[dic
 
     文件不存在（尚未运行引擎）或单行损坏时跳过，不影响兜底来源。
     文件是多个租户共用的追加流，这里按租户与环境过滤。
+
+    同一条消息被改写后会多出一行新版本，旧版本留在文件里，因此按消息 ID
+    只保留最后一行：聚合卡片每命中一次互动就会改写，取先出现的那行会读到
+    过期的计数。
     """
     from . import tenancy
 
@@ -521,7 +525,8 @@ def _engine_inbox_items(subscriber_id: str, store: "ReadStateStore") -> list[dic
     path = _INBOX_FILE
     if not path.exists():
         return []
-    items: list[dict] = []
+    latest: dict[str, dict] = {}
+    anonymous: list[dict] = []
     try:
         with path.open("r", encoding="utf-8") as fh:
             for line in fh:
@@ -541,23 +546,25 @@ def _engine_inbox_items(subscriber_id: str, store: "ReadStateStore") -> list[dic
                 message_id = _message_id(entry)
                 created_at = entry.get("created_at")
                 updated_at = entry.get("updated_at") or created_at
-                items.append(
-                    {
-                        "message_id": message_id,
-                        "trigger_id": tid,
-                        "workflow": entry.get("workflow") or "unknown",
-                        "title": entry.get("title") or entry.get("workflow") or "新通知",
-                        "body": entry.get("body") or "",
-                        "created_at": created_at,
-                        "updated_at": entry.get("updated_at"),
-                        "read": _read_flag(
-                            store, subscriber_id, message_id, _parse_dt(updated_at), tid
-                        ),
-                    }
-                )
+                item = {
+                    "message_id": message_id,
+                    "trigger_id": tid,
+                    "workflow": entry.get("workflow") or "unknown",
+                    "title": entry.get("title") or entry.get("workflow") or "新通知",
+                    "body": entry.get("body") or "",
+                    "created_at": created_at,
+                    "updated_at": entry.get("updated_at"),
+                    "read": _read_flag(
+                        store, subscriber_id, message_id, _parse_dt(updated_at), tid
+                    ),
+                }
+                if message_id:
+                    latest[message_id] = item
+                else:
+                    anonymous.append(item)
     except OSError:
         logger.warning("读取引擎收件箱文件失败：%s", path)
-    return items
+    return [*latest.values(), *anonymous]
 
 
 def _collect_inbox(subscriber_id: str) -> list[dict]:
