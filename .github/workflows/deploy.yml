@@ -69,7 +69,7 @@ jobs:
           DEPLOY_HOST: ${{ vars.XW_DEPLOY_HOST }}
           DEPLOY_PORT: ${{ vars.XW_DEPLOY_PORT || '22' }}
           DEPLOY_USER: ${{ vars.XW_DEPLOY_USER }}
-          PUBLIC_URL: ${{ vars.XW_PUBLIC_URL || 'http://xwp.xwd.info' }}
+          PUBLIC_URL: ${{ vars.XW_PUBLIC_URL || 'https://xwp.xwd.info' }}
           SSH_KEY: ${{ secrets.XW_DEPLOY_SSH_KEY }}
           SSH_KNOWN_HOSTS: ${{ secrets.XW_DEPLOY_KNOWN_HOSTS }}
         run: |
